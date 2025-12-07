@@ -175,11 +175,34 @@ const Chat = () => {
         },
       });
 
-      if (error) throw error;
-
       console.log('=== EDGE FUNCTION RESPONSE ===');
       console.log('Response data:', data);
+      console.log('Response error:', error);
       console.log('==============================');
+
+      // Check for errors from the Edge Function
+      if (error) {
+        console.error('=== EDGE FUNCTION ERROR ===');
+        console.error('Error object:', error);
+        console.error('===========================');
+        throw error;
+      }
+
+      // Check if response contains an error message (from our custom error handling)
+      if (data?.error) {
+        console.error('=== API ERROR RETURNED ===');
+        console.error('Error message:', data.error);
+        console.error('Error type:', data.errorType);
+        console.error('==========================');
+
+        // Display the user-friendly error message from backend
+        toast({
+          title: 'Oops!',
+          description: data.error,
+          variant: 'destructive',
+        });
+        return; // Exit early, don't try to process messages
+      }
 
       // Handle multi-message response
       const responseMessages = data?.messages || [{ text: data?.reply || 'Aree yaar, kuch gadbad ho gaya!' }];
@@ -210,11 +233,16 @@ const Chat = () => {
           await new Promise(resolve => setTimeout(resolve, 300));
         }
       }
-    } catch (error) {
-      console.error('Error getting AI response:', error);
+    } catch (error: any) {
+      console.error('=== CHAT ERROR (FRONTEND) ===');
+      console.error('Error:', error);
+      console.error('Error message:', error?.message);
+      console.error('Error details:', JSON.stringify(error, null, 2));
+      console.error('==============================');
+
       toast({
         title: 'Error',
-        description: 'Failed to get response. Please try again.',
+        description: error?.message || 'Failed to get response. Please try again.',
         variant: 'destructive',
       });
     } finally {

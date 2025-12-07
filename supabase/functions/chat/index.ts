@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { GoogleGenerativeAI } from "npm:@google/generative-ai@0.21.0";
+import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from "npm:@google/generative-ai@0.21.0";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -40,6 +40,24 @@ serve(async (req) => {
     const model = genAI.getGenerativeModel({
       model: "gemini-2.5-flash-lite",
       systemInstruction: systemPrompt,
+      safetySettings: [
+        {
+          category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+          threshold: HarmBlockThreshold.BLOCK_NONE,
+        },
+        {
+          category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+          threshold: HarmBlockThreshold.BLOCK_NONE,
+        },
+        {
+          category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+          threshold: HarmBlockThreshold.BLOCK_NONE,
+        },
+        {
+          category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+          threshold: HarmBlockThreshold.BLOCK_NONE,
+        },
+      ],
     });
 
     // Convert messages to Gemini format
@@ -60,8 +78,48 @@ serve(async (req) => {
     });
 
     // Send the latest message
-    const result = await chat.sendMessage(lastMessage.content);
-    const reply = result.response.text() || "Arre yaar, kuch gadbad ho gaya. Phir se try kar?";
+    let result;
+    try {
+      result = await chat.sendMessage(lastMessage.content);
+    } catch (apiError: any) {
+      // Enhanced error handling for Gemini API edge cases
+      console.error("=== GEMINI API ERROR ===");
+      console.error("Error type:", apiError?.constructor?.name);
+      console.error("Error message:", apiError?.message);
+      console.error("Error details:", JSON.stringify(apiError, null, 2));
+      console.error("========================");
+
+      // Check for specific error types
+      let userFriendlyMessage = "Arre yaar, kuch gadbad ho gaya. Phir se try kar?";
+
+      if (apiError?.message?.includes("rate limit") || apiError?.message?.includes("429")) {
+        userFriendlyMessage = "Thoda slow down kar yaar! Bahut zyada messages bhej diye. 1-2 min baad try kar.";
+        console.error("🚨 RATE LIMIT ERROR: User hit API rate limit");
+      } else if (apiError?.message?.includes("quota") || apiError?.message?.includes("exceeded")) {
+        userFriendlyMessage = "API quota khatam ho gaya hai. Thodi der baad try kar.";
+        console.error("🚨 QUOTA ERROR: API quota exceeded");
+      } else if (apiError?.message?.includes("safety") || apiError?.message?.includes("blocked")) {
+        userFriendlyMessage = "Sorry yaar, ye message thoda inappropriate lag raha hai. Kuch aur baat karte hain?";
+        console.error("🚨 SAFETY BLOCK ERROR: Content blocked by safety filters");
+      } else if (apiError?.message?.includes("API key")) {
+        userFriendlyMessage = "Server configuration issue hai. Admin ko batao!";
+        console.error("🚨 API KEY ERROR: Invalid or missing API key");
+      }
+
+      throw new Error(userFriendlyMessage);
+    }
+
+    // Check if response was blocked
+    const response = result.response;
+    if (!response || response.promptFeedback?.blockReason) {
+      console.error("=== RESPONSE BLOCKED ===");
+      console.error("Block reason:", response?.promptFeedback?.blockReason);
+      console.error("Safety ratings:", JSON.stringify(response?.promptFeedback?.safetyRatings, null, 2));
+      console.error("========================");
+      throw new Error("Sorry yaar, AI ne ye message block kar diya. Kuch aur topic pe baat karte hain?");
+    }
+
+    const reply = response.text() || "Arre yaar, kuch gadbad ho gaya. Phir se try kar?";
 
     console.log("\n=== RAW LLM RESPONSE ===");
     console.log(reply);
@@ -88,9 +146,16 @@ serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {
-    console.error("Chat error:", error);
+    console.error("=== CHAT FUNCTION ERROR ===");
+    console.error("Error:", error);
+    console.error("Error type:", error?.constructor?.name);
+    console.error("===========================");
+
     return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
+      JSON.stringify({
+        error: error instanceof Error ? error.message : "Unknown error",
+        errorType: error?.constructor?.name || "UnknownError"
+      }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
