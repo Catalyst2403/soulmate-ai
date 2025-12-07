@@ -5,6 +5,8 @@ import { LoadingScreen } from '@/components/onboarding/LoadingScreen';
 import { Message, Persona } from '@/types';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
+import { generateSystemPromptFromPersona, SYSTEM_PROMPT_VERSION } from '@/utils/systemPrompt';
+
 
 const Chat = () => {
   const navigate = useNavigate();
@@ -70,6 +72,34 @@ const Chat = () => {
       if (!personaData) {
         navigate('/');
         return;
+      }
+
+      // Regenerate system prompt with latest version
+      const updatedSystemPrompt = generateSystemPromptFromPersona(personaData as unknown as Persona);
+
+      // Check if system prompt needs updating
+      const needsUpdate = personaData.system_prompt !== updatedSystemPrompt;
+
+      if (needsUpdate) {
+        console.log('🔄 System prompt outdated. Updating to latest version...');
+        console.log('Old prompt length:', personaData.system_prompt?.length || 0);
+        console.log('New prompt length:', updatedSystemPrompt.length);
+
+        // Update the system prompt in database
+        const { error: updateError } = await supabase
+          .from('personas')
+          .update({ system_prompt: updatedSystemPrompt })
+          .eq('user_id', uid);
+
+        if (updateError) {
+          console.error('Failed to update system prompt:', updateError);
+        } else {
+          console.log('✅ System prompt updated successfully!');
+          // Update the local persona object
+          personaData.system_prompt = updatedSystemPrompt;
+        }
+      } else {
+        console.log('✅ System prompt is up to date');
       }
 
       setPersona(personaData as Persona);

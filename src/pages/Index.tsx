@@ -84,6 +84,13 @@ const Index = () => {
       // Generate system prompt
       const systemPrompt = generateSystemPrompt();
 
+      // Debug: Log the system prompt being saved
+      console.log('=== ONBOARDING COMPLETION DEBUG ===');
+      console.log('Generated System Prompt:');
+      console.log(systemPrompt);
+      console.log('Form Data:', formData);
+      console.log('===================================');
+
       // Create persona with new fields
       const { error: personaError } = await supabase
         .from('personas')
