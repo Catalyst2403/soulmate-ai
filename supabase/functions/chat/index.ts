@@ -57,7 +57,24 @@ serve(async (req) => {
 
     console.log("AI response received:", reply.substring(0, 50) + "...");
 
-    return new Response(JSON.stringify({ reply }), {
+    // Try to parse response as JSON array for multi-message support
+    let responseMessages;
+    try {
+      const parsed = JSON.parse(reply);
+      if (Array.isArray(parsed) && parsed.every(msg => msg.text)) {
+        responseMessages = parsed;
+      } else {
+        // Not in expected format, wrap as single message
+        responseMessages = [{ text: reply }];
+      }
+    } catch {
+      // Not JSON, wrap as single message
+      responseMessages = [{ text: reply }];
+    }
+
+    console.log("Returning", responseMessages.length, "message(s)");
+
+    return new Response(JSON.stringify({ messages: responseMessages }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {

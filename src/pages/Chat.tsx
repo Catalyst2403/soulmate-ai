@@ -140,14 +140,35 @@ const Chat = () => {
 
       if (error) throw error;
 
-      const aiReply = data?.reply || 'Aree yaar, kuch gadbad ho gaya!';
+      // Handle multi-message response
+      const responseMessages = data?.messages || [{ text: data?.reply || 'Aree yaar, kuch gadbad ho gaya!' }];
 
-      // Save AI response to DB (realtime subscription will add it to state)
-      await supabase.from('messages').insert({
-        user_id: userId,
-        role: 'assistant',
-        content: aiReply,
-      });
+      // Configurable delay between messages (in milliseconds)
+      const MESSAGE_DELAY_MS = 2000;
+
+      // Send each message sequentially with typing indicator
+      for (let i = 0; i < responseMessages.length; i++) {
+        // Show typing indicator before each message
+        setIsTyping(true);
+
+        // Wait before sending message (simulate typing)
+        await new Promise(resolve => setTimeout(resolve, MESSAGE_DELAY_MS));
+
+        // Save AI response to DB (realtime subscription will add it to state)
+        await supabase.from('messages').insert({
+          user_id: userId,
+          role: 'assistant',
+          content: responseMessages[i].text,
+        });
+
+        // Brief pause to hide typing indicator and let UI update
+        setIsTyping(false);
+
+        // Small gap between messages (except after the last one)
+        if (i < responseMessages.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 300));
+        }
+      }
     } catch (error) {
       console.error('Error getting AI response:', error);
       toast({

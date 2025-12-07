@@ -1,4 +1,6 @@
 import { motion } from 'framer-motion';
+import { useState } from 'react';
+import { Input } from '@/components/ui/input';
 
 interface StepRelationshipProps {
   selected: string;
@@ -7,26 +9,40 @@ interface StepRelationshipProps {
 
 const options = [
   {
-    value: 'Girlfriend/Boyfriend',
-    emoji: '👩‍❤️‍👨',
-    title: 'The Girlfriend / Boyfriend',
-    subtitle: 'Romance, drama, exclusivity',
+    value: 'Romantic Partner',
+    emoji: '❤️',
+    title: 'The Love Interest (GF/BF)',
+    subtitle: 'Flirty, intimate, thoda possessive.',
   },
   {
-    value: 'Bestie',
+    value: 'Best Friend',
     emoji: '👯',
-    title: 'The Bestie',
-    subtitle: 'Roasts, gossip, 2 AM rants',
+    title: 'The Roast-Buddy (Bestie)',
+    subtitle: 'Zero filter, gaali-galoch, pure fun.',
   },
   {
-    value: 'Mentor',
+    value: 'Guide',
     emoji: '🧘',
-    title: 'The Mentor / Therapist',
-    subtitle: 'Calm, advice, peace',
+    title: 'The Mentor / Big Sibling',
+    subtitle: 'Protective, wise, keeps you on track.',
+  },
+  {
+    value: 'Complicated',
+    emoji: '🌀',
+    title: 'The Situationship',
+    subtitle: 'Mixed signals, kabhi haan kabhi naa.',
   },
 ];
 
 export const StepRelationship = ({ selected, onSelect }: StepRelationshipProps) => {
+  const [showCustom, setShowCustom] = useState(false);
+  const [customValue, setCustomValue] = useState('');
+
+  const handleCustomSubmit = () => {
+    if (customValue.trim()) {
+      onSelect(customValue);
+    }
+  };
   return (
     <motion.div
       initial={{ opacity: 0, x: 100 }}
@@ -42,12 +58,15 @@ export const StepRelationship = ({ selected, onSelect }: StepRelationshipProps) 
           transition={{ delay: 0.1 }}
           className="text-center mb-10"
         >
-          <span className="text-5xl mb-4 block">🎬</span>
+          <span className="text-5xl mb-4 block">🤞</span>
           <h2 className="font-display text-2xl md:text-3xl font-bold text-foreground">
-            Okay, let's set the scene.
+            What are they to you?
             <br />
-            <span className="neon-text">Who is she/he to you?</span>
+            <span className="neon-text">Clear kar lete hain!</span>
           </h2>
+          <p className="text-muted-foreground text-sm mt-3">
+            Taaki baad mein awkward na ho.
+          </p>
         </motion.div>
 
         <div className="space-y-4">
@@ -58,11 +77,10 @@ export const StepRelationship = ({ selected, onSelect }: StepRelationshipProps) 
               animate={{ y: 0, opacity: 1 }}
               transition={{ delay: 0.2 + index * 0.1 }}
               onClick={() => onSelect(option.value)}
-              className={`w-full glass-card p-6 text-left transition-all duration-300 hover:scale-[1.02] group cursor-pointer ${
-                selected === option.value
-                  ? 'border-primary shadow-[0_0_20px_hsla(174,100%,50%,0.3)]'
-                  : 'hover:border-primary/50'
-              }`}
+              className={`w-full glass-card p-6 text-left transition-all duration-300 hover:scale-[1.02] group cursor-pointer ${selected === option.value
+                ? 'border-primary shadow-[0_0_20px_hsla(174,100%,50%,0.3)]'
+                : 'hover:border-primary/50'
+                }`}
             >
               <div className="flex items-center gap-4">
                 <span className="text-4xl group-hover:scale-110 transition-transform duration-300">
@@ -78,6 +96,49 @@ export const StepRelationship = ({ selected, onSelect }: StepRelationshipProps) 
             </motion.button>
           ))}
         </div>
+
+        {!showCustom ? (
+          <motion.button
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.6 }}
+            onClick={() => setShowCustom(true)}
+            className="w-full glass-card p-4 text-center text-sm text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all duration-300"
+          >
+            ✏️ Something else? (Custom)
+          </motion.button>
+        ) : (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="glass-card p-4 space-y-3"
+          >
+            <Input
+              type="text"
+              placeholder="Type your custom answer..."
+              value={customValue}
+              onChange={(e) => setCustomValue(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && handleCustomSubmit()}
+              className="text-sm"
+              autoFocus
+            />
+            <div className="flex gap-2">
+              <button
+                onClick={handleCustomSubmit}
+                disabled={!customValue.trim()}
+                className="flex-1 bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
+              >
+                Submit
+              </button>
+              <button
+                onClick={() => setShowCustom(false)}
+                className="px-4 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </motion.div>
+        )}
       </div>
     </motion.div>
   );

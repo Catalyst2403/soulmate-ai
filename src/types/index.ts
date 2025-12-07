@@ -8,10 +8,13 @@ export interface User {
 export interface Persona {
   id?: string;
   user_id: string;
-  bot_name: string;
-  relationship_type: string;
+  identity_name: string;
+  identity_gender: string;
+  age_archetype: string;
+  relationship: string;
   vibe: string;
-  communication_style: string;
+  lore: string;
+  conflict: string;
   system_prompt?: string;
   created_at?: string;
 }
@@ -26,8 +29,11 @@ export interface Message {
 
 export interface FormData {
   email: string;
-  relationship_type: string;
+  identity_name: string;
+  identity_gender: string;
+  age_archetype: string;
+  relationship: string;
   vibe: string;
-  communication_style: string;
-  bot_name: string;
+  lore: string;
+  conflict: string;
 }

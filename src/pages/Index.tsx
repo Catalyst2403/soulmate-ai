@@ -4,10 +4,12 @@ import { useNavigate } from 'react-router-dom';
 import { useOnboarding } from '@/hooks/useOnboarding';
 import { ProgressBar } from '@/components/onboarding/ProgressBar';
 import { StepLanding } from '@/components/onboarding/StepLanding';
+import { StepIdentityBasics } from '@/components/onboarding/StepIdentityBasics';
+import { StepAgeArchetype } from '@/components/onboarding/StepAgeArchetype';
 import { StepRelationship } from '@/components/onboarding/StepRelationship';
 import { StepVibe } from '@/components/onboarding/StepVibe';
-import { StepCommunication } from '@/components/onboarding/StepCommunication';
-import { StepName } from '@/components/onboarding/StepName';
+import { StepLore } from '@/components/onboarding/StepLore';
+import { StepConflict } from '@/components/onboarding/StepConflict';
 import { LoadingScreen } from '@/components/onboarding/LoadingScreen';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
@@ -22,7 +24,7 @@ const Index = () => {
     nextStep,
     generateSystemPrompt,
   } = useOnboarding();
-  
+
   const [isLoading, setIsLoading] = useState(false);
   const [showLoader, setShowLoader] = useState(false);
 
@@ -82,15 +84,18 @@ const Index = () => {
       // Generate system prompt
       const systemPrompt = generateSystemPrompt();
 
-      // Create persona
+      // Create persona with new fields
       const { error: personaError } = await supabase
         .from('personas')
         .insert({
           user_id: userId,
-          bot_name: formData.bot_name,
-          relationship_type: formData.relationship_type,
+          identity_name: formData.identity_name,
+          identity_gender: formData.identity_gender,
+          age_archetype: formData.age_archetype,
+          relationship: formData.relationship,
           vibe: formData.vibe,
-          communication_style: formData.communication_style,
+          lore: formData.lore,
+          conflict: formData.conflict,
           system_prompt: systemPrompt,
         });
 
@@ -112,8 +117,17 @@ const Index = () => {
     }
   };
 
+  const handleIdentityComplete = () => {
+    setTimeout(nextStep, 300);
+  };
+
+  const handleAgeArchetypeSelect = (value: string) => {
+    updateFormData('age_archetype', value);
+    setTimeout(nextStep, 300);
+  };
+
   const handleRelationshipSelect = (value: string) => {
-    updateFormData('relationship_type', value);
+    updateFormData('relationship', value);
     setTimeout(nextStep, 300);
   };
 
@@ -122,9 +136,15 @@ const Index = () => {
     setTimeout(nextStep, 300);
   };
 
-  const handleCommunicationSelect = (value: string) => {
-    updateFormData('communication_style', value);
+  const handleLoreSelect = (value: string) => {
+    updateFormData('lore', value);
     setTimeout(nextStep, 300);
+  };
+
+  const handleConflictSelect = (value: string) => {
+    updateFormData('conflict', value);
+    // Last step, trigger completion
+    setTimeout(handleComplete, 300);
   };
 
   if (showLoader) {
@@ -134,7 +154,7 @@ const Index = () => {
   return (
     <div className="min-h-screen bg-background">
       <ProgressBar progress={progress} />
-      
+
       <AnimatePresence mode="wait">
         {step === 0 && (
           <StepLanding
@@ -144,38 +164,55 @@ const Index = () => {
             onNext={nextStep}
           />
         )}
-        
+
         {step === 1 && (
+          <StepIdentityBasics
+            key="identity"
+            name={formData.identity_name}
+            gender={formData.identity_gender}
+            onNameChange={(name) => updateFormData('identity_name', name)}
+            onGenderSelect={(gender) => updateFormData('identity_gender', gender)}
+            onComplete={handleIdentityComplete}
+          />
+        )}
+
+        {step === 2 && (
+          <StepAgeArchetype
+            key="age"
+            selected={formData.age_archetype}
+            onSelect={handleAgeArchetypeSelect}
+          />
+        )}
+
+        {step === 3 && (
           <StepRelationship
             key="relationship"
-            selected={formData.relationship_type}
+            selected={formData.relationship}
             onSelect={handleRelationshipSelect}
           />
         )}
-        
-        {step === 2 && (
+
+        {step === 4 && (
           <StepVibe
             key="vibe"
             selected={formData.vibe}
             onSelect={handleVibeSelect}
           />
         )}
-        
-        {step === 3 && (
-          <StepCommunication
-            key="communication"
-            selected={formData.communication_style}
-            onSelect={handleCommunicationSelect}
+
+        {step === 5 && (
+          <StepLore
+            key="lore"
+            selected={formData.lore}
+            onSelect={handleLoreSelect}
           />
         )}
-        
-        {step === 4 && (
-          <StepName
-            key="name"
-            name={formData.bot_name}
-            onNameChange={(name) => updateFormData('bot_name', name)}
-            onComplete={handleComplete}
-            isLoading={isLoading}
+
+        {step === 6 && (
+          <StepConflict
+            key="conflict"
+            selected={formData.conflict}
+            onSelect={handleConflictSelect}
           />
         )}
       </AnimatePresence>

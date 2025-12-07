@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Smile, ArrowLeft, MoreVertical } from 'lucide-react';
+import { Send, ArrowLeft, MoreVertical } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Message, Persona } from '@/types';
@@ -45,7 +45,7 @@ export const ChatInterface = ({
   return (
     <div className="flex flex-col h-screen bg-background">
       {/* Chat background pattern */}
-      <div 
+      <div
         className="fixed inset-0 opacity-5 pointer-events-none"
         style={{
           backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%2300d4aa' fill-opacity='0.4'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
@@ -64,22 +64,22 @@ export const ChatInterface = ({
             >
               <ArrowLeft className="w-5 h-5" />
             </Button>
-            
+
             <div className="w-10 h-10 rounded-full bg-gradient-to-br from-neon-cyan to-neon-magenta flex items-center justify-center text-lg">
-              {persona.bot_name?.[0]?.toUpperCase() || '💫'}
+              {persona.identity_name?.[0]?.toUpperCase() || '💫'}
             </div>
-            
+
             <div>
               <h2 className="font-display font-semibold text-foreground">
-                {persona.bot_name}
+                {persona.identity_name}
               </h2>
-              <p className="text-xs text-primary flex items-center gap-1">
+              <p className="text-xs text-muted-foreground flex items-center gap-1">
                 <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
-                Online
+                {isTyping ? 'typing...' : 'Online'}
               </p>
             </div>
           </div>
-          
+
           <Button variant="ghost" size="icon" className="text-muted-foreground">
             <MoreVertical className="w-5 h-5" />
           </Button>
@@ -99,9 +99,8 @@ export const ChatInterface = ({
               className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
             >
               <div
-                className={`max-w-[80%] ${
-                  message.role === 'user' ? 'chat-bubble-user' : 'chat-bubble-bot'
-                }`}
+                className={`max-w-[80%] ${message.role === 'user' ? 'chat-bubble-user' : 'chat-bubble-bot'
+                  }`}
               >
                 <p className="text-sm text-foreground whitespace-pre-wrap">
                   {message.content}
@@ -109,13 +108,13 @@ export const ChatInterface = ({
                 <p className="text-[10px] text-muted-foreground mt-1 text-right">
                   {message.timestamp
                     ? new Date(message.timestamp).toLocaleTimeString([], {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })
                     : new Date().toLocaleTimeString([], {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
                 </p>
               </div>
             </motion.div>
@@ -162,22 +161,14 @@ export const ChatInterface = ({
         className="relative z-10 glass-card rounded-none border-x-0 border-b-0 px-4 py-3"
       >
         <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="text-muted-foreground shrink-0"
-          >
-            <Smile className="w-5 h-5" />
-          </Button>
-          
+
           <Input
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             placeholder="Type a message..."
             className="flex-1 bg-muted/30 border-0 focus-visible:ring-1"
           />
-          
+
           <Button
             type="submit"
             variant="glow"
