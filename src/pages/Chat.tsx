@@ -58,6 +58,7 @@ const Chat = () => {
     };
   }, [userId]);
 
+
   const loadUserData = async (uid: string) => {
     try {
       // Load persona
@@ -104,6 +105,49 @@ const Chat = () => {
 
       setPersona(personaData as Persona);
 
+      // Check if initial greeting needs to be sent
+      if (!personaData.initial_greeting_sent) {
+        console.log('👋 Sending initial greeting message...');
+
+        // Dynamically import the greeting utility
+        const { getInitialGreeting } = await import('@/utils/greetingMessages');
+
+        // Get the appropriate greeting message
+        const greetingMessage = getInitialGreeting(
+          personaData.relationship,
+          personaData.lore
+        );
+
+        console.log('Greeting message:', greetingMessage);
+
+        // Insert the greeting message as an assistant message
+        const { error: greetingError } = await supabase
+          .from('messages')
+          .insert({
+            user_id: uid,
+            role: 'assistant',
+            content: greetingMessage,
+          });
+
+        if (greetingError) {
+          console.error('Failed to send greeting message:', greetingError);
+        } else {
+          // Update the persona to mark greeting as sent
+          const { error: updateGreetingError } = await supabase
+            .from('personas')
+            .update({ initial_greeting_sent: true })
+            .eq('user_id', uid);
+
+          if (updateGreetingError) {
+            console.error('Failed to update greeting flag:', updateGreetingError);
+          } else {
+            console.log('✅ Initial greeting sent successfully!');
+            // Update local persona object
+            personaData.initial_greeting_sent = true;
+          }
+        }
+      }
+
       // Load messages
       const { data: messagesData, error: messagesError } = await supabase
         .from('messages')
@@ -125,6 +169,7 @@ const Chat = () => {
       navigate('/');
     }
   };
+
 
   const handleSendMessage = async (content: string) => {
     if (!userId || !persona) return;

@@ -16,6 +16,7 @@ export interface Persona {
   lore: string;
   conflict: string;
   system_prompt?: string;
+  initial_greeting_sent?: boolean;
   created_at?: string;
 }
 

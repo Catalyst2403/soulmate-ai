@@ -128,16 +128,33 @@ serve(async (req) => {
     // Try to parse response as JSON array for multi-message support
     let responseMessages;
     try {
-      const parsed = JSON.parse(reply);
+      // First, try to extract JSON from markdown code blocks if present
+      let jsonString = reply.trim();
+
+      // Check if response is wrapped in markdown code blocks
+      const codeBlockRegex = /```(?:json)?\s*\n?([\s\S]*?)\n?```/;
+      const match = jsonString.match(codeBlockRegex);
+
+      if (match) {
+        // Extract the JSON content from code block
+        jsonString = match[1].trim();
+        console.log("Extracted JSON from markdown code block");
+      }
+
+      // Try to parse the JSON
+      const parsed = JSON.parse(jsonString);
       if (Array.isArray(parsed) && parsed.every(msg => msg.text)) {
         responseMessages = parsed;
+        console.log(`✅ Successfully parsed ${parsed.length} messages from JSON array`);
       } else {
         // Not in expected format, wrap as single message
         responseMessages = [{ text: reply }];
+        console.log("⚠️ JSON parsed but not in expected format, wrapping as single message");
       }
-    } catch {
+    } catch (parseError) {
       // Not JSON, wrap as single message
       responseMessages = [{ text: reply }];
+      console.log("⚠️ Could not parse as JSON, wrapping as single message");
     }
 
     console.log("Returning", responseMessages.length, "message(s)");

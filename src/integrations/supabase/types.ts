@@ -48,34 +48,46 @@ export type Database = {
       }
       personas: {
         Row: {
-          bot_name: string
-          communication_style: string
+          age_archetype: string | null
+          conflict: string | null
           created_at: string
           id: string
-          relationship_type: string
+          identity_gender: string | null
+          identity_name: string | null
+          initial_greeting_sent: boolean | null
+          lore: string | null
+          relationship: string | null
           system_prompt: string | null
           user_id: string
-          vibe: string
+          vibe: string | null
         }
         Insert: {
-          bot_name: string
-          communication_style: string
+          age_archetype?: string | null
+          conflict?: string | null
           created_at?: string
           id?: string
-          relationship_type: string
+          identity_gender?: string | null
+          identity_name?: string | null
+          initial_greeting_sent?: boolean | null
+          lore?: string | null
+          relationship?: string | null
           system_prompt?: string | null
           user_id: string
-          vibe: string
+          vibe?: string | null
         }
         Update: {
-          bot_name?: string
-          communication_style?: string
+          age_archetype?: string | null
+          conflict?: string | null
           created_at?: string
           id?: string
-          relationship_type?: string
+          identity_gender?: string | null
+          identity_name?: string | null
+          initial_greeting_sent?: boolean | null
+          lore?: string | null
+          relationship?: string | null
           system_prompt?: string | null
           user_id?: string
-          vibe?: string
+          vibe?: string | null
         }
         Relationships: [
           {
