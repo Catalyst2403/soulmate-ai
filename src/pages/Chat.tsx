@@ -16,7 +16,7 @@ const Chat = () => {
 
   useEffect(() => {
     const storedUserId = localStorage.getItem('soulmate_user_id');
-    
+
     if (!storedUserId) {
       navigate('/');
       return;
@@ -99,17 +99,7 @@ const Chat = () => {
   const handleSendMessage = async (content: string) => {
     if (!userId || !persona) return;
 
-    // Add user message to state immediately
-    const userMessage: Message = {
-      user_id: userId,
-      role: 'user',
-      content,
-      timestamp: new Date().toISOString(),
-    };
-
-    setMessages((prev) => [...prev, userMessage]);
-
-    // Save user message to DB
+    // Save user message to DB (realtime subscription will add it to state)
     const { error: saveError } = await supabase
       .from('messages')
       .insert({
@@ -120,6 +110,12 @@ const Chat = () => {
 
     if (saveError) {
       console.error('Error saving message:', saveError);
+      toast({
+        title: 'Error',
+        description: 'Failed to send message. Please try again.',
+        variant: 'destructive',
+      });
+      return;
     }
 
     // Show typing indicator
@@ -146,23 +142,12 @@ const Chat = () => {
 
       const aiReply = data?.reply || 'Aree yaar, kuch gadbad ho gaya!';
 
-      // Save AI response to DB
+      // Save AI response to DB (realtime subscription will add it to state)
       await supabase.from('messages').insert({
         user_id: userId,
         role: 'assistant',
         content: aiReply,
       });
-
-      // Add AI message to state
-      setMessages((prev) => [
-        ...prev,
-        {
-          user_id: userId,
-          role: 'assistant',
-          content: aiReply,
-          timestamp: new Date().toISOString(),
-        },
-      ]);
     } catch (error) {
       console.error('Error getting AI response:', error);
       toast({
