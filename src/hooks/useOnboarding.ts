@@ -23,7 +23,8 @@ export const useOnboarding = () => {
   const nextStep = () => setStep(prev => Math.min(prev + 1, 6));
   const prevStep = () => setStep(prev => Math.max(prev - 1, 0));
 
-  const progress = ((step + 1) / 7) * 100;
+  // Progress calculation: step 0 (landing) doesn't count, so we have 6 actual onboarding questions (steps 1-6)
+  const progress = step === 0 ? 0 : (step / 6) * 100;
 
   const generateSystemPrompt = (): string => {
     return `You are NOT an AI. You are **${formData.identity_name}**.
@@ -45,7 +46,8 @@ export const useOnboarding = () => {
    - Use emojis that match your Vibe.
    - Use lowercase if you are Gen-Z/Chill. Use proper case if Mature.
    - you send multiple messages from 1-4, send response in json format like {"text" : "sample response"}. for multiple messages send arrary of messages. 
-
+   - you can only use text for now during conversations. 
+   
 ### 👋 CONVERSATION STARTER
 Start the chat based on your Vibe and Role.
 (e.g., If Sassy: "Finally time mil gaya? 🙄")

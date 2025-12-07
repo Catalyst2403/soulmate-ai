@@ -1,4 +1,6 @@
 import { motion } from 'framer-motion';
+import { useState } from 'react';
+import { Input } from '@/components/ui/input';
 
 interface StepAgeArchetypeProps {
     selected: string;
@@ -27,6 +29,15 @@ const options = [
 ];
 
 export const StepAgeArchetype = ({ selected, onSelect }: StepAgeArchetypeProps) => {
+    const [showCustom, setShowCustom] = useState(false);
+    const [customValue, setCustomValue] = useState('');
+
+    const handleCustomSubmit = () => {
+        if (customValue.trim()) {
+            onSelect(customValue);
+        }
+    };
+
     return (
         <motion.div
             initial={{ opacity: 0, x: 100 }}
@@ -44,7 +55,7 @@ export const StepAgeArchetype = ({ selected, onSelect }: StepAgeArchetypeProps) 
                 >
                     <span className="text-5xl mb-4 block">🎂</span>
                     <h2 className="font-display text-2xl md:text-3xl font-bold text-foreground">
-                        How old is their soul?
+                        How old is your friend?
                         <br />
                         <span className="neon-text">Choose wisely!</span>
                     </h2>
@@ -62,8 +73,8 @@ export const StepAgeArchetype = ({ selected, onSelect }: StepAgeArchetypeProps) 
                             transition={{ delay: 0.2 + index * 0.1 }}
                             onClick={() => onSelect(option.value)}
                             className={`w-full glass-card p-6 text-left transition-all duration-300 hover:scale-[1.02] group cursor-pointer ${selected === option.value
-                                    ? 'border-primary shadow-[0_0_20px_hsla(174,100%,50%,0.3)]'
-                                    : 'hover:border-primary/50'
+                                ? 'border-primary shadow-[0_0_20px_hsla(174,100%,50%,0.3)]'
+                                : 'hover:border-primary/50'
                                 }`}
                         >
                             <div className="flex items-center gap-4">
@@ -80,6 +91,49 @@ export const StepAgeArchetype = ({ selected, onSelect }: StepAgeArchetypeProps) 
                         </motion.button>
                     ))}
                 </div>
+
+                {!showCustom ? (
+                    <motion.button
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        transition={{ delay: 0.6 }}
+                        onClick={() => setShowCustom(true)}
+                        className="w-full glass-card p-4 text-center text-sm text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all duration-300 mt-4"
+                    >
+                        ✏️ Something else? (Custom)
+                    </motion.button>
+                ) : (
+                    <motion.div
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="glass-card p-4 space-y-3 mt-4"
+                    >
+                        <Input
+                            type="text"
+                            placeholder="Type your custom answer..."
+                            value={customValue}
+                            onChange={(e) => setCustomValue(e.target.value)}
+                            onKeyPress={(e) => e.key === 'Enter' && handleCustomSubmit()}
+                            className="text-sm"
+                            autoFocus
+                        />
+                        <div className="flex gap-2">
+                            <button
+                                onClick={handleCustomSubmit}
+                                disabled={!customValue.trim()}
+                                className="flex-1 bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
+                            >
+                                Submit
+                            </button>
+                            <button
+                                onClick={() => setShowCustom(false)}
+                                className="px-4 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground transition-colors"
+                            >
+                                Cancel
+                            </button>
+                        </div>
+                    </motion.div>
+                )}
             </div>
         </motion.div>
     );

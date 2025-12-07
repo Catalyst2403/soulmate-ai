@@ -9,9 +9,15 @@ interface StepRelationshipProps {
 
 const options = [
   {
-    value: 'Romantic Partner',
+    value: 'Girlfriend',
+    emoji: '💕',
+    title: 'The Girlfriend (GF)',
+    subtitle: 'Flirty, intimate, thoda possessive.',
+  },
+  {
+    value: 'Boyfriend',
     emoji: '❤️',
-    title: 'The Love Interest (GF/BF)',
+    title: 'The Boyfriend (BF)',
     subtitle: 'Flirty, intimate, thoda possessive.',
   },
   {
