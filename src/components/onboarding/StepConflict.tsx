@@ -79,8 +79,8 @@ export const StepConflict = ({ selected, onSelect }: StepConflictProps) => {
                             transition={{ delay: 0.2 + index * 0.1 }}
                             onClick={() => onSelect(option.value)}
                             className={`w-full glass-card p-6 text-left transition-all duration-300 hover:scale-[1.02] group cursor-pointer ${selected === option.value
-                                    ? 'border-primary shadow-[0_0_20px_hsla(174,100%,50%,0.3)]'
-                                    : 'hover:border-primary/50'
+                                ? 'border-primary shadow-[0_0_20px_hsla(174,100%,50%,0.3)]'
+                                : 'hover:border-primary/50'
                                 }`}
                         >
                             <div className="flex items-center gap-4">

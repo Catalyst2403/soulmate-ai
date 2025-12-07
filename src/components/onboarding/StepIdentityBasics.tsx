@@ -93,8 +93,8 @@ export const StepIdentityBasics = ({
                                     transition={{ delay: 0.3 + index * 0.1 }}
                                     onClick={() => onGenderSelect(option.value)}
                                     className={`glass-card p-4 text-center transition-all duration-300 hover:scale-105 cursor-pointer ${gender === option.value
-                                            ? 'border-primary shadow-[0_0_20px_hsla(174,100%,50%,0.3)]'
-                                            : 'hover:border-primary/50'
+                                        ? 'border-primary shadow-[0_0_20px_hsla(174,100%,50%,0.3)]'
+                                        : 'hover:border-primary/50'
                                         }`}
                                 >
                                     <span className="text-3xl block mb-2">{option.emoji}</span>

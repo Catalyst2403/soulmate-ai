@@ -86,8 +86,8 @@ export const StepLore = ({ selected, onSelect }: StepLoreProps) => {
                             transition={{ delay: 0.2 + index * 0.1 }}
                             onClick={() => onSelect(option.value)}
                             className={`glass-card p-5 text-center transition-all duration-300 hover:scale-105 group cursor-pointer ${selected === option.value
-                                    ? 'border-primary shadow-[0_0_20px_hsla(174,100%,50%,0.3)]'
-                                    : 'hover:border-primary/50'
+                                ? 'border-primary shadow-[0_0_20px_hsla(174,100%,50%,0.3)]'
+                                : 'hover:border-primary/50'
                                 }`}
                         >
                             <div className={`absolute inset-0 rounded-2xl bg-gradient-to-br ${option.gradient} opacity-0 group-hover:opacity-100 transition-opacity duration-300`} />

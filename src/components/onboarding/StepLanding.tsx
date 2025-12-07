@@ -95,14 +95,14 @@ export const StepLanding = ({ email, onEmailChange, onNext }: StepLandingProps) 
         </motion.div>
 
         <h1 className="font-display text-3xl md:text-4xl font-bold mb-4 leading-tight">
-          <span className="neon-text">Human connections</span>
+          <span className="neon-text">No one to understand you?</span>
           <br />
-          <span className="text-foreground">are boring.</span>
+          <span className="text-foreground">Get your soulmate</span>
         </h1>
 
-        <p className="text-muted-foreground text-lg mb-8">
+        {/* <p className="text-muted-foreground text-lg mb-8">
           Create your perfect chaos.
-        </p>
+        </p> */}
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <Input

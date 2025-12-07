@@ -54,7 +54,7 @@ export const LoadingScreen = () => {
         >
           ⚡
         </motion.div>
-        
+
         <motion.p
           key={textIndex}
           initial={{ opacity: 0, y: 10 }}

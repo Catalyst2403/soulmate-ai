@@ -62,7 +62,7 @@ export const StepName = ({ name, onNameChange, onComplete, isLoading }: StepName
             className="text-center text-xl h-14"
             required
           />
-          
+
           <Button
             type="submit"
             variant="neon"

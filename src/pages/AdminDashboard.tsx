@@ -82,7 +82,7 @@ const AdminDashboard = () => {
         for (let i = 0; i < recentMessages.length - 1; i += 2) {
           const msg1 = recentMessages[i];
           const msg2 = recentMessages[i + 1];
-          
+
           if (msg1.role === 'assistant' && msg2?.role === 'user') {
             recentLogs.push({
               email: (msg2 as any).users?.email || 'Unknown',
@@ -119,7 +119,7 @@ const AdminDashboard = () => {
           <h1 className="font-display text-2xl font-bold text-foreground mb-6">
             Admin Access
           </h1>
-          
+
           <form onSubmit={handlePinSubmit} className="space-y-4">
             <Input
               type="password"
@@ -133,7 +133,7 @@ const AdminDashboard = () => {
               Unlock
             </Button>
           </form>
-          
+
           <Button
             variant="ghost"
             className="mt-4 text-muted-foreground"

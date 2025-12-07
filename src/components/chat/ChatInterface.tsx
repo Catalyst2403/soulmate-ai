@@ -1,8 +1,18 @@
 import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, ArrowLeft } from 'lucide-react';
+import { Send, ArrowLeft, LogOut } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Message, Persona } from '@/types';
 import { useNavigate } from 'react-router-dom';
 
@@ -22,6 +32,7 @@ export const ChatInterface = ({
   isTyping,
 }: ChatInterfaceProps) => {
   const [inputValue, setInputValue] = useState('');
+  const [showLogoutDialog, setShowLogoutDialog] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
 
@@ -39,6 +50,14 @@ export const ChatInterface = ({
       onSendMessage(inputValue.trim());
       setInputValue('');
     }
+  };
+
+  const handleLogout = () => {
+    // Clear localStorage
+    localStorage.removeItem('soulmate_user_id');
+    localStorage.removeItem('soulmate_email');
+    // Navigate to landing page
+    navigate('/');
   };
 
   return (
@@ -79,7 +98,15 @@ export const ChatInterface = ({
             </div>
           </div>
 
-
+          <Button
+            variant="outline"
+            size="icon"
+            className="text-destructive border-destructive/50 hover:bg-destructive hover:text-destructive-foreground"
+            onClick={() => setShowLogoutDialog(true)}
+            title="Logout"
+          >
+            <LogOut className="w-5 h-5" />
+          </Button>
         </div>
       </div>
 
@@ -177,6 +204,24 @@ export const ChatInterface = ({
           </Button>
         </div>
       </form>
+
+      {/* Logout Confirmation Dialog */}
+      <AlertDialog open={showLogoutDialog} onOpenChange={setShowLogoutDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Logout Confirmation</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to logout? You can always come back by entering your email on the landing page.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleLogout} className="bg-destructive hover:bg-destructive/90">
+              Logout
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

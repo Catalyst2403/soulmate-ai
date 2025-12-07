@@ -55,11 +55,10 @@ export const StepCommunication = ({ selected, onSelect }: StepCommunicationProps
               animate={{ y: 0, opacity: 1 }}
               transition={{ delay: 0.2 + index * 0.1 }}
               onClick={() => onSelect(option.value)}
-              className={`w-full glass-card p-5 text-left transition-all duration-300 hover:scale-[1.02] cursor-pointer ${
-                selected === option.value
+              className={`w-full glass-card p-5 text-left transition-all duration-300 hover:scale-[1.02] cursor-pointer ${selected === option.value
                   ? 'border-primary shadow-[0_0_20px_hsla(174,100%,50%,0.3)]'
                   : 'hover:border-primary/50'
-              }`}
+                }`}
             >
               <h3 className="font-display text-lg font-semibold text-foreground mb-3">
                 {option.title}

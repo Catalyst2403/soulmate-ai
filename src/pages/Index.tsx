@@ -91,20 +91,25 @@ const Index = () => {
       console.log('Form Data:', formData);
       console.log('===================================');
 
-      // Create persona with new fields
+      // Build persona data object - only include non-empty fields
+      const personaData: any = {
+        user_id: userId,
+        system_prompt: systemPrompt,
+      };
+
+      // Add optional fields only if they have values
+      if (formData.identity_name) personaData.identity_name = formData.identity_name;
+      if (formData.identity_gender) personaData.identity_gender = formData.identity_gender;
+      if (formData.age_archetype) personaData.age_archetype = formData.age_archetype;
+      if (formData.relationship) personaData.relationship = formData.relationship;
+      if (formData.vibe) personaData.vibe = formData.vibe;
+      if (formData.lore) personaData.lore = formData.lore;
+      if (formData.conflict) personaData.conflict = formData.conflict;
+
+      // Create persona with dynamic fields
       const { error: personaError } = await supabase
         .from('personas')
-        .insert({
-          user_id: userId,
-          identity_name: formData.identity_name,
-          identity_gender: formData.identity_gender,
-          age_archetype: formData.age_archetype,
-          relationship: formData.relationship,
-          vibe: formData.vibe,
-          lore: formData.lore,
-          conflict: formData.conflict,
-          system_prompt: systemPrompt,
-        });
+        .insert(personaData);
 
       if (personaError) throw personaError;
 
