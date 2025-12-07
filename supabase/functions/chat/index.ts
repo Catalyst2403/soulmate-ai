@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { GoogleGenerativeAI } from "npm:@google/generative-ai@0.21.0";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -17,55 +18,42 @@ serve(async (req) => {
 
   try {
     const { messages, systemPrompt }: ChatRequest = await req.json();
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    
-    if (!LOVABLE_API_KEY) {
-      throw new Error("LOVABLE_API_KEY is not configured");
+    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
+
+    if (!GEMINI_API_KEY) {
+      throw new Error("GEMINI_API_KEY is not configured");
     }
 
     console.log("Sending chat request with system prompt:", systemPrompt.substring(0, 100) + "...");
     console.log("Message count:", messages.length);
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: systemPrompt },
-          ...messages,
-        ],
-        stream: false,
-        max_tokens: 500,
-        temperature: 0.9,
-      }),
+    // Initialize Gemini AI
+    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({
+      model: "gemini-2.0-flash-exp",
+      systemInstruction: systemPrompt,
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("AI gateway error:", response.status, errorText);
-      
-      if (response.status === 429) {
-        return new Response(
-          JSON.stringify({ error: "Rate limits exceeded, please try again later." }),
-          { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      if (response.status === 402) {
-        return new Response(
-          JSON.stringify({ error: "Payment required, please add funds." }),
-          { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      
-      throw new Error(`AI gateway error: ${response.status}`);
-    }
+    // Convert messages to Gemini format
+    const chatHistory = messages.slice(0, -1).map(msg => ({
+      role: msg.role === "assistant" ? "model" : "user",
+      parts: [{ text: msg.content }],
+    }));
 
-    const data = await response.json();
-    const reply = data.choices?.[0]?.message?.content || "Arre yaar, kuch gadbad ho gaya. Phir se try kar?";
+    const lastMessage = messages[messages.length - 1];
+
+    // Start chat with history
+    const chat = model.startChat({
+      history: chatHistory,
+      generationConfig: {
+        maxOutputTokens: 500,
+        temperature: 0.9,
+      },
+    });
+
+    // Send the latest message
+    const result = await chat.sendMessage(lastMessage.content);
+    const reply = result.response.text() || "Arre yaar, kuch gadbad ho gaya. Phir se try kar?";
 
     console.log("AI response received:", reply.substring(0, 50) + "...");
 
