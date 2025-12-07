@@ -11,6 +11,66 @@ interface ChatRequest {
   systemPrompt: string;
 }
 
+// ============================================
+// API Key Pool Management (Round-Robin)
+// ============================================
+let apiKeyPool: string[] = [];
+let currentKeyIndex = 0;
+
+/**
+ * Initialize the API key pool from environment variables.
+ * Supports multiple keys: GEMINI_API_KEY_1, GEMINI_API_KEY_2, etc.
+ * Falls back to single GEMINI_API_KEY if numbered keys aren't found.
+ */
+function initializeApiKeyPool(): void {
+  const keys: string[] = [];
+
+  // Try to load numbered keys (GEMINI_API_KEY_1, GEMINI_API_KEY_2, etc.)
+  let keyIndex = 1;
+  while (true) {
+    const key = Deno.env.get(`GEMINI_API_KEY_${keyIndex}`);
+    if (key) {
+      keys.push(key);
+      keyIndex++;
+    } else {
+      break;
+    }
+  }
+
+  // Fallback to single key if no numbered keys found
+  if (keys.length === 0) {
+    const singleKey = Deno.env.get("GEMINI_API_KEY");
+    if (singleKey) {
+      keys.push(singleKey);
+    }
+  }
+
+  apiKeyPool = keys;
+  console.log(`✅ Initialized API key pool with ${apiKeyPool.length} key(s)`);
+}
+
+/**
+ * Get the next API key using round-robin selection.
+ * Automatically rotates to the next key for load distribution.
+ */
+function getNextApiKey(): string {
+  if (apiKeyPool.length === 0) {
+    throw new Error("No API keys configured. Please set GEMINI_API_KEY or GEMINI_API_KEY_1, GEMINI_API_KEY_2, etc.");
+  }
+
+  const key = apiKeyPool[currentKeyIndex];
+  const keyNumber = currentKeyIndex + 1;
+
+  // Round-robin: move to next key for next request
+  currentKeyIndex = (currentKeyIndex + 1) % apiKeyPool.length;
+
+  console.log(`🔑 Using API key #${keyNumber} of ${apiKeyPool.length}`);
+  return key;
+}
+
+// Initialize pool when module loads
+initializeApiKeyPool();
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -18,11 +78,7 @@ serve(async (req) => {
 
   try {
     const { messages, systemPrompt }: ChatRequest = await req.json();
-    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
-
-    if (!GEMINI_API_KEY) {
-      throw new Error("GEMINI_API_KEY is not configured");
-    }
+    const GEMINI_API_KEY = getNextApiKey();
 
     // Debug logging for current session
     console.log("=== EDGE FUNCTION DEBUG SESSION ===");

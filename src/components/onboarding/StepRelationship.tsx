@@ -66,7 +66,7 @@ export const StepRelationship = ({ selected, onSelect }: StepRelationshipProps) 
         >
           <span className="text-5xl mb-4 block">🤞</span>
           <h2 className="font-display text-2xl md:text-3xl font-bold text-foreground">
-            What are they to you?
+            Pick the vibe that fits you.
             <br />
             <span className="neon-text">Clear kar lete hain!</span>
           </h2>

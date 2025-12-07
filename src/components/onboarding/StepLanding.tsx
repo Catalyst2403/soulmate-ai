@@ -95,7 +95,7 @@ export const StepLanding = ({ email, onEmailChange, onNext }: StepLandingProps) 
         </motion.div>
 
         <h1 className="font-display text-3xl md:text-4xl font-bold mb-4 leading-tight">
-          <span className="neon-text">No one to understand you?</span>
+          <span className="neon-text">Stop texting into the void</span>
           <br />
           <span className="text-foreground">Get your soulmate</span>
         </h1>
