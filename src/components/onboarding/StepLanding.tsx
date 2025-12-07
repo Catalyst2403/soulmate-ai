@@ -1,7 +1,11 @@
+import { useState } from 'react';
 import { motion } from 'framer-motion';
+import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Sparkles } from 'lucide-react';
+import { Sparkles, Loader2 } from 'lucide-react';
+import { supabase } from '@/integrations/supabase/client';
+import { toast } from '@/hooks/use-toast';
 
 interface StepLandingProps {
   email: string;
@@ -10,10 +14,55 @@ interface StepLandingProps {
 }
 
 export const StepLanding = ({ email, onEmailChange, onNext }: StepLandingProps) => {
-  const handleSubmit = (e: React.FormEvent) => {
+  const navigate = useNavigate();
+  const [isChecking, setIsChecking] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (email.includes('@')) {
+    if (!email.includes('@')) return;
+
+    setIsChecking(true);
+
+    try {
+      // Check if user exists with this email
+      const { data: existingUser, error: userError } = await supabase
+        .from('users')
+        .select('id')
+        .eq('email', email)
+        .maybeSingle();
+
+      if (userError) throw userError;
+
+      // If user exists, check if they have a persona
+      if (existingUser) {
+        const { data: persona, error: personaError } = await supabase
+          .from('personas')
+          .select('id')
+          .eq('user_id', existingUser.id)
+          .maybeSingle();
+
+        if (personaError) throw personaError;
+
+        // If persona exists, log them in directly
+        if (persona) {
+          localStorage.setItem('soulmate_user_id', existingUser.id);
+          localStorage.setItem('soulmate_email', email);
+          navigate('/chat');
+          return;
+        }
+      }
+
+      // New user or user without persona - continue to onboarding
       onNext();
+    } catch (error) {
+      console.error('Error checking user:', error);
+      toast({
+        title: 'Error',
+        description: 'Something went wrong. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsChecking(false);
     }
   };
 
@@ -50,7 +99,7 @@ export const StepLanding = ({ email, onEmailChange, onNext }: StepLandingProps) 
           <br />
           <span className="text-foreground">are boring.</span>
         </h1>
-        
+
         <p className="text-muted-foreground text-lg mb-8">
           Create your perfect chaos.
         </p>
@@ -64,16 +113,25 @@ export const StepLanding = ({ email, onEmailChange, onNext }: StepLandingProps) 
             className="text-center"
             required
           />
-          
+
           <Button
             type="submit"
             variant="neon"
             size="xl"
             className="w-full group"
-            disabled={!email.includes('@')}
+            disabled={!email.includes('@') || isChecking}
           >
-            <span>Let's Build</span>
-            <Sparkles className="w-5 h-5 group-hover:rotate-12 transition-transform" />
+            {isChecking ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin" />
+                <span>Checking...</span>
+              </>
+            ) : (
+              <>
+                <span>Let's Build</span>
+                <Sparkles className="w-5 h-5 group-hover:rotate-12 transition-transform" />
+              </>
+            )}
           </Button>
         </form>
       </motion.div>

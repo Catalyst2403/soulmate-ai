@@ -24,8 +24,16 @@ serve(async (req) => {
       throw new Error("GEMINI_API_KEY is not configured");
     }
 
-    console.log("Sending chat request with system prompt:", systemPrompt.substring(0, 100) + "...");
-    console.log("Message count:", messages.length);
+    // Debug logging for current session
+    console.log("=== EDGE FUNCTION DEBUG SESSION ===");
+    console.log("FULL SYSTEM PROMPT:");
+    console.log(systemPrompt);
+    console.log("\nMESSAGES RECEIVED:");
+    messages.forEach((msg, idx) => {
+      console.log(`  [${idx}] ${msg.role}: ${msg.content}`);
+    });
+    console.log(`\nTotal message count: ${messages.length}`);
+    console.log("===================================");
 
     // Initialize Gemini AI
     const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
@@ -55,7 +63,9 @@ serve(async (req) => {
     const result = await chat.sendMessage(lastMessage.content);
     const reply = result.response.text() || "Arre yaar, kuch gadbad ho gaya. Phir se try kar?";
 
-    console.log("AI response received:", reply.substring(0, 50) + "...");
+    console.log("\n=== RAW LLM RESPONSE ===");
+    console.log(reply);
+    console.log("========================\n");
 
     // Try to parse response as JSON array for multi-message support
     let responseMessages;

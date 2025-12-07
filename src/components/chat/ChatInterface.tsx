@@ -1,8 +1,18 @@
 import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, ArrowLeft, MoreVertical } from 'lucide-react';
+import { Send, ArrowLeft, MoreVertical, Info, LogOut } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Message, Persona } from '@/types';
 import { supabase } from '@/integrations/supabase/client';
 import { useNavigate } from 'react-router-dom';
@@ -23,6 +33,7 @@ export const ChatInterface = ({
   isTyping,
 }: ChatInterfaceProps) => {
   const [inputValue, setInputValue] = useState('');
+  const [showLogoutDialog, setShowLogoutDialog] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
 
@@ -40,6 +51,14 @@ export const ChatInterface = ({
       onSendMessage(inputValue.trim());
       setInputValue('');
     }
+  };
+
+  const handleLogout = () => {
+    // Clear localStorage
+    localStorage.removeItem('soulmate_user_id');
+    localStorage.removeItem('soulmate_email');
+    // Navigate to landing page
+    navigate('/');
   };
 
   return (
@@ -69,20 +88,46 @@ export const ChatInterface = ({
               {persona.identity_name?.[0]?.toUpperCase() || '💫'}
             </div>
 
-            <div>
-              <h2 className="font-display font-semibold text-foreground">
+            <div className="flex flex-col">
+              <h2 className="font-display font-semibold text-foreground text-base leading-tight">
                 {persona.identity_name}
               </h2>
-              <p className="text-xs text-muted-foreground flex items-center gap-1">
+              <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
                 <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
                 {isTyping ? 'typing...' : 'Online'}
               </p>
             </div>
           </div>
 
-          <Button variant="ghost" size="icon" className="text-muted-foreground">
-            <MoreVertical className="w-5 h-5" />
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-muted-foreground hover:text-foreground"
+              title="Settings"
+            >
+              <MoreVertical className="w-5 h-5" />
+            </Button>
+
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-muted-foreground hover:text-foreground"
+              title="Info"
+            >
+              <Info className="w-5 h-5" />
+            </Button>
+
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-muted-foreground hover:text-destructive"
+              onClick={() => setShowLogoutDialog(true)}
+              title="Logout"
+            >
+              <LogOut className="w-5 h-5" />
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -180,6 +225,24 @@ export const ChatInterface = ({
           </Button>
         </div>
       </form>
+
+      {/* Logout Confirmation Dialog */}
+      <AlertDialog open={showLogoutDialog} onOpenChange={setShowLogoutDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Logout Confirmation</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to logout? You can always come back by entering your email on the landing page.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleLogout} className="bg-destructive hover:bg-destructive/90">
+              Logout
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

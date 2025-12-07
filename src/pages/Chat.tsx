@@ -130,6 +130,13 @@ const Chat = () => {
 
       conversationHistory.push({ role: 'user', content });
 
+      // Debug logging for current session
+      console.log('=== CHAT DEBUG SESSION ===');
+      console.log('System Prompt:', persona.system_prompt);
+      console.log('Conversation History:', conversationHistory);
+      console.log('Total messages in history:', conversationHistory.length);
+      console.log('========================');
+
       // Call AI edge function
       const { data, error } = await supabase.functions.invoke('chat', {
         body: {
@@ -139,6 +146,10 @@ const Chat = () => {
       });
 
       if (error) throw error;
+
+      console.log('=== EDGE FUNCTION RESPONSE ===');
+      console.log('Response data:', data);
+      console.log('==============================');
 
       // Handle multi-message response
       const responseMessages = data?.messages || [{ text: data?.reply || 'Aree yaar, kuch gadbad ho gaya!' }];
