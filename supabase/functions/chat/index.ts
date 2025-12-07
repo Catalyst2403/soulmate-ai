@@ -117,11 +117,21 @@ serve(async (req) => {
     });
 
     // Convert messages to Gemini format
-    const chatHistory = messages.slice(0, -1).map(msg => ({
+    // IMPORTANT: Gemini chat history MUST start with a user message, not a model message
+    // So we need to handle the case where we have an initial greeting from the assistant
+    let processedHistory = messages.slice(0, -1).map(msg => ({
       role: msg.role === "assistant" ? "model" : "user",
       parts: [{ text: msg.content }],
     }));
 
+    // If history starts with a model message, we need to remove leading model messages
+    // This happens when we have an initial greeting from the assistant
+    while (processedHistory.length > 0 && processedHistory[0].role === "model") {
+      console.log("⚠️ Removing leading model message from history (Gemini requires history to start with user)");
+      processedHistory.shift();
+    }
+
+    const chatHistory = processedHistory;
     const lastMessage = messages[messages.length - 1];
 
     // Start chat with history
