@@ -94,7 +94,8 @@ serve(async (req) => {
     // Initialize Gemini AI
     const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
     const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash-lite",
+      // model: "gemini-2.5-flash-lite",
+      model: "gemini-3-pro-preview",
       systemInstruction: systemPrompt,
       safetySettings: [
         {
