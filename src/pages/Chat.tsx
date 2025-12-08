@@ -82,10 +82,6 @@ const Chat = () => {
       const needsUpdate = personaData.system_prompt !== updatedSystemPrompt;
 
       if (needsUpdate) {
-        console.log('🔄 System prompt outdated. Updating to latest version...');
-        console.log('Old prompt length:', personaData.system_prompt?.length || 0);
-        console.log('New prompt length:', updatedSystemPrompt.length);
-
         // Update the system prompt in database
         const { error: updateError } = await supabase
           .from('personas')
@@ -93,14 +89,12 @@ const Chat = () => {
           .eq('user_id', uid);
 
         if (updateError) {
-          console.error('Failed to update system prompt:', updateError);
+          console.error('❌ Failed to update system prompt:', updateError);
         } else {
-          console.log('✅ System prompt updated successfully!');
+          console.log('✅ System prompt updated');
           // Update the local persona object
           personaData.system_prompt = updatedSystemPrompt;
         }
-      } else {
-        console.log('✅ System prompt is up to date');
       }
 
       setPersona(personaData as Persona);
@@ -205,13 +199,6 @@ const Chat = () => {
 
       conversationHistory.push({ role: 'user', content });
 
-      // Debug logging for current session
-      console.log('=== CHAT DEBUG SESSION ===');
-      console.log('System Prompt:', persona.system_prompt);
-      console.log('Conversation History:', conversationHistory);
-      console.log('Total messages in history:', conversationHistory.length);
-      console.log('========================');
-
       // Call AI edge function
       const { data, error } = await supabase.functions.invoke('chat', {
         body: {
@@ -220,26 +207,15 @@ const Chat = () => {
         },
       });
 
-      console.log('=== EDGE FUNCTION RESPONSE ===');
-      console.log('Response data:', data);
-      console.log('Response error:', error);
-      console.log('==============================');
-
       // Check for errors from the Edge Function
       if (error) {
-        console.error('=== EDGE FUNCTION ERROR ===');
-        console.error('Error object:', error);
-        console.error('===========================');
+        console.error('❌ Edge Function Error:', error.message || error);
         throw error;
       }
 
       // Check if response contains an error message (from our custom error handling)
       if (data?.error) {
-        console.error('=== API ERROR RETURNED ===');
-        console.error('Error message:', data.error);
-        console.error('Error type:', data.errorType);
-        console.error('Timestamp:', data.timestamp);
-        console.error('==========================');
+        console.error('❌ API Error:', data.error);
 
         // Display the user-friendly error message from backend
         toast({
@@ -280,11 +256,7 @@ const Chat = () => {
         }
       }
     } catch (error: any) {
-      console.error('=== CHAT ERROR (FRONTEND) ===');
-      console.error('Error:', error);
-      console.error('Error message:', error?.message);
-      console.error('Error details:', JSON.stringify(error, null, 2));
-      console.error('==============================');
+      console.error('❌ Chat Error:', error?.message || error);
 
       toast({
         title: 'Error',
