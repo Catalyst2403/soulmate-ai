@@ -238,11 +238,12 @@ const Chat = () => {
         console.error('=== API ERROR RETURNED ===');
         console.error('Error message:', data.error);
         console.error('Error type:', data.errorType);
+        console.error('Timestamp:', data.timestamp);
         console.error('==========================');
 
         // Display the user-friendly error message from backend
         toast({
-          title: 'Oops!',
+          title: 'Error from AI',
           description: data.error,
           variant: 'destructive',
         });

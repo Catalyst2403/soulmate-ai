@@ -94,27 +94,11 @@ serve(async (req) => {
     // Initialize Gemini AI
     const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
     const model = genAI.getGenerativeModel({
-      // model: "gemini-2.5-flash-lite",
+      // Using Gemini 3 Pro Preview - the most advanced model
+      // Note: This is a preview model and may have access restrictions
       model: "gemini-3-pro-preview",
       systemInstruction: systemPrompt,
-      safetySettings: [
-        {
-          category: HarmCategory.HARM_CATEGORY_HARASSMENT,
-          threshold: HarmBlockThreshold.BLOCK_NONE,
-        },
-        {
-          category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-          threshold: HarmBlockThreshold.BLOCK_NONE,
-        },
-        {
-          category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-          threshold: HarmBlockThreshold.BLOCK_NONE,
-        },
-        {
-          category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-          threshold: HarmBlockThreshold.BLOCK_NONE,
-        },
-      ],
+      // Safety settings removed - using Gemini's defaults
     });
 
     // Convert messages to Gemini format
@@ -139,7 +123,7 @@ serve(async (req) => {
     const chat = model.startChat({
       history: chatHistory,
       generationConfig: {
-        maxOutputTokens: 500,
+        maxOutputTokens: 8192, // Increased for Gemini 3 Pro (supports up to 65k)
         temperature: 0.9,
       },
     });
@@ -158,6 +142,7 @@ serve(async (req) => {
 
       // Check for specific error types
       let userFriendlyMessage = "Arre yaar, kuch gadbad ho gaya. Phir se try kar?";
+      let debugInfo = `API Error: ${apiError?.message || 'Unknown'}`;
 
       if (apiError?.message?.includes("rate limit") || apiError?.message?.includes("429")) {
         userFriendlyMessage = "Thoda slow down kar yaar! Bahut zyada messages bhej diye. 1-2 min baad try kar.";
@@ -171,13 +156,28 @@ serve(async (req) => {
       } else if (apiError?.message?.includes("API key")) {
         userFriendlyMessage = "Server configuration issue hai. Admin ko batao!";
         console.error("🚨 API KEY ERROR: Invalid or missing API key");
+      } else if (apiError?.message?.includes("models/") || apiError?.message?.includes("not found") || apiError?.message?.includes("404")) {
+        userFriendlyMessage = "Model not available. Please check API access and model name.";
+        debugInfo = `Model Error: ${apiError?.message || 'Model not found or not accessible'}`;
+        console.error("🚨 MODEL ERROR: Model not found or not accessible with this API key");
       }
 
-      throw new Error(userFriendlyMessage);
+      // Include debug info in development (helps with troubleshooting)
+      throw new Error(`${userFriendlyMessage}\n\nDebug: ${debugInfo}`);
     }
 
     // Check if response was blocked
     const response = result.response;
+
+    // Enhanced logging for debugging empty responses
+    console.log("=== RESPONSE OBJECT DEBUG ===");
+    console.log("Response exists:", !!response);
+    console.log("Candidates count:", response?.candidates?.length || 0);
+    console.log("Block reason:", response?.promptFeedback?.blockReason || "none");
+    console.log("Finish reason:", response?.candidates?.[0]?.finishReason || "none");
+    console.log("Safety ratings:", JSON.stringify(response?.promptFeedback?.safetyRatings, null, 2));
+    console.log("============================");
+
     if (!response || response.promptFeedback?.blockReason) {
       console.error("=== RESPONSE BLOCKED ===");
       console.error("Block reason:", response?.promptFeedback?.blockReason);
@@ -186,7 +186,55 @@ serve(async (req) => {
       throw new Error("Sorry yaar, AI ne ye message block kar diya. Kuch aur topic pe baat karte hain?");
     }
 
-    const reply = response.text() || "Arre yaar, kuch gadbad ho gaya. Phir se try kar?";
+    // Check if response has candidates
+    if (!response.candidates || response.candidates.length === 0) {
+      console.error("=== NO CANDIDATES IN RESPONSE ===");
+      console.error("This usually means the model couldn't generate a response");
+      console.error("Prompt feedback:", JSON.stringify(response?.promptFeedback, null, 2));
+      console.error("=================================");
+      throw new Error("AI response mein kuch nahi aaya. Phir se try karo!");
+    }
+
+    // Check finish reason
+    const finishReason = response.candidates[0]?.finishReason;
+    if (finishReason && finishReason !== "STOP") {
+      console.log("=== UNUSUAL FINISH REASON ===");
+      console.log("Finish reason:", finishReason);
+      console.log("=============================");
+
+      if (finishReason === "SAFETY") {
+        throw new Error("Sorry yaar, safety reasons ke liye response rok diya gaya. Kuch aur baat karte hain?");
+      } else if (finishReason === "MAX_TOKENS") {
+        console.warn("⚠️ Response was truncated due to MAX_TOKENS, but still usable");
+        // Don't throw error - the response is still valid, just truncated
+      }
+    }
+
+    // Debug: Log the actual candidate structure
+    console.log("=== CANDIDATE STRUCTURE DEBUG ===");
+    console.log("Full candidate[0]:", JSON.stringify(response.candidates[0], null, 2));
+    console.log("Parts:", response.candidates[0]?.content?.parts);
+    console.log("=================================");
+
+    // Try to extract text from response
+    let reply;
+    try {
+      reply = response.text();
+      console.log("✅ response.text() succeeded:", reply ? "has content" : "EMPTY!");
+    } catch (textError) {
+      console.error("❌ response.text() failed:", textError);
+      // Fallback: try to manually extract from parts
+      const parts = response.candidates[0]?.content?.parts;
+      if (parts && parts.length > 0) {
+        reply = parts.map((p: any) => p.text).join('');
+        console.log("✅ Manually extracted from parts:", reply);
+      }
+    }
+
+    if (!reply) {
+      console.error("❌ No text content found in response!");
+      reply = "Arre yaar, kuch gadbad ho gaya. Phir se try kar?";
+    }
 
     console.log("\n=== RAW LLM RESPONSE ===");
     console.log(reply);
@@ -235,11 +283,18 @@ serve(async (req) => {
     console.error("Error type:", error?.constructor?.name);
     console.error("===========================");
 
+    // Return detailed error info for better frontend debugging
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    const errorDetails = {
+      error: errorMessage,
+      errorType: error?.constructor?.name || "UnknownError",
+      timestamp: new Date().toISOString(),
+    };
+
+    console.error("Returning error response:", errorDetails);
+
     return new Response(
-      JSON.stringify({
-        error: error instanceof Error ? error.message : "Unknown error",
-        errorType: error?.constructor?.name || "UnknownError"
-      }),
+      JSON.stringify(errorDetails),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
