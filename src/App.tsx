@@ -7,6 +7,7 @@ import { Analytics } from "@vercel/analytics/react";
 import Index from "./pages/Index";
 import Chat from "./pages/Chat";
 import AdminDashboard from "./pages/AdminDashboard";
+import CharacterOnboarding from "./pages/CharacterOnboarding";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -20,6 +21,7 @@ const App = () => (
         <Routes>
           <Route path="/" element={<Index />} />
           <Route path="/chat" element={<Chat />} />
+          <Route path="/character/:characterId" element={<CharacterOnboarding />} />
           <Route path="/admin-dashboard" element={<AdminDashboard />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
