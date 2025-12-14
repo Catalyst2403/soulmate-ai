@@ -257,6 +257,10 @@ serve(async (req) => {
       const outputCost = (outputTokens / 1_000_000) * 2.50;
       const totalCost = inputCost + outputCost;
 
+      // Convert to Indian Rupees (1 USD = 90.57 INR)
+      const USD_TO_INR = 90.57;
+      const totalCostINR = totalCost * USD_TO_INR;
+
       console.log("=== 💰 COST ESTIMATION ===");
       console.log(`Input tokens:  ${inputTokens.toLocaleString()} tokens`);
       console.log(`Output tokens: ${outputTokens.toLocaleString()} tokens (including thinking tokens)`);
@@ -265,6 +269,7 @@ serve(async (req) => {
       console.log(`Input cost:    $${inputCost.toFixed(6)} USD`);
       console.log(`Output cost:   $${outputCost.toFixed(6)} USD`);
       console.log(`Total cost:    $${totalCost.toFixed(6)} USD`);
+      console.log(`Total cost:    ₹${totalCostINR.toFixed(4)} INR`);
       console.log(`===========================\n`);
     } else {
       console.log("⚠️ Usage metadata not available for cost estimation");
