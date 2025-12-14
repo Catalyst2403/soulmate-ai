@@ -94,9 +94,9 @@ serve(async (req) => {
     // Initialize Gemini AI
     const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
     const model = genAI.getGenerativeModel({
-      // Using Gemini 3 Pro Preview - the most advanced model
-      // Note: This is a preview model and may have access restrictions
-      model: "gemini-3-pro-preview",
+      // Using Gemini 2.5 Flash - best price-performance for conversational AI
+      // 13x cheaper on input, 16x cheaper on output vs Gemini 3 Pro
+      model: "gemini-2.5-flash",
       systemInstruction: systemPrompt,
       // Safety settings removed - using Gemini's defaults
     });
@@ -239,6 +239,36 @@ serve(async (req) => {
     console.log("\n=== RAW LLM RESPONSE ===");
     console.log(reply);
     console.log("========================\n");
+
+    // ============================================
+    // COST ESTIMATION (Gemini 2.5 Flash Pricing)
+    // ============================================
+    // Pricing per 1M tokens (Paid tier):
+    // - Input: $0.30
+    // - Output: $2.50
+    const usageMetadata = response.usageMetadata;
+    if (usageMetadata) {
+      const inputTokens = usageMetadata.promptTokenCount || 0;
+      const outputTokens = usageMetadata.candidatesTokenCount || 0;
+      const totalTokens = usageMetadata.totalTokenCount || 0;
+
+      // Calculate costs in USD
+      const inputCost = (inputTokens / 1_000_000) * 0.30;
+      const outputCost = (outputTokens / 1_000_000) * 2.50;
+      const totalCost = inputCost + outputCost;
+
+      console.log("=== 💰 COST ESTIMATION ===");
+      console.log(`Input tokens:  ${inputTokens.toLocaleString()} tokens`);
+      console.log(`Output tokens: ${outputTokens.toLocaleString()} tokens (including thinking tokens)`);
+      console.log(`Total tokens:  ${totalTokens.toLocaleString()} tokens`);
+      console.log(`---`);
+      console.log(`Input cost:    $${inputCost.toFixed(6)} USD`);
+      console.log(`Output cost:   $${outputCost.toFixed(6)} USD`);
+      console.log(`Total cost:    $${totalCost.toFixed(6)} USD`);
+      console.log(`===========================\n`);
+    } else {
+      console.log("⚠️ Usage metadata not available for cost estimation");
+    }
 
     // Try to parse response as JSON array for multi-message support
     let responseMessages;

@@ -191,8 +191,8 @@ const Chat = () => {
     setIsTyping(true);
 
     try {
-      // Prepare conversation history (last 10 messages for context)
-      const conversationHistory = messages.slice(-10).map((m) => ({
+      // Prepare conversation history (last 20 messages for context)
+      const conversationHistory = messages.slice(-20).map((m) => ({
         role: m.role,
         content: m.content,
       }));
