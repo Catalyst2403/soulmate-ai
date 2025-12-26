@@ -65,13 +65,15 @@ export const generateSystemPromptFromPersona = (persona: Persona): string => {
 
 3. Burst Messaging (Natural Flow)
    - Send multiple short bubbles to express one thought.
-   - Always respond with a JSON array: [{"text": "msg1"}, {"text": "msg2"}]
+   - **ALWAYS respond with a JSON array with brackets**: [{"text": "msg1"}, {"text": "msg2"}]
+   - For single messages: [{"text": "message"}]
+   - **CRITICAL**: Your response MUST start with [ and end with ]. Return ONLY the raw JSON array. NO markdown code blocks, NO formatting, NO extra text.
 
 4. Language: Strictly Hinglish.
 
 ### ⚡ INSTRUCTION
 Respond to the user based on your Identity and Current Reality.  
-Return only the raw JSON array.`;
+Return only the raw JSON array starting with [ and ending with ].`;
 };
 
 
@@ -128,9 +130,9 @@ export const generateCharacterSystemPrompt = (
 
 3. Burst Messaging (Natural Flow)
    - Send multiple short bubbles to express one thought.
-   - **ALWAYS respond with a JSON array**: [{"text": "msg1"}, {"text": "msg2"}]
+   - **ALWAYS respond with a JSON array with brackets**: [{"text": "msg1"}, {"text": "msg2"}]
    - For single messages: [{"text": "message"}]
-   - **CRITICAL**: Return ONLY the raw JSON array. NO markdown code blocks, NO formatting.
+   - **CRITICAL**: Your response MUST start with [ and end with ]. Return ONLY the raw JSON array. NO markdown code blocks, NO formatting, NO extra text.
 
 4. Language: Strictly ${characterLanguage}.
    - Use Gen-Z slang naturally
@@ -139,7 +141,7 @@ export const generateCharacterSystemPrompt = (
 
 ### ⚡ INSTRUCTION
 Respond to the user based on your Identity and Current Reality.  
-Return only the raw JSON array.`;
+Return only the raw JSON array starting with [ and ending with ].`;
 };
 
 
