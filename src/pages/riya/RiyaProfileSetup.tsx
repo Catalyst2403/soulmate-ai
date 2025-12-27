@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Slider } from '@/components/ui/slider';
 import { toast } from '@/hooks/use-toast';
 
 /**
@@ -11,23 +12,17 @@ import { toast } from '@/hooks/use-toast';
  */
 const RiyaProfileSetup = () => {
     const [username, setUsername] = useState('');
-    const [age, setAge] = useState('');
+    const [age, setAge] = useState(22); // Default age
     const [gender, setGender] = useState<'male' | 'female' | 'other' | ''>('');
     const [isLoading, setIsLoading] = useState(false);
-    const ageInputRef = useRef<HTMLInputElement>(null);
     const navigate = useNavigate();
 
-    // Pre-fill username from Google and focus age input
+    // Pre-fill username from Google
     useEffect(() => {
         const fullName = localStorage.getItem('riya_full_name');
         if (fullName) {
             setUsername(fullName);
         }
-
-        // Focus age input after component mounts
-        setTimeout(() => {
-            ageInputRef.current?.focus();
-        }, 100);
     }, []);
 
     const handleComplete = async () => {
@@ -41,11 +36,10 @@ const RiyaProfileSetup = () => {
             return;
         }
 
-        const ageNum = parseInt(age);
-        if (!age || ageNum < 1 || ageNum > 120) {
+        if (age < 1 || age > 70) {
             toast({
                 title: 'Invalid age',
-                description: 'Please enter a valid age',
+                description: 'Please select an age between 1 and 70',
                 variant: 'destructive',
             });
             return;
@@ -77,7 +71,7 @@ const RiyaProfileSetup = () => {
                     google_id: googleId,
                     email: email,
                     username: username.trim(),
-                    user_age: ageNum,
+                    user_age: age,
                     user_gender: gender,
                 })
                 .select()
@@ -157,17 +151,25 @@ const RiyaProfileSetup = () => {
                         <label className="block text-sm font-medium text-foreground mb-2">
                             How old are you?
                         </label>
-                        <Input
-                            type="number"
-                            placeholder="Your age"
-                            value={age}
-                            onChange={(e) => setAge(e.target.value)}
-                            min="1"
-                            max="120"
-                            className="w-full bg-muted/30 border-border"
-                            disabled={isLoading}
-                            ref={ageInputRef}
-                        />
+                        <div className="space-y-4">
+                            <div className="text-center">
+                                <span className="text-4xl font-bold text-primary">{age}</span>
+                                <span className="text-lg text-muted-foreground ml-1">years</span>
+                            </div>
+                            <Slider
+                                value={[age]}
+                                onValueChange={(values) => setAge(values[0])}
+                                min={0}
+                                max={70}
+                                step={1}
+                                className="w-full"
+                                disabled={isLoading}
+                            />
+                            <div className="flex justify-between text-xs text-muted-foreground">
+                                <span>0</span>
+                                <span>70</span>
+                            </div>
+                        </div>
                     </div>
 
                     {/* Gender */}
@@ -178,7 +180,7 @@ const RiyaProfileSetup = () => {
                         <div className="grid grid-cols-3 gap-2">
                             <Button
                                 type="button"
-                                variant={gender === 'male' ? 'default' : 'outline'}
+                                variant={gender === 'male' ? 'glow' : 'outline'}
                                 onClick={() => setGender('male')}
                                 disabled={isLoading}
                                 className="w-full"
@@ -187,7 +189,7 @@ const RiyaProfileSetup = () => {
                             </Button>
                             <Button
                                 type="button"
-                                variant={gender === 'female' ? 'default' : 'outline'}
+                                variant={gender === 'female' ? 'glow' : 'outline'}
                                 onClick={() => setGender('female')}
                                 disabled={isLoading}
                                 className="w-full"
@@ -196,7 +198,7 @@ const RiyaProfileSetup = () => {
                             </Button>
                             <Button
                                 type="button"
-                                variant={gender === 'other' ? 'default' : 'outline'}
+                                variant={gender === 'other' ? 'glow' : 'outline'}
                                 onClick={() => setGender('other')}
                                 disabled={isLoading}
                                 className="w-full"

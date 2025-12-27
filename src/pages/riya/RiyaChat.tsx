@@ -4,8 +4,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Slider } from '@/components/ui/slider';
 import { toast } from '@/hooks/use-toast';
-import { Send, ArrowLeft, LogOut } from 'lucide-react';
+import { Send, ArrowLeft, MoreVertical, Settings, LogOut } from 'lucide-react';
 import {
     AlertDialog,
     AlertDialogAction,
@@ -16,6 +17,19 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogHeader,
+    DialogTitle,
+} from '@/components/ui/dialog';
 
 interface MessageWithTimestamp {
     text: string;
@@ -33,8 +47,19 @@ const RiyaChat = () => {
     const [inputMessage, setInputMessage] = useState('');
     const [isTyping, setIsTyping] = useState(false);
     const [userName, setUserName] = useState('');
+    const [userAge, setUserAge] = useState(22);
+    const [userGender, setUserGender] = useState<'male' | 'female' | 'other'>('male');
     const [showLogoutDialog, setShowLogoutDialog] = useState(false);
+    const [showSettingsDialog, setShowSettingsDialog] = useState(false);
+    const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
+
+    // Settings form state
+    const [editUsername, setEditUsername] = useState('');
+    const [editAge, setEditAge] = useState(22);
+    const [editGender, setEditGender] = useState<'male' | 'female' | 'other'>('male');
+
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const inputRef = useRef<HTMLInputElement>(null);
     const navigate = useNavigate();
 
     useEffect(() => {
@@ -49,12 +74,19 @@ const RiyaChat = () => {
             // Fetch user details
             const { data: user } = await supabase
                 .from('riya_users')
-                .select('username')
+                .select('username, user_age, user_gender')
                 .eq('id', userId)
                 .single();
 
             if (user) {
                 setUserName(user.username);
+                setUserAge(user.user_age);
+                setUserGender(user.user_gender as 'male' | 'female' | 'other');
+
+                // Initialize edit form with current values
+                setEditUsername(user.username);
+                setEditAge(user.user_age);
+                setEditGender(user.user_gender as 'male' | 'female' | 'other');
             }
 
             // Load conversation history
@@ -90,6 +122,24 @@ const RiyaChat = () => {
         // Scroll to bottom when messages change
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages, isTyping]);
+
+    useEffect(() => {
+        // Auto-focus input when user starts typing anywhere on the page
+        const handleKeyDown = (e: KeyboardEvent) => {
+            // Don't focus if already focused, or if it's a special key
+            if (document.activeElement === inputRef.current) return;
+            if (e.ctrlKey || e.altKey || e.metaKey) return;
+            if (e.key === 'Escape' || e.key === 'Tab' || e.key === 'Enter') return;
+
+            // Focus the input for any printable character
+            if (e.key.length === 1) {
+                inputRef.current?.focus();
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, []);
 
     const handleSend = async () => {
         if (!inputMessage.trim() || isTyping) return;
@@ -141,11 +191,76 @@ const RiyaChat = () => {
                 throw new Error('Invalid response from server');
             }
 
+            // ============================================
+            // FRONTEND FALLBACK PARSER
+            // Handle cases where backend sends a single message containing raw JSON text
+            // ============================================
+            let processedMessages = data.messages;
+
+            // Check if we got a single message that looks like raw JSON
+            if (processedMessages.length === 1) {
+                const singleMsg = processedMessages[0].text;
+
+                // Check if it looks like JSON objects (starts with {" and contains "text":)
+                if (singleMsg.includes('{"text":') || singleMsg.includes("{\"text\":")) {
+                    console.log('🔍 Frontend: Detected raw JSON in message, attempting to parse...');
+
+                    try {
+                        // Try multiple parsing strategies
+                        let parsedMessages = [];
+
+                        // Strategy 1: Direct JSON.parse (in case it's valid)
+                        try {
+                            const parsed = JSON.parse(singleMsg);
+                            if (Array.isArray(parsed) && parsed.every(m => m.text)) {
+                                parsedMessages = parsed;
+                                console.log('✅ Frontend: Parsed as valid JSON array');
+                            }
+                        } catch (e) {
+                            // Continue to fallback strategies
+                        }
+
+                        // Strategy 2: Regex extraction (for malformed JSON with escaped quotes, etc.)
+                        if (parsedMessages.length === 0) {
+                            // Extract all {"text":"..."} patterns, handling escaped quotes
+                            // This regex captures the text content even if there are escaped quotes inside
+                            const messageRegex = /\{"text"\s*:\s*"((?:[^"\\]|\\.)*)"\}/g;
+                            let match;
+                            const extracted = [];
+
+                            while ((match = messageRegex.exec(singleMsg)) !== null) {
+                                // Unescape the content: \" -> "
+                                const unescapedText = match[1]
+                                    .replace(/\\"/g, '"')
+                                    .replace(/\\\\/g, '\\')
+                                    .replace(/\\n/g, '\n')
+                                    .replace(/\\t/g, '\t');
+
+                                extracted.push({ text: unescapedText });
+                            }
+
+                            if (extracted.length > 0) {
+                                parsedMessages = extracted;
+                                console.log(`✅ Frontend: Extracted ${extracted.length} messages using regex`);
+                            }
+                        }
+
+                        // If we successfully extracted messages, use them
+                        if (parsedMessages.length > 0) {
+                            processedMessages = parsedMessages;
+                            console.log('🎉 Frontend fallback parsing succeeded!');
+                        }
+                    } catch (parseError) {
+                        console.log('⚠️ Frontend: Fallback parsing failed, using original message');
+                    }
+                }
+            }
+
             // Configurable delay between burst messages (in milliseconds)
             const MESSAGE_DELAY_MS = 1500;
 
             // Display each message sequentially with typing animation
-            for (let i = 0; i < data.messages.length; i++) {
+            for (let i = 0; i < processedMessages.length; i++) {
                 // Show typing indicator before each message
                 setIsTyping(true);
 
@@ -154,7 +269,7 @@ const RiyaChat = () => {
 
                 // Add message with timestamp
                 const riyaMsg: MessageWithTimestamp = {
-                    text: data.messages[i].text,
+                    text: processedMessages[i].text,
                     isUser: false,
                     timestamp: new Date().toISOString(),
                 };
@@ -165,7 +280,7 @@ const RiyaChat = () => {
                 setIsTyping(false);
 
                 // Small gap between messages (except after the last one)
-                if (i < data.messages.length - 1) {
+                if (i < processedMessages.length - 1) {
                     await new Promise(resolve => setTimeout(resolve, 300));
                 }
             }
@@ -187,6 +302,71 @@ const RiyaChat = () => {
         await supabase.auth.signOut();
         localStorage.removeItem('riya_user_id');
         navigate('/riya');
+    };
+
+    const handleUpdateProfile = async () => {
+        // Validation
+        if (!editUsername.trim()) {
+            toast({
+                title: 'Username required',
+                description: 'Please enter your username',
+                variant: 'destructive',
+            });
+            return;
+        }
+
+        if (editAge < 1 || editAge > 70) {
+            toast({
+                title: 'Invalid age',
+                description: 'Please select an age between 1 and 70',
+                variant: 'destructive',
+            });
+            return;
+        }
+
+        setIsUpdatingProfile(true);
+
+        try {
+            const userId = localStorage.getItem('riya_user_id');
+            if (!userId) {
+                throw new Error('User ID not found');
+            }
+
+            // Update profile in database
+            const { error } = await supabase
+                .from('riya_users')
+                .update({
+                    username: editUsername.trim(),
+                    user_age: editAge,
+                    user_gender: editGender,
+                })
+                .eq('id', userId);
+
+            if (error) {
+                console.error('Error updating profile:', error);
+                throw new Error('Failed to update profile');
+            }
+
+            // Update local state
+            setUserName(editUsername.trim());
+            setUserAge(editAge);
+            setUserGender(editGender);
+
+            toast({
+                title: 'Profile updated! ✨',
+            });
+
+            setShowSettingsDialog(false);
+        } catch (error) {
+            console.error('Profile update error:', error);
+            toast({
+                title: 'Error',
+                description: error instanceof Error ? error.message : 'Failed to update profile',
+                variant: 'destructive',
+            });
+        } finally {
+            setIsUpdatingProfile(false);
+        }
     };
 
     const formatTime = (timestamp: string) => {
@@ -234,15 +414,33 @@ const RiyaChat = () => {
                         </div>
                     </div>
 
-                    <Button
-                        variant="outline"
-                        size="icon"
-                        className="text-destructive border-destructive/50 hover:bg-destructive hover:text-destructive-foreground"
-                        onClick={() => setShowLogoutDialog(true)}
-                        title="Logout"
-                    >
-                        <LogOut className="w-5 h-5" />
-                    </Button>
+                    <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                className="text-muted-foreground hover:text-foreground"
+                            >
+                                <MoreVertical className="w-5 h-5" />
+                            </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                            <DropdownMenuItem
+                                onClick={() => setShowSettingsDialog(true)}
+                                className="cursor-pointer"
+                            >
+                                <Settings className="w-4 h-4 mr-2" />
+                                Settings
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                                onClick={() => setShowLogoutDialog(true)}
+                                className="cursor-pointer text-destructive focus:text-destructive"
+                            >
+                                <LogOut className="w-4 h-4 mr-2" />
+                                Logout
+                            </DropdownMenuItem>
+                        </DropdownMenuContent>
+                    </DropdownMenu>
                 </div>
             </div>
 
@@ -317,24 +515,133 @@ const RiyaChat = () => {
             >
                 <div className="flex items-center gap-2">
                     <Input
+                        ref={inputRef}
                         value={inputMessage}
                         onChange={(e) => setInputMessage(e.target.value)}
                         placeholder="Type a message..."
                         className="flex-1 bg-muted/30 border-0 focus-visible:ring-1"
-                        disabled={isTyping}
                     />
 
                     <Button
                         type="submit"
                         variant="glow"
                         size="icon"
-                        disabled={!inputMessage.trim() || isTyping}
+                        disabled={!inputMessage.trim()}
                         className="shrink-0"
                     >
                         <Send className="w-4 h-4" />
                     </Button>
                 </div>
             </form>
+
+            {/* Settings Dialog */}
+            <Dialog open={showSettingsDialog} onOpenChange={setShowSettingsDialog}>
+                <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                        <DialogTitle>Profile Settings</DialogTitle>
+                        <DialogDescription>
+                            Update your profile. These changes will affect how Riya interacts with you.
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="space-y-5 py-4">
+                        {/* Username */}
+                        <div>
+                            <label className="block text-sm font-medium text-foreground mb-2">
+                                Name
+                            </label>
+                            <Input
+                                placeholder="Your name"
+                                value={editUsername}
+                                onChange={(e) => setEditUsername(e.target.value)}
+                                className="w-full bg-muted/30 border-border"
+                                disabled={isUpdatingProfile}
+                            />
+                        </div>
+
+                        {/* Age */}
+                        <div>
+                            <label className="block text-sm font-medium text-foreground mb-2">
+                                Age
+                            </label>
+                            <div className="space-y-4">
+                                <div className="text-center">
+                                    <span className="text-4xl font-bold text-primary">{editAge}</span>
+                                    <span className="text-lg text-muted-foreground ml-1">years</span>
+                                </div>
+                                <Slider
+                                    value={[editAge]}
+                                    onValueChange={(values) => setEditAge(values[0])}
+                                    min={0}
+                                    max={70}
+                                    step={1}
+                                    className="w-full"
+                                    disabled={isUpdatingProfile}
+                                />
+                                <div className="flex justify-between text-xs text-muted-foreground">
+                                    <span>0</span>
+                                    <span>70</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Gender */}
+                        <div>
+                            <label className="block text-sm font-medium text-foreground mb-2">
+                                Gender
+                            </label>
+                            <div className="grid grid-cols-3 gap-2">
+                                <Button
+                                    type="button"
+                                    variant={editGender === 'male' ? 'glow' : 'outline'}
+                                    onClick={() => setEditGender('male')}
+                                    disabled={isUpdatingProfile}
+                                    className="w-full"
+                                >
+                                    Male
+                                </Button>
+                                <Button
+                                    type="button"
+                                    variant={editGender === 'female' ? 'glow' : 'outline'}
+                                    onClick={() => setEditGender('female')}
+                                    disabled={isUpdatingProfile}
+                                    className="w-full"
+                                >
+                                    Female
+                                </Button>
+                                <Button
+                                    type="button"
+                                    variant={editGender === 'other' ? 'glow' : 'outline'}
+                                    onClick={() => setEditGender('other')}
+                                    disabled={isUpdatingProfile}
+                                    className="w-full"
+                                >
+                                    Other
+                                </Button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="flex gap-2">
+                        <Button
+                            variant="outline"
+                            onClick={() => setShowSettingsDialog(false)}
+                            disabled={isUpdatingProfile}
+                            className="flex-1"
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            variant="glow"
+                            onClick={handleUpdateProfile}
+                            disabled={isUpdatingProfile}
+                            className="flex-1"
+                        >
+                            {isUpdatingProfile ? 'Saving...' : 'Save Changes'}
+                        </Button>
+                    </div>
+                </DialogContent>
+            </Dialog>
 
             {/* Logout Confirmation Dialog */}
             <AlertDialog open={showLogoutDialog} onOpenChange={setShowLogoutDialog}>

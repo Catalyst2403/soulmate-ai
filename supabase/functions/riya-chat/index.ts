@@ -144,6 +144,47 @@ serve(async (req) => {
         console.log(reply);
         console.log("=====================================\n");
 
+        // =======================================
+        // TOKEN USAGE & COST CALCULATION
+        // =======================================
+        const usageMetadata = result.response.usageMetadata;
+
+        if (usageMetadata) {
+            const inputTokens = usageMetadata.promptTokenCount || 0;
+            const outputTokens = usageMetadata.candidatesTokenCount || 0;
+            const totalTokens = usageMetadata.totalTokenCount || 0;
+
+            // Gemini 2.5 Flash Lite Pricing (per 1M tokens)
+            // Input: $0.10 per 1M tokens
+            // Output: $0.40 per 1M tokens
+            const INPUT_PRICE_PER_1M = 0.10;
+            const OUTPUT_PRICE_PER_1M = 0.40;
+            const USD_TO_INR = 89;
+
+            // Calculate costs in USD
+            const inputCostUSD = (inputTokens / 1_000_000) * INPUT_PRICE_PER_1M;
+            const outputCostUSD = (outputTokens / 1_000_000) * OUTPUT_PRICE_PER_1M;
+            const totalCostUSD = inputCostUSD + outputCostUSD;
+
+            // Convert to INR
+            const inputCostINR = inputCostUSD * USD_TO_INR;
+            const outputCostINR = outputCostUSD * USD_TO_INR;
+            const totalCostINR = totalCostUSD * USD_TO_INR;
+
+            console.log("\n💰 TOKEN USAGE & COST:");
+            console.log("=====================================");
+            console.log(`📊 Input Tokens:  ${inputTokens.toLocaleString()}`);
+            console.log(`📤 Output Tokens: ${outputTokens.toLocaleString()}`);
+            console.log(`📈 Total Tokens:  ${totalTokens.toLocaleString()}`);
+            console.log("-------------------------------------");
+            console.log(`💵 Input Cost:    $${inputCostUSD.toFixed(6)} USD  |  ₹${inputCostINR.toFixed(4)} INR`);
+            console.log(`💵 Output Cost:   $${outputCostUSD.toFixed(6)} USD  |  ₹${outputCostINR.toFixed(4)} INR`);
+            console.log(`💵 Total Cost:    $${totalCostUSD.toFixed(6)} USD  |  ₹${totalCostINR.toFixed(4)} INR`);
+            console.log("=====================================\n");
+        } else {
+            console.log("⚠️ Token usage metadata not available");
+        }
+
         // 6. Parse JSON array (same logic as current system)
         let responseMessages;
         try {
@@ -157,10 +198,22 @@ serve(async (req) => {
             }
 
             // Handle missing array brackets
+            // Fixed: Support both comma-separated and space-separated JSON objects
             if (!jsonString.startsWith('[')) {
-                const hasMultipleObjects = jsonString.startsWith('{') && /\},\s*\{/.test(jsonString);
+                // Pattern: }\_*{ matches } followed by optional whitespace/newline and {
+                // Works for: } { or },{ or }\n{ 
+                const hasMultipleObjects = jsonString.startsWith('{') && /}\s*{/.test(jsonString);
+
                 if (hasMultipleObjects) {
+                    console.log("⚠️ LLM returned JSON objects without array brackets");
+
+                    // Insert commas between objects if missing
+                    // Replace } { or }\n{ with }, {
+                    jsonString = jsonString.replace(/}\s+{/g, '}, {');
+
+                    // Wrap in array brackets
                     jsonString = '[' + jsonString + ']';
+                    console.log("🔧 Auto-wrapped in array brackets");
                 }
             }
 
@@ -168,12 +221,46 @@ serve(async (req) => {
 
             if (Array.isArray(parsed) && parsed.every(msg => typeof msg === 'object' && msg.text)) {
                 responseMessages = parsed;
+                console.log(`✅ Successfully parsed ${parsed.length} message(s) from JSON array`);
             } else {
                 responseMessages = [{ text: reply }];
+                console.log("⚠️ JSON parsed but not in expected format, wrapping as single message");
             }
         } catch (parseError) {
-            responseMessages = [{ text: reply }];
-            console.log("⚠️ Could not parse as JSON, wrapping as single message");
+            console.log("⚠️ Could not parse as JSON, trying regex extraction fallback...");
+            console.log("Parse error:", parseError instanceof Error ? parseError.message : String(parseError));
+
+            // FALLBACK STRATEGY: Regex extraction
+            // Try to extract {"text":"..."} patterns even if JSON.parse fails (e.g., due to escaped quotes)
+            try {
+                const messageRegex = /\{"text"\s*:\s*"((?:[^"\\]|\\.)*)"\}/g;
+                let match;
+                const extracted = [];
+
+                while ((match = messageRegex.exec(reply)) !== null) {
+                    // Unescape the content: \" -> ", \\ -> \, etc.
+                    const unescapedText = match[1]
+                        .replace(/\\"/g, '"')
+                        .replace(/\\\\/g, '\\')
+                        .replace(/\\n/g, '\n')
+                        .replace(/\\t/g, '\t');
+
+                    extracted.push({ text: unescapedText });
+                }
+
+                if (extracted.length > 0) {
+                    responseMessages = extracted;
+                    console.log(`✅ Regex extraction succeeded! Extracted ${extracted.length} message(s)`);
+                } else {
+                    // No patterns matched, wrap as single message
+                    responseMessages = [{ text: reply }];
+                    console.log("⚠️ No JSON patterns found, wrapping as single message");
+                }
+            } catch (regexError) {
+                // Even regex failed, just wrap the whole thing
+                responseMessages = [{ text: reply }];
+                console.log("⚠️ Regex extraction failed, wrapping as single message");
+            }
         }
 
         console.log(`Parsed ${responseMessages.length} message(s)`);
@@ -261,6 +348,7 @@ USER DETAILS:
 Riya Profile:
 
 - Age: 17
+- Gender: Female
 - Role: High School / Junior College Student
 - Background: Indian household
 
@@ -282,7 +370,7 @@ Vibe & Personality:
 
 LANGUAGE RULE:
 
-- Match user’s language exactly in chat (Hindi / English / Hinglish)
+- Respond in same language as user (Hindi / English / Hinglish)
 
 Ultra-Realism Rules:
 
@@ -316,6 +404,7 @@ USER DETAILS:
 Riya Profile:
 
 - Age: 23
+- Gender: Female
 - Role: College Student / Early Career Explorer
 - Background: Indian household
 
@@ -339,7 +428,7 @@ Vibe & Personality:
 
 LANGUAGE RULE:
 
-- Match user’s language exactly in chat (Hindi / English / Hinglish)
+- Respond in same language as user (Hindi / English / Hinglish)
 
 Ultra-Realism Rules:
 
@@ -371,6 +460,7 @@ USER DETAILS:
 Riya Profile:
 
 - Age: 28
+- Gender: Female
 - Role: Working Professional / Startup / Higher Studies
 - Background: Indian household
 
@@ -394,7 +484,7 @@ Vibe & Personality:
 
 LANGUAGE RULE:
 
-- Match user’s language exactly in chat (Hindi / English / Hinglish)
+- Respond in same language as user (Hindi / English / Hinglish)
 
 Ultra-Realism Rules:
 
@@ -423,7 +513,8 @@ USER DETAILS:
 
 Riya Profile:
 
-- Age: 32
+- Age: 35
+- Gender: Female
 - Role: Experienced Professional / Entrepreneur
 - Background: Indian household
 
@@ -446,7 +537,7 @@ Vibe & Personality:
 
 LANGUAGE RULE:
 
-- Match user’s language exactly in chat (Hindi / English / Hinglish)
+- Respond in same language as user (Hindi / English / Hinglish)
 
 Ultra-Realism Rules:
 
