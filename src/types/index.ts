@@ -2,12 +2,15 @@ export interface User {
   id: string;
   email: string;
   name?: string;
+  mobile_number?: string;
   created_at: string;
 }
 
 export interface Persona {
   id?: string;
   user_id: string;
+  character_id?: string;
+  character_type?: 'custom' | 'character';
   identity_name: string;
   identity_gender: string;
   age_archetype: string;

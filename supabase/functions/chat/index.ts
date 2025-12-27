@@ -278,22 +278,34 @@ serve(async (req) => {
     // Try to parse response as JSON array for multi-message support
     let responseMessages;
     try {
-      // First, try to extract JSON from markdown code blocks if present
       let jsonString = reply.trim();
 
-      // Check if response is wrapped in markdown code blocks
+      // Step 1: Check if response is wrapped in markdown code blocks
       const codeBlockRegex = /```(?:json)?\s*\n?([\s\S]*?)\n?```/;
       const match = jsonString.match(codeBlockRegex);
 
       if (match) {
-        // Extract the JSON content from code block
         jsonString = match[1].trim();
-        console.log("Extracted JSON from markdown code block");
+        console.log("📦 Extracted JSON from markdown code block");
       }
 
-      // Try to parse the JSON
+      // Step 2: Handle case where LLM returns JSON objects WITHOUT array brackets
+      // e.g., {"text": "msg1"}, {"text": "msg2"} or with newlines between them
+      if (!jsonString.startsWith('[')) {
+        // Check if it looks like comma-separated JSON objects (with or without newlines)
+        // Pattern: starts with { and contains },\s*{ (allowing whitespace/newlines between objects)
+        const hasMultipleObjects = jsonString.startsWith('{') && /\},\s*\{/.test(jsonString);
+
+        if (hasMultipleObjects) {
+          console.log("⚠️ LLM returned JSON objects without array brackets, auto-wrapping...");
+          jsonString = '[' + jsonString + ']';
+        }
+      }
+
+      // Step 3: Try to parse the JSON
       const parsed = JSON.parse(jsonString);
-      if (Array.isArray(parsed) && parsed.every(msg => msg.text)) {
+
+      if (Array.isArray(parsed) && parsed.every(msg => typeof msg === 'object' && msg.text)) {
         responseMessages = parsed;
         console.log(`✅ Successfully parsed ${parsed.length} messages from JSON array`);
       } else {
@@ -305,6 +317,7 @@ serve(async (req) => {
       // Not JSON, wrap as single message
       responseMessages = [{ text: reply }];
       console.log("⚠️ Could not parse as JSON, wrapping as single message");
+      console.log("Parse error:", parseError instanceof Error ? parseError.message : String(parseError));
     }
 
     console.log("Returning", responseMessages.length, "message(s)");
