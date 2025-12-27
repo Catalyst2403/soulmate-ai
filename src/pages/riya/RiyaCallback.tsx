@@ -23,8 +23,9 @@ const RiyaCallback = () => {
 
                 const googleId = session.user.id;
                 const email = session.user.email || '';
+                const fullName = session.user.user_metadata?.full_name || '';
 
-                console.log('Google auth successful:', { googleId, email });
+                console.log('Google auth successful:', { googleId, email, fullName });
 
                 // Check if user exists in riya_users
                 const { data: existingUser, error: fetchError } = await supabase
@@ -47,6 +48,7 @@ const RiyaCallback = () => {
                     console.log('New user, redirecting to profile setup');
                     localStorage.setItem('riya_google_id', googleId);
                     localStorage.setItem('riya_email', email);
+                    localStorage.setItem('riya_full_name', fullName);
                     navigate('/riya/onboarding/profile');
                 }
             } catch (error) {

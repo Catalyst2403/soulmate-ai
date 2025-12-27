@@ -89,8 +89,11 @@ serve(async (req) => {
         );
 
         console.log("=== RIYA CHAT SESSION ===");
-        console.log("User:", user.username, "Age:", user.user_age);
-        console.log("System Prompt:", systemPrompt.substring(0, 100) + "...");
+        console.log("User:", user.username, "Age:", user.user_age, "Gender:", user.user_gender);
+        console.log("\n📝 FULL SYSTEM PROMPT SENT TO GEMINI:");
+        console.log("=====================================");
+        console.log(systemPrompt);
+        console.log("=====================================\n");
 
         // 3. Fetch FULL conversation history
         const { data: history, error: historyError } = await supabase
@@ -121,7 +124,7 @@ serve(async (req) => {
         const GEMINI_API_KEY = getNextApiKey();
         const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
         const model = genAI.getGenerativeModel({
-            model: "gemini-2.0-flash-lite",  // Using Gemini 2.0 Flash Lite (cheaper)
+            model: "gemini-2.5-flash-lite",  // Using Gemini 2.0 Flash Lite (cheaper)
             systemInstruction: systemPrompt,
         });
 
@@ -136,9 +139,10 @@ serve(async (req) => {
         const result = await chat.sendMessage(message);
         const reply = result.response.text();
 
-        console.log("=== LLM RESPONSE ===");
+        console.log("\n🤖 RAW GEMINI RESPONSE:");
+        console.log("=====================================");
         console.log(reply);
-        console.log("====================");
+        console.log("=====================================\n");
 
         // 6. Parse JSON array (same logic as current system)
         let responseMessages;
@@ -232,6 +236,11 @@ serve(async (req) => {
  * Get Riya system prompt based on user age
  * This mirrors the logic from src/config/riya.config.ts
  */
+
+//       Available variables:
+//     - {USERNAME}: ${username}
+//     - {USER_AGE}: ${userAge}
+//     - {USER_GENDER}: ${userGender}`
 function getRiyaSystemPrompt(
     userAge: number,
     username: string,

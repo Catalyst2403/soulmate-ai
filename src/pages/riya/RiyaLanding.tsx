@@ -59,46 +59,55 @@ const RiyaLanding = () => {
     };
 
     return (
-        <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-50 to-pink-50 dark:from-gray-900 dark:to-purple-900">
-            <div className="max-w-md w-full p-8 text-center space-y-8">
+        <div className="min-h-screen flex items-center justify-center bg-background">
+            {/* WhatsApp-style background pattern */}
+            <div
+                className="fixed inset-0 opacity-5 pointer-events-none"
+                style={{
+                    backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%2300d4aa' fill-opacity='0.4'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
+                }}
+            />
+
+            <div className="relative z-10 max-w-md w-full p-8 text-center space-y-8">
                 {/* Logo/Avatar */}
                 <div className="flex justify-center">
-                    <div className="w-24 h-24 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center text-white text-4xl font-bold">
+                    <div className="w-24 h-24 rounded-full bg-gradient-to-br from-neon-cyan to-neon-magenta flex items-center justify-center text-4xl font-bold text-white shadow-lg neon-glow">
                         R
                     </div>
                 </div>
 
                 {/* Title */}
-                <div className="space-y-2">
-                    <h1 className="text-4xl font-bold text-gray-900 dark:text-white">
+                <div className="space-y-3">
+                    <h1 className="font-display text-5xl font-bold text-foreground">
                         Meet Riya 👋
                     </h1>
-                    <p className="text-lg text-gray-600 dark:text-gray-300">
+                    <p className="text-lg text-muted-foreground">
                         Your AI friend who actually gets you
                     </p>
                 </div>
 
                 {/* Features */}
-                <div className="space-y-3 text-sm text-gray-600 dark:text-gray-400">
-                    <div className="flex items-center justify-center gap-2">
-                        <span>💬</span>
-                        <span>Natural, flowing conversations</span>
+                <div className="glass-card p-6 space-y-4 text-sm">
+                    <div className="flex items-center gap-3 text-left">
+                        <span className="text-2xl">💬</span>
+                        <span className="text-foreground">Natural, flowing conversations</span>
                     </div>
-                    <div className="flex items-center justify-center gap-2">
-                        <span>🎯</span>
-                        <span>Adapts to your age and vibe</span>
+                    <div className="flex items-center gap-3 text-left">
+                        <span className="text-2xl">🎯</span>
+                        <span className="text-foreground">Adapts to your age and vibe</span>
                     </div>
-                    <div className="flex items-center justify-center gap-2">
-                        <span>🔒</span>
-                        <span>Private and secure</span>
+                    <div className="flex items-center gap-3 text-left">
+                        <span className="text-2xl">🔒</span>
+                        <span className="text-foreground">Private and secure</span>
                     </div>
                 </div>
 
                 {/* Google Sign-In Button */}
                 <Button
                     onClick={handleGoogleSignIn}
-                    className="w-full bg-white hover:bg-gray-50 text-gray-900 border border-gray-300 shadow-sm"
+                    variant="glow"
                     size="lg"
+                    className="w-full"
                 >
                     <svg className="w-5 h-5 mr-2" viewBox="0 0 24 24">
                         <path
@@ -121,7 +130,7 @@ const RiyaLanding = () => {
                     Continue with Google
                 </Button>
 
-                <p className="text-xs text-gray-500 dark:text-gray-400">
+                <p className="text-xs text-muted-foreground">
                     By continuing, you agree to our Terms and Privacy Policy
                 </p>
             </div>

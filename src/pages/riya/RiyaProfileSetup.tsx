@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
@@ -14,7 +14,21 @@ const RiyaProfileSetup = () => {
     const [age, setAge] = useState('');
     const [gender, setGender] = useState<'male' | 'female' | 'other' | ''>('');
     const [isLoading, setIsLoading] = useState(false);
+    const ageInputRef = useRef<HTMLInputElement>(null);
     const navigate = useNavigate();
+
+    // Pre-fill username from Google and focus age input
+    useEffect(() => {
+        const fullName = localStorage.getItem('riya_full_name');
+        if (fullName) {
+            setUsername(fullName);
+        }
+
+        // Focus age input after component mounts
+        setTimeout(() => {
+            ageInputRef.current?.focus();
+        }, 100);
+    }, []);
 
     const handleComplete = async () => {
         // Validation
@@ -82,6 +96,7 @@ const RiyaProfileSetup = () => {
             // Clean up temp storage
             localStorage.removeItem('riya_google_id');
             localStorage.removeItem('riya_email');
+            localStorage.removeItem('riya_full_name');
 
             toast({
                 title: 'Welcome!',
@@ -101,37 +116,45 @@ const RiyaProfileSetup = () => {
     };
 
     return (
-        <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-50 to-pink-50 dark:from-gray-900 dark:to-purple-900 p-4">
-            <div className="max-w-md w-full bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 space-y-6">
+        <div className="min-h-screen flex items-center justify-center bg-background p-4">
+            {/* WhatsApp-style background pattern */}
+            <div
+                className="fixed inset-0 opacity-5 pointer-events-none"
+                style={{
+                    backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%2300d4aa' fill-opacity='0.4'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
+                }}
+            />
+
+            <div className="relative z-10 max-w-md w-full glass-card p-8 space-y-6">
                 {/* Header */}
-                <div className="text-center space-y-2">
-                    <h2 className="text-3xl font-bold text-gray-900 dark:text-white">
+                <div className="text-center space-y-3">
+                    <h2 className="font-display text-3xl font-bold text-foreground">
                         Tell me about yourself 😊
                     </h2>
-                    <p className="text-gray-600 dark:text-gray-400">
+                    <p className="text-muted-foreground">
                         Just a few details to personalize your experience
                     </p>
                 </div>
 
                 {/* Form */}
-                <div className="space-y-4">
+                <div className="space-y-5">
                     {/* Username */}
                     <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        <label className="block text-sm font-medium text-foreground mb-2">
                             What should I call you?
                         </label>
                         <Input
                             placeholder="Your name"
                             value={username}
                             onChange={(e) => setUsername(e.target.value)}
-                            className="w-full"
+                            className="w-full bg-muted/30 border-border"
                             disabled={isLoading}
                         />
                     </div>
 
                     {/* Age */}
                     <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        <label className="block text-sm font-medium text-foreground mb-2">
                             How old are you?
                         </label>
                         <Input
@@ -141,14 +164,15 @@ const RiyaProfileSetup = () => {
                             onChange={(e) => setAge(e.target.value)}
                             min="1"
                             max="120"
-                            className="w-full"
+                            className="w-full bg-muted/30 border-border"
                             disabled={isLoading}
+                            ref={ageInputRef}
                         />
                     </div>
 
                     {/* Gender */}
                     <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        <label className="block text-sm font-medium text-foreground mb-2">
                             Gender
                         </label>
                         <div className="grid grid-cols-3 gap-2">
@@ -187,8 +211,9 @@ const RiyaProfileSetup = () => {
                 <Button
                     onClick={handleComplete}
                     disabled={isLoading}
-                    className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
+                    variant="glow"
                     size="lg"
+                    className="w-full"
                 >
                     {isLoading ? 'Setting up...' : 'Meet Riya →'}
                 </Button>

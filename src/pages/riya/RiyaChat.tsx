@@ -1,25 +1,39 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { toast } from '@/hooks/use-toast';
-import { Send, LogOut } from 'lucide-react';
+import { Send, ArrowLeft, LogOut } from 'lucide-react';
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
-interface Message {
+interface MessageWithTimestamp {
     text: string;
     isUser: boolean;
+    timestamp: string;
 }
 
 /**
  * Riya Chat Interface
  * Main chat page for conversations with Riya
+ * Matches core soulmate product UI with dark theme and WhatsApp-style bubbles
  */
 const RiyaChat = () => {
-    const [messages, setMessages] = useState<Message[]>([]);
+    const [messages, setMessages] = useState<MessageWithTimestamp[]>([]);
     const [inputMessage, setInputMessage] = useState('');
-    const [isLoading, setIsLoading] = useState(false);
+    const [isTyping, setIsTyping] = useState(false);
     const [userName, setUserName] = useState('');
+    const [showLogoutDialog, setShowLogoutDialog] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const navigate = useNavigate();
 
@@ -54,6 +68,7 @@ const RiyaChat = () => {
                 const formattedMessages = history.map(msg => ({
                     text: msg.content,
                     isUser: msg.role === 'user',
+                    timestamp: msg.created_at,
                 }));
                 setMessages(formattedMessages);
             } else {
@@ -62,6 +77,7 @@ const RiyaChat = () => {
                     {
                         text: `hey ${user?.username || 'there'}! 👋\n\nkaise ho? ready to chat?`,
                         isUser: false,
+                        timestamp: new Date().toISOString(),
                     },
                 ]);
             }
@@ -73,10 +89,10 @@ const RiyaChat = () => {
     useEffect(() => {
         // Scroll to bottom when messages change
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages]);
+    }, [messages, isTyping]);
 
     const handleSend = async () => {
-        if (!inputMessage.trim() || isLoading) return;
+        if (!inputMessage.trim() || isTyping) return;
 
         const userId = localStorage.getItem('riya_user_id');
         if (!userId) {
@@ -91,43 +107,68 @@ const RiyaChat = () => {
 
         const userMessage = inputMessage.trim();
         setInputMessage('');
-        setIsLoading(true);
+        setIsTyping(true);
 
         // Add user message to UI
-        setMessages(prev => [...prev, { text: userMessage, isUser: true }]);
+        const userMsgWithTimestamp: MessageWithTimestamp = {
+            text: userMessage,
+            isUser: true,
+            timestamp: new Date().toISOString(),
+        };
+        setMessages(prev => [...prev, userMsgWithTimestamp]);
 
         try {
-            // Call Riya chat edge function
-            const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-            const response = await fetch(`${supabaseUrl}/functions/v1/riya-chat`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-                },
-                body: JSON.stringify({
+            // Call Riya chat edge function using Supabase client
+            const { data, error: functionError } = await supabase.functions.invoke('riya-chat', {
+                body: {
                     userId,
                     message: userMessage,
-                }),
+                },
             });
 
-            if (!response.ok) {
-                throw new Error('Failed to get response');
+            if (functionError) {
+                console.error('Edge function error:', functionError);
+                throw new Error(functionError.message || 'Failed to get response');
             }
 
-            const data = await response.json();
-
-            if (data.error) {
+            if (data?.error) {
+                console.error('API error:', data.error);
                 throw new Error(data.error);
             }
 
-            // Add Riya's messages to UI
-            const riyaMessages = data.messages.map((msg: { text: string }) => ({
-                text: msg.text,
-                isUser: false,
-            }));
+            if (!data?.messages || !Array.isArray(data.messages)) {
+                console.error('Invalid response format:', data);
+                throw new Error('Invalid response from server');
+            }
 
-            setMessages(prev => [...prev, ...riyaMessages]);
+            // Configurable delay between burst messages (in milliseconds)
+            const MESSAGE_DELAY_MS = 1500;
+
+            // Display each message sequentially with typing animation
+            for (let i = 0; i < data.messages.length; i++) {
+                // Show typing indicator before each message
+                setIsTyping(true);
+
+                // Wait to simulate typing
+                await new Promise(resolve => setTimeout(resolve, MESSAGE_DELAY_MS));
+
+                // Add message with timestamp
+                const riyaMsg: MessageWithTimestamp = {
+                    text: data.messages[i].text,
+                    isUser: false,
+                    timestamp: new Date().toISOString(),
+                };
+
+                setMessages(prev => [...prev, riyaMsg]);
+
+                // Brief pause to hide typing indicator
+                setIsTyping(false);
+
+                // Small gap between messages (except after the last one)
+                if (i < data.messages.length - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 300));
+                }
+            }
         } catch (error) {
             console.error('Chat error:', error);
             toast({
@@ -138,7 +179,7 @@ const RiyaChat = () => {
             // Remove user message on error
             setMessages(prev => prev.slice(0, -1));
         } finally {
-            setIsLoading(false);
+            setIsTyping(false);
         }
     };
 
@@ -148,79 +189,170 @@ const RiyaChat = () => {
         navigate('/riya');
     };
 
+    const formatTime = (timestamp: string) => {
+        return new Date(timestamp).toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+        });
+    };
+
     return (
-        <div className="min-h-screen flex flex-col bg-gradient-to-br from-purple-50 to-pink-50 dark:from-gray-900 dark:to-purple-900">
+        <div className="flex flex-col h-screen bg-background">
+            {/* WhatsApp-style background pattern */}
+            <div
+                className="fixed inset-0 opacity-5 pointer-events-none"
+                style={{
+                    backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%2300d4aa' fill-opacity='0.4'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
+                }}
+            />
+
             {/* Header */}
-            <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-4">
-                <div className="max-w-4xl mx-auto flex items-center justify-between">
+            <div className="relative z-10 glass-card rounded-none border-x-0 border-t-0 px-4 py-3">
+                <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center text-white font-bold">
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => navigate('/riya')}
+                            className="text-muted-foreground hover:text-foreground"
+                        >
+                            <ArrowLeft className="w-5 h-5" />
+                        </Button>
+
+                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-neon-cyan to-neon-magenta flex items-center justify-center text-lg">
                             R
                         </div>
-                        <div>
-                            <h1 className="font-semibold text-gray-900 dark:text-white">Riya</h1>
-                            <p className="text-xs text-gray-500 dark:text-gray-400">Online</p>
+
+                        <div className="flex flex-col">
+                            <h2 className="font-display font-semibold text-foreground text-base leading-tight">
+                                Riya
+                            </h2>
+                            <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
+                                <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+                                {isTyping ? 'typing...' : 'Online'}
+                            </p>
                         </div>
                     </div>
-                    <Button variant="ghost" size="icon" onClick={handleSignOut}>
-                        <LogOut className="h-5 w-5" />
+
+                    <Button
+                        variant="outline"
+                        size="icon"
+                        className="text-destructive border-destructive/50 hover:bg-destructive hover:text-destructive-foreground"
+                        onClick={() => setShowLogoutDialog(true)}
+                        title="Logout"
+                    >
+                        <LogOut className="w-5 h-5" />
                     </Button>
                 </div>
             </div>
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-4">
-                <div className="max-w-4xl mx-auto space-y-4">
+            <div className="flex-1 overflow-y-auto px-4 py-6 space-y-4 relative z-10">
+                <AnimatePresence>
                     {messages.map((message, index) => (
-                        <div
+                        <motion.div
                             key={index}
+                            initial={{ opacity: 0, y: 20, scale: 0.95 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.95 }}
+                            transition={{ duration: 0.3 }}
                             className={`flex ${message.isUser ? 'justify-end' : 'justify-start'}`}
                         >
                             <div
-                                className={`max-w-[70%] rounded-2xl px-4 py-2 ${message.isUser
-                                        ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white'
-                                        : 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm'
+                                className={`max-w-[80%] ${message.isUser ? 'chat-bubble-user' : 'chat-bubble-bot'
                                     }`}
                             >
-                                <p className="whitespace-pre-wrap text-sm">{message.text}</p>
+                                <p className="text-sm text-foreground whitespace-pre-wrap">
+                                    {message.text}
+                                </p>
+                                <p className="text-[10px] text-muted-foreground mt-1 text-right">
+                                    {formatTime(message.timestamp)}
+                                </p>
                             </div>
-                        </div>
+                        </motion.div>
                     ))}
-                    {isLoading && (
-                        <div className="flex justify-start">
-                            <div className="bg-white dark:bg-gray-800 rounded-2xl px-4 py-3 shadow-sm">
+                </AnimatePresence>
+
+                {/* Typing indicator */}
+                <AnimatePresence>
+                    {isTyping && (
+                        <motion.div
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -10 }}
+                            className="flex justify-start"
+                        >
+                            <div className="chat-bubble-bot">
                                 <div className="flex gap-1">
-                                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
-                                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
-                                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                                    {[0, 1, 2].map((i) => (
+                                        <motion.div
+                                            key={i}
+                                            animate={{
+                                                y: [0, -5, 0],
+                                            }}
+                                            transition={{
+                                                duration: 0.5,
+                                                repeat: Infinity,
+                                                delay: i * 0.15,
+                                            }}
+                                            className="w-2 h-2 rounded-full bg-muted-foreground"
+                                        />
+                                    ))}
                                 </div>
                             </div>
-                        </div>
+                        </motion.div>
                     )}
-                    <div ref={messagesEndRef} />
-                </div>
+                </AnimatePresence>
+
+                <div ref={messagesEndRef} />
             </div>
 
             {/* Input */}
-            <div className="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 p-4">
-                <div className="max-w-4xl mx-auto flex gap-2">
+            <form
+                onSubmit={(e) => {
+                    e.preventDefault();
+                    handleSend();
+                }}
+                className="relative z-10 glass-card rounded-none border-x-0 border-b-0 px-4 py-3"
+            >
+                <div className="flex items-center gap-2">
                     <Input
-                        placeholder="Type your message..."
                         value={inputMessage}
                         onChange={(e) => setInputMessage(e.target.value)}
-                        onKeyPress={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
-                        disabled={isLoading}
-                        className="flex-1"
+                        placeholder="Type a message..."
+                        className="flex-1 bg-muted/30 border-0 focus-visible:ring-1"
+                        disabled={isTyping}
                     />
+
                     <Button
-                        onClick={handleSend}
-                        disabled={isLoading || !inputMessage.trim()}
-                        className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
+                        type="submit"
+                        variant="glow"
+                        size="icon"
+                        disabled={!inputMessage.trim() || isTyping}
+                        className="shrink-0"
                     >
-                        <Send className="h-4 w-4" />
+                        <Send className="w-4 h-4" />
                     </Button>
                 </div>
-            </div>
+            </form>
+
+            {/* Logout Confirmation Dialog */}
+            <AlertDialog open={showLogoutDialog} onOpenChange={setShowLogoutDialog}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Logout Confirmation</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Are you sure you want to logout? You can always come back by signing in with Google.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={handleSignOut} className="bg-destructive hover:bg-destructive/90">
+                            Logout
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 };
