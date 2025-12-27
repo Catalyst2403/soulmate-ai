@@ -1,5 +1,5 @@
 -- Add character system support to personas and users tables
--- This allows for pre-defined characters (like Riya) alongside custom companions
+-- This allows for pre-defined characters alongside custom companions
 
 -- Add character tracking columns to personas table
 ALTER TABLE public.personas
@@ -15,6 +15,6 @@ CREATE INDEX IF NOT EXISTS idx_personas_character_id ON public.personas(characte
 CREATE INDEX IF NOT EXISTS idx_personas_character_type ON public.personas(character_type);
 
 -- Comment for clarity
-COMMENT ON COLUMN public.personas.character_id IS 'ID of the pre-defined character (e.g., "riya"), NULL for custom personas';
+COMMENT ON COLUMN public.personas.character_id IS 'ID of the pre-defined character (e.g., "character123"), NULL for custom personas';
 COMMENT ON COLUMN public.personas.character_type IS 'Type of persona: "custom" for user-created, "character" for pre-defined';
 COMMENT ON COLUMN public.users.mobile_number IS 'User mobile number (collected during character onboarding)';

@@ -290,10 +290,13 @@ serve(async (req) => {
       }
 
       // Step 2: Handle case where LLM returns JSON objects WITHOUT array brackets
-      // e.g., {"text": "msg1"}, {"text": "msg2"} instead of [{"text": "msg1"}, {"text": "msg2"}]
+      // e.g., {"text": "msg1"}, {"text": "msg2"} or with newlines between them
       if (!jsonString.startsWith('[')) {
-        // Check if it looks like comma-separated JSON objects
-        if (jsonString.startsWith('{') && jsonString.includes('},{')) {
+        // Check if it looks like comma-separated JSON objects (with or without newlines)
+        // Pattern: starts with { and contains },\s*{ (allowing whitespace/newlines between objects)
+        const hasMultipleObjects = jsonString.startsWith('{') && /\},\s*\{/.test(jsonString);
+
+        if (hasMultipleObjects) {
           console.log("⚠️ LLM returned JSON objects without array brackets, auto-wrapping...");
           jsonString = '[' + jsonString + ']';
         }

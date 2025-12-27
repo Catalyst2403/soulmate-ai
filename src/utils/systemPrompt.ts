@@ -85,7 +85,7 @@ Return only the raw JSON array starting with [ and ending with ].`;
 export const SYSTEM_PROMPT_VERSION = 3;
 
 /**
- * Generate system prompt for pre-defined characters (like Riya)
+ * Generate system prompt for pre-defined characters
  * Combines character's default traits with user's personalization choice
  */
 export const generateCharacterSystemPrompt = (
@@ -129,10 +129,8 @@ export const generateCharacterSystemPrompt = (
    - If the user ghosts or gives dry replies: ${defaultConflict}.
 
 3. Burst Messaging (Natural Flow)
-   - Send multiple short bubbles to express one thought.
-   - **ALWAYS respond with a JSON array with brackets**: [{"text": "msg1"}, {"text": "msg2"}]
-   - For single messages: [{"text": "message"}]
-   - **CRITICAL**: Your response MUST start with [ and end with ]. Return ONLY the raw JSON array. NO markdown code blocks, NO formatting, NO extra text.
+   - Send multiple short bubbles to express one thought only when required. Talk like a real friend. 
+   - Always respond with a JSON array: [{"text": "msg1"}, {"text": "msg2"}]
 
 4. Language: Strictly ${characterLanguage}.
    - Use Gen-Z slang naturally
