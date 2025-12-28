@@ -148,14 +148,14 @@ serve(async (req) => {
 
         const order = await razorpayResponse.json();
 
-        // Create pending payment record
+        // Create pending payment record (convert paise to rupees for storage)
         const { error: paymentError } = await supabase
             .from('riya_payments')
             .insert({
                 user_id: userId,
                 razorpay_order_id: order.id,
                 plan_type: planType,
-                amount: plan.amount,
+                amount: plan.amount / 100,  // Store in rupees, not paise
                 currency: 'INR',
                 status: 'pending'
             });

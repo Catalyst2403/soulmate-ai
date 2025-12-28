@@ -122,6 +122,7 @@ const RiyaChat = () => {
             }
 
             // Check subscription status
+            // @ts-ignore - Table exists after migration
             const { data: subscription } = await supabase
                 .from('riya_subscriptions')
                 .select('*')
@@ -136,6 +137,7 @@ const RiyaChat = () => {
             } else {
                 // Get today's message usage
                 const today = new Date().toISOString().split('T')[0];
+                // @ts-ignore - Table exists after migration
                 const { data: usage } = await supabase
                     .from('riya_daily_usage')
                     .select('message_count')
@@ -457,12 +459,18 @@ const RiyaChat = () => {
                         </div>
 
                         <div className="flex flex-col">
-                            <h2 className="font-display font-semibold text-foreground text-base leading-tight">
+                            <h2 className="font-display font-semibold text-foreground text-base leading-tight flex items-center gap-2">
                                 Riya
+                                {isPro && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gradient-to-r from-yellow-500 to-orange-500 text-[10px] font-bold text-white">
+                                        <Crown className="w-3 h-3" />
+                                        PRO
+                                    </span>
+                                )}
                             </h2>
                             <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
                                 <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
-                                {isTyping ? 'typing...' : 'Online'}
+                                {isTyping ? 'typing...' : isPro ? '∞ Unlimited' : `${remainingMessages} messages left`}
                             </p>
                         </div>
                     </div>
