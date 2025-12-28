@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 
@@ -82,7 +82,7 @@ const RiyaLanding = () => {
                         Meet Riya 👋
                     </h1>
                     <p className="text-lg text-muted-foreground">
-                        Your AI friend who actually gets you
+                        Your new 2am friend.
                     </p>
                 </div>
 
@@ -131,8 +131,17 @@ const RiyaLanding = () => {
                 </Button>
 
                 <p className="text-xs text-muted-foreground">
-                    By continuing, you agree to our Terms and Privacy Policy
+                    By continuing, you agree to our{' '}
+                    <Link to="/riya/terms" className="underline hover:text-foreground">Terms</Link> and{' '}
+                    <Link to="/riya/privacy-policy" className="underline hover:text-foreground">Privacy Policy</Link>
                 </p>
+                <div className="flex flex-wrap justify-center gap-3 text-xs text-muted-foreground mt-2">
+                    <Link to="/riya/shipping-policy" className="underline hover:text-foreground">Shipping</Link>
+                    <span>·</span>
+                    <Link to="/riya/cancellation-refund" className="underline hover:text-foreground">Refunds</Link>
+                    <span>·</span>
+                    <Link to="/riya/contact" className="underline hover:text-foreground">Contact</Link>
+                </div>
             </div>
         </div>
     );
