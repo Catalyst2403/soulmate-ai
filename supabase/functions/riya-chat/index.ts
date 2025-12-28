@@ -57,6 +57,26 @@ function getNextApiKey(): string {
 
 initializeApiKeyPool();
 
+/**
+ * Get next midnight IST as ISO string
+ * Used for telling users when their free messages reset
+ */
+function getNextMidnightIST(): string {
+    const now = new Date();
+    // IST is UTC+5:30
+    const istOffset = 5.5 * 60 * 60 * 1000;
+    const istNow = new Date(now.getTime() + istOffset);
+
+    // Get tomorrow's date at midnight IST
+    const tomorrow = new Date(istNow);
+    tomorrow.setUTCHours(0, 0, 0, 0);
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+
+    // Convert back to UTC
+    const midnightISTinUTC = new Date(tomorrow.getTime() - istOffset);
+    return midnightISTinUTC.toISOString();
+}
+
 serve(async (req) => {
     if (req.method === "OPTIONS") {
         return new Response(null, { headers: corsHeaders });
@@ -81,7 +101,55 @@ serve(async (req) => {
             throw new Error('User not found');
         }
 
-        // 2. Generate age-based system prompt
+        // 2. Check subscription & message limits
+        const DAILY_MESSAGE_LIMIT = 30;
+
+        // Check if user has active Pro subscription
+        const { data: subscription } = await supabase
+            .from('riya_subscriptions')
+            .select('*')
+            .eq('user_id', userId)
+            .eq('status', 'active')
+            .gte('expires_at', new Date().toISOString())
+            .single();
+
+        const isPro = !!subscription;
+        let remainingMessages = -1; // -1 means unlimited (Pro user)
+
+        if (!isPro) {
+            // Get today's message count for free user
+            const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+
+            const { data: dailyUsage } = await supabase
+                .from('riya_daily_usage')
+                .select('message_count')
+                .eq('user_id', userId)
+                .eq('usage_date', today)
+                .single();
+
+            const currentCount = dailyUsage?.message_count || 0;
+            remainingMessages = Math.max(0, DAILY_MESSAGE_LIMIT - currentCount);
+
+            console.log(`📊 Free user daily usage: ${currentCount}/${DAILY_MESSAGE_LIMIT} messages`);
+
+            if (currentCount >= DAILY_MESSAGE_LIMIT) {
+                console.log("❌ Daily message limit reached for user:", userId);
+                return new Response(
+                    JSON.stringify({
+                        error: 'MESSAGE_LIMIT_REACHED',
+                        message: 'You have used all 30 free messages for today.',
+                        remainingMessages: 0,
+                        isPro: false,
+                        resetsAt: getNextMidnightIST()
+                    }),
+                    { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+                );
+            }
+        } else {
+            console.log(`⭐ Pro user detected, subscription expires: ${subscription.expires_at}`);
+        }
+
+        // 3. Generate age-based system prompt
         const systemPrompt = getRiyaSystemPrompt(
             user.user_age,
             user.username,
@@ -302,7 +370,48 @@ serve(async (req) => {
             console.error("Error updating session:", sessionError);
         }
 
-        return new Response(JSON.stringify({ messages: responseMessages }), {
+        // 9. Increment daily message count for free users
+        let newRemainingMessages = remainingMessages;
+        if (!isPro) {
+            const today = new Date().toISOString().split('T')[0];
+
+            const { data: upsertResult, error: usageError } = await supabase
+                .from('riya_daily_usage')
+                .upsert({
+                    user_id: userId,
+                    usage_date: today,
+                    message_count: 1
+                }, {
+                    onConflict: 'user_id,usage_date',
+                    ignoreDuplicates: false
+                })
+                .select('message_count')
+                .single();
+
+            if (usageError) {
+                // If upsert failed, try increment directly
+                await supabase.rpc('increment_riya_message_count', { p_user_id: userId });
+            } else {
+                // Increment existing count
+                await supabase
+                    .from('riya_daily_usage')
+                    .update({
+                        message_count: (upsertResult?.message_count || 0) + 1,
+                        updated_at: new Date().toISOString()
+                    })
+                    .eq('user_id', userId)
+                    .eq('usage_date', today);
+            }
+
+            newRemainingMessages = Math.max(0, remainingMessages - 1);
+            console.log(`📊 Updated: ${DAILY_MESSAGE_LIMIT - newRemainingMessages}/${DAILY_MESSAGE_LIMIT} messages used`);
+        }
+
+        return new Response(JSON.stringify({
+            messages: responseMessages,
+            isPro,
+            remainingMessages: newRemainingMessages
+        }), {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
 

@@ -15,6 +15,14 @@ import RiyaLanding from "./pages/riya/RiyaLanding";
 import RiyaCallback from "./pages/riya/RiyaCallback";
 import RiyaProfileSetup from "./pages/riya/RiyaProfileSetup";
 import RiyaChat from "./pages/riya/RiyaChat";
+import RiyaPricing from "./pages/riya/RiyaPricing";
+
+// Riya Policy Pages
+import ShippingPolicy from "./pages/riya/ShippingPolicy";
+import TermsAndConditions from "./pages/riya/TermsAndConditions";
+import CancellationsRefunds from "./pages/riya/CancellationsRefunds";
+import PrivacyPolicy from "./pages/riya/PrivacyPolicy";
+import ContactUs from "./pages/riya/ContactUs";
 
 const queryClient = new QueryClient();
 
@@ -36,6 +44,14 @@ const App = () => (
           <Route path="/riya/callback" element={<RiyaCallback />} />
           <Route path="/riya/onboarding/profile" element={<RiyaProfileSetup />} />
           <Route path="/riya/chat" element={<RiyaChat />} />
+          <Route path="/riya/pricing" element={<RiyaPricing />} />
+
+          {/* Riya Policy Pages */}
+          <Route path="/riya/shipping-policy" element={<ShippingPolicy />} />
+          <Route path="/riya/terms" element={<TermsAndConditions />} />
+          <Route path="/riya/cancellation-refund" element={<CancellationsRefunds />} />
+          <Route path="/riya/privacy-policy" element={<PrivacyPolicy />} />
+          <Route path="/riya/contact" element={<ContactUs />} />
 
           {/* 404 */}
           <Route path="*" element={<NotFound />} />
