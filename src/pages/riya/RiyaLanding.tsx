@@ -79,10 +79,10 @@ const RiyaLanding = () => {
                 {/* Title */}
                 <div className="space-y-3">
                     <h1 className="font-display text-5xl font-bold text-foreground">
-                        Meet Riya 👋
+                        Riya AI ✨
                     </h1>
                     <p className="text-lg text-muted-foreground">
-                        Your new 2am friend.
+                        Your AI wellness companion
                     </p>
                 </div>
 
@@ -90,11 +90,11 @@ const RiyaLanding = () => {
                 <div className="glass-card p-6 space-y-4 text-sm">
                     <div className="flex items-center gap-3 text-left">
                         <span className="text-2xl">💬</span>
-                        <span className="text-foreground">Natural, flowing conversations</span>
+                        <span className="text-foreground">Personalized AI support</span>
                     </div>
                     <div className="flex items-center gap-3 text-left">
                         <span className="text-2xl">🎯</span>
-                        <span className="text-foreground">Adapts to your age and vibe</span>
+                        <span className="text-foreground">Adapts to your needs</span>
                     </div>
                     <div className="flex items-center gap-3 text-left">
                         <span className="text-2xl">🔒</span>
