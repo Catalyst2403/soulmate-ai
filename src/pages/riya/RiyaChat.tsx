@@ -477,7 +477,13 @@ const RiyaChat = () => {
                             </h2>
                             <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
                                 <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
-                                {isTyping ? 'typing...' : isPro ? '∞ Unlimited' : `${remainingMessages} messages left`}
+                                {isTyping ? 'typing...' : 'online'}
+                                {isPro && !isTyping && (
+                                    <span className="text-yellow-400 ml-1">• ∞ Unlimited</span>
+                                )}
+                                {!isPro && !isTyping && (
+                                    <span className="text-muted-foreground ml-1">• {remainingMessages} msgs left</span>
+                                )}
                             </p>
                         </div>
                     </div>
@@ -492,7 +498,7 @@ const RiyaChat = () => {
                                 className="h-8 px-3 border-yellow-500/50 text-yellow-400 hover:bg-yellow-500/10"
                             >
                                 <Crown className="w-4 h-4 mr-1" />
-                                Pro
+                                Buy Pro
                             </Button>
                         )}
 
