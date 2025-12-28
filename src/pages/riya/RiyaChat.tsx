@@ -430,7 +430,7 @@ const RiyaChat = () => {
     };
 
     return (
-        <div className="flex flex-col h-screen bg-background">
+        <div className="flex flex-col h-[100dvh] bg-background">
             {/* WhatsApp-style background pattern */}
             <div
                 className="fixed inset-0 opacity-5 pointer-events-none"
@@ -439,8 +439,8 @@ const RiyaChat = () => {
                 }}
             />
 
-            {/* Header */}
-            <div className="relative z-10 glass-card rounded-none border-x-0 border-t-0 px-4 py-3">
+            {/* Fixed Header */}
+            <header className="fixed top-0 left-0 right-0 z-50 glass-card rounded-none border-x-0 border-t-0 px-4 py-3">
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
                         <Button
@@ -510,231 +510,231 @@ const RiyaChat = () => {
                         </DropdownMenu>
                     </div>
                 </div>
+            </header>
 
-                {/* Messages */}
-                <div className="flex-1 overflow-y-auto px-4 py-6 space-y-4 relative z-10">
-                    <AnimatePresence>
-                        {messages.map((message, index) => (
-                            <motion.div
-                                key={index}
-                                initial={{ opacity: 0, y: 20, scale: 0.95 }}
-                                animate={{ opacity: 1, y: 0, scale: 1 }}
-                                exit={{ opacity: 0, scale: 0.95 }}
-                                transition={{ duration: 0.3 }}
-                                className={`flex ${message.isUser ? 'justify-end' : 'justify-start'}`}
-                            >
-                                <div
-                                    className={`max-w-[80%] ${message.isUser ? 'chat-bubble-user' : 'chat-bubble-bot'
-                                        }`}
-                                >
-                                    <p className="text-sm text-foreground whitespace-pre-wrap">
-                                        {message.text}
-                                    </p>
-                                    <p className="text-[10px] text-muted-foreground mt-1 text-right">
-                                        {formatTime(message.timestamp)}
-                                    </p>
-                                </div>
-                            </motion.div>
-                        ))}
-                    </AnimatePresence>
-
-                    {/* Typing indicator */}
-                    <AnimatePresence>
-                        {isTyping && (
-                            <motion.div
-                                initial={{ opacity: 0, y: 10 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                exit={{ opacity: 0, y: -10 }}
-                                className="flex justify-start"
-                            >
-                                <div className="chat-bubble-bot">
-                                    <div className="flex gap-1">
-                                        {[0, 1, 2].map((i) => (
-                                            <motion.div
-                                                key={i}
-                                                animate={{
-                                                    y: [0, -5, 0],
-                                                }}
-                                                transition={{
-                                                    duration: 0.5,
-                                                    repeat: Infinity,
-                                                    delay: i * 0.15,
-                                                }}
-                                                className="w-2 h-2 rounded-full bg-muted-foreground"
-                                            />
-                                        ))}
-                                    </div>
-                                </div>
-                            </motion.div>
-                        )}
-                    </AnimatePresence>
-
-                    <div ref={messagesEndRef} />
-                </div>
-
-                {/* Input */}
-                <form
-                    onSubmit={(e) => {
-                        e.preventDefault();
-                        handleSend();
-                    }}
-                    className="relative z-10 glass-card rounded-none border-x-0 border-b-0 px-4 py-3"
-                >
-                    <div className="flex items-center gap-2">
-                        <Input
-                            ref={inputRef}
-                            value={inputMessage}
-                            onChange={(e) => setInputMessage(e.target.value)}
-                            placeholder="Type a message..."
-                            className="flex-1 bg-muted/30 border-0 focus-visible:ring-1"
-                        />
-
-                        <Button
-                            type="submit"
-                            variant="glow"
-                            size="icon"
-                            disabled={!inputMessage.trim()}
-                            className="shrink-0"
+            {/* Messages - with padding for fixed header and input */}
+            <div className="flex-1 overflow-y-auto px-4 pt-20 pb-24 space-y-4 relative z-10">
+                <AnimatePresence>
+                    {messages.map((message, index) => (
+                        <motion.div
+                            key={index}
+                            initial={{ opacity: 0, y: 20, scale: 0.95 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.95 }}
+                            transition={{ duration: 0.3 }}
+                            className={`flex ${message.isUser ? 'justify-end' : 'justify-start'}`}
                         >
-                            <Send className="w-4 h-4" />
-                        </Button>
-                    </div>
-                </form>
+                            <div
+                                className={`max-w-[80%] ${message.isUser ? 'chat-bubble-user' : 'chat-bubble-bot'
+                                    }`}
+                            >
+                                <p className="text-sm text-foreground whitespace-pre-wrap">
+                                    {message.text}
+                                </p>
+                                <p className="text-[10px] text-muted-foreground mt-1 text-right">
+                                    {formatTime(message.timestamp)}
+                                </p>
+                            </div>
+                        </motion.div>
+                    ))}
+                </AnimatePresence>
 
-                {/* Settings Dialog */}
-                <Dialog open={showSettingsDialog} onOpenChange={setShowSettingsDialog}>
-                    <DialogContent className="sm:max-w-md">
-                        <DialogHeader>
-                            <DialogTitle>Profile Settings</DialogTitle>
-                            <DialogDescription>
-                                Update your profile. These changes will affect how Riya interacts with you.
-                            </DialogDescription>
-                        </DialogHeader>
+                {/* Typing indicator */}
+                <AnimatePresence>
+                    {isTyping && (
+                        <motion.div
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -10 }}
+                            className="flex justify-start"
+                        >
+                            <div className="chat-bubble-bot">
+                                <div className="flex gap-1">
+                                    {[0, 1, 2].map((i) => (
+                                        <motion.div
+                                            key={i}
+                                            animate={{
+                                                y: [0, -5, 0],
+                                            }}
+                                            transition={{
+                                                duration: 0.5,
+                                                repeat: Infinity,
+                                                delay: i * 0.15,
+                                            }}
+                                            className="w-2 h-2 rounded-full bg-muted-foreground"
+                                        />
+                                    ))}
+                                </div>
+                            </div>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
 
-                        <div className="space-y-5 py-4">
-                            {/* Username */}
-                            <div>
-                                <label className="block text-sm font-medium text-foreground mb-2">
-                                    Name
-                                </label>
-                                <Input
-                                    placeholder="Your name"
-                                    value={editUsername}
-                                    onChange={(e) => setEditUsername(e.target.value)}
-                                    className="w-full bg-muted/30 border-border"
+                <div ref={messagesEndRef} />
+            </div>
+
+            {/* Fixed Input at bottom */}
+            <form
+                onSubmit={(e) => {
+                    e.preventDefault();
+                    handleSend();
+                }}
+                className="fixed bottom-0 left-0 right-0 z-50 glass-card rounded-none border-x-0 border-b-0 px-4 py-3 safe-area-bottom"
+            >
+                <div className="flex items-center gap-2">
+                    <Input
+                        ref={inputRef}
+                        value={inputMessage}
+                        onChange={(e) => setInputMessage(e.target.value)}
+                        placeholder="Type a message..."
+                        className="flex-1 bg-muted/30 border-0 focus-visible:ring-1"
+                    />
+
+                    <Button
+                        type="submit"
+                        variant="glow"
+                        size="icon"
+                        disabled={!inputMessage.trim()}
+                        className="shrink-0"
+                    >
+                        <Send className="w-4 h-4" />
+                    </Button>
+                </div>
+            </form>
+
+            {/* Settings Dialog */}
+            <Dialog open={showSettingsDialog} onOpenChange={setShowSettingsDialog}>
+                <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                        <DialogTitle>Profile Settings</DialogTitle>
+                        <DialogDescription>
+                            Update your profile. These changes will affect how Riya interacts with you.
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="space-y-5 py-4">
+                        {/* Username */}
+                        <div>
+                            <label className="block text-sm font-medium text-foreground mb-2">
+                                Name
+                            </label>
+                            <Input
+                                placeholder="Your name"
+                                value={editUsername}
+                                onChange={(e) => setEditUsername(e.target.value)}
+                                className="w-full bg-muted/30 border-border"
+                                disabled={isUpdatingProfile}
+                            />
+                        </div>
+
+                        {/* Age */}
+                        <div>
+                            <label className="block text-sm font-medium text-foreground mb-2">
+                                Age
+                            </label>
+                            <div className="space-y-4">
+                                <div className="text-center">
+                                    <span className="text-4xl font-bold text-primary">{editAge}</span>
+                                    <span className="text-lg text-muted-foreground ml-1">years</span>
+                                </div>
+                                <Slider
+                                    value={[editAge]}
+                                    onValueChange={(values) => setEditAge(values[0])}
+                                    min={0}
+                                    max={70}
+                                    step={1}
+                                    className="w-full"
                                     disabled={isUpdatingProfile}
                                 />
-                            </div>
-
-                            {/* Age */}
-                            <div>
-                                <label className="block text-sm font-medium text-foreground mb-2">
-                                    Age
-                                </label>
-                                <div className="space-y-4">
-                                    <div className="text-center">
-                                        <span className="text-4xl font-bold text-primary">{editAge}</span>
-                                        <span className="text-lg text-muted-foreground ml-1">years</span>
-                                    </div>
-                                    <Slider
-                                        value={[editAge]}
-                                        onValueChange={(values) => setEditAge(values[0])}
-                                        min={0}
-                                        max={70}
-                                        step={1}
-                                        className="w-full"
-                                        disabled={isUpdatingProfile}
-                                    />
-                                    <div className="flex justify-between text-xs text-muted-foreground">
-                                        <span>0</span>
-                                        <span>70</span>
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* Gender */}
-                            <div>
-                                <label className="block text-sm font-medium text-foreground mb-2">
-                                    Gender
-                                </label>
-                                <div className="grid grid-cols-3 gap-2">
-                                    <Button
-                                        type="button"
-                                        variant={editGender === 'male' ? 'glow' : 'outline'}
-                                        onClick={() => setEditGender('male')}
-                                        disabled={isUpdatingProfile}
-                                        className="w-full"
-                                    >
-                                        Male
-                                    </Button>
-                                    <Button
-                                        type="button"
-                                        variant={editGender === 'female' ? 'glow' : 'outline'}
-                                        onClick={() => setEditGender('female')}
-                                        disabled={isUpdatingProfile}
-                                        className="w-full"
-                                    >
-                                        Female
-                                    </Button>
-                                    <Button
-                                        type="button"
-                                        variant={editGender === 'other' ? 'glow' : 'outline'}
-                                        onClick={() => setEditGender('other')}
-                                        disabled={isUpdatingProfile}
-                                        className="w-full"
-                                    >
-                                        Other
-                                    </Button>
+                                <div className="flex justify-between text-xs text-muted-foreground">
+                                    <span>0</span>
+                                    <span>70</span>
                                 </div>
                             </div>
                         </div>
 
-                        <div className="flex gap-2">
-                            <Button
-                                variant="outline"
-                                onClick={() => setShowSettingsDialog(false)}
-                                disabled={isUpdatingProfile}
-                                className="flex-1"
-                            >
-                                Cancel
-                            </Button>
-                            <Button
-                                variant="glow"
-                                onClick={handleUpdateProfile}
-                                disabled={isUpdatingProfile}
-                                className="flex-1"
-                            >
-                                {isUpdatingProfile ? 'Saving...' : 'Save Changes'}
-                            </Button>
+                        {/* Gender */}
+                        <div>
+                            <label className="block text-sm font-medium text-foreground mb-2">
+                                Gender
+                            </label>
+                            <div className="grid grid-cols-3 gap-2">
+                                <Button
+                                    type="button"
+                                    variant={editGender === 'male' ? 'glow' : 'outline'}
+                                    onClick={() => setEditGender('male')}
+                                    disabled={isUpdatingProfile}
+                                    className="w-full"
+                                >
+                                    Male
+                                </Button>
+                                <Button
+                                    type="button"
+                                    variant={editGender === 'female' ? 'glow' : 'outline'}
+                                    onClick={() => setEditGender('female')}
+                                    disabled={isUpdatingProfile}
+                                    className="w-full"
+                                >
+                                    Female
+                                </Button>
+                                <Button
+                                    type="button"
+                                    variant={editGender === 'other' ? 'glow' : 'outline'}
+                                    onClick={() => setEditGender('other')}
+                                    disabled={isUpdatingProfile}
+                                    className="w-full"
+                                >
+                                    Other
+                                </Button>
+                            </div>
                         </div>
-                    </DialogContent>
-                </Dialog>
+                    </div>
 
-                {/* Logout Confirmation Dialog */}
-                <AlertDialog open={showLogoutDialog} onOpenChange={setShowLogoutDialog}>
-                    <AlertDialogContent>
-                        <AlertDialogHeader>
-                            <AlertDialogTitle>Logout Confirmation</AlertDialogTitle>
-                            <AlertDialogDescription>
-                                Are you sure you want to logout? You can always come back by signing in with Google.
-                            </AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                            <AlertDialogCancel>Cancel</AlertDialogCancel>
-                            <AlertDialogAction onClick={handleSignOut} className="bg-destructive hover:bg-destructive/90">
-                                Logout
-                            </AlertDialogAction>
-                        </AlertDialogFooter>
-                    </AlertDialogContent>
-                </AlertDialog>
+                    <div className="flex gap-2">
+                        <Button
+                            variant="outline"
+                            onClick={() => setShowSettingsDialog(false)}
+                            disabled={isUpdatingProfile}
+                            className="flex-1"
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            variant="glow"
+                            onClick={handleUpdateProfile}
+                            disabled={isUpdatingProfile}
+                            className="flex-1"
+                        >
+                            {isUpdatingProfile ? 'Saving...' : 'Save Changes'}
+                        </Button>
+                    </div>
+                </DialogContent>
+            </Dialog>
 
-                {/* Paywall Modal */}
-                <PaywallModal
-                    isOpen={showPaywall}
-                    onClose={() => setShowPaywall(false)}
-                    resetsAt={paywallResetTime}
-                />
-            </div>
+            {/* Logout Confirmation Dialog */}
+            <AlertDialog open={showLogoutDialog} onOpenChange={setShowLogoutDialog}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Logout Confirmation</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Are you sure you want to logout? You can always come back by signing in with Google.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={handleSignOut} className="bg-destructive hover:bg-destructive/90">
+                            Logout
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+
+            {/* Paywall Modal */}
+            <PaywallModal
+                isOpen={showPaywall}
+                onClose={() => setShowPaywall(false)}
+                resetsAt={paywallResetTime}
+            />
         </div>
     );
 };
