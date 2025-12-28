@@ -192,7 +192,7 @@ serve(async (req) => {
         const GEMINI_API_KEY = getNextApiKey();
         const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
         const model = genAI.getGenerativeModel({
-            model: "gemini-2.5-flash-lite",  // Using Gemini 2.5 Flash Lite (cheaper)
+            model: "gemini-3-pro-preview",  // Using Gemini 2.5 Flash Lite (cheaper)/// testing pro for now 
             systemInstruction: systemPrompt,
         });
 

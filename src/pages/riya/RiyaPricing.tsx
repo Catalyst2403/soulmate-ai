@@ -187,7 +187,7 @@ const RiyaPricing = () => {
                 key: data.keyId,
                 amount: data.amount,
                 currency: data.currency,
-                name: 'Riya Pro',
+                name: 'Riya AI Pro',
                 description: data.planDescription,
                 order_id: data.orderId,
                 handler: async (response: RazorpayResponse) => {
@@ -306,10 +306,10 @@ const RiyaPricing = () => {
                         <Crown className="w-8 h-8 text-white" />
                     </div>
                     <h2 className="font-display text-3xl font-bold text-foreground">
-                        Unlimited Chats with Riya
+                        Unlimited AI Sessions
                     </h2>
                     <p className="text-muted-foreground">
-                        No more daily limits. Chat anytime, anywhere.
+                        Full access to AI wellness features.
                     </p>
                 </div>
 
@@ -324,8 +324,8 @@ const RiyaPricing = () => {
                             whileTap={{ scale: 0.98 }}
                             onClick={() => !isLoading && handleSelectPlan(plan.id)}
                             className={`relative cursor-pointer rounded-2xl p-4 transition-all ${plan.highlight
-                                    ? 'glass-card border-primary/50 ring-2 ring-primary/30'
-                                    : 'glass-card'
+                                ? 'glass-card border-primary/50 ring-2 ring-primary/30'
+                                : 'glass-card'
                                 } ${isLoading ? 'opacity-50 pointer-events-none' : ''}`}
                         >
                             {/* Badge */}
@@ -379,10 +379,10 @@ const RiyaPricing = () => {
                     </h3>
                     <ul className="space-y-2">
                         {[
-                            'Unlimited messages every day',
-                            'No daily message limits',
+                            'Unlimited AI sessions every day',
+                            'No daily usage limits',
                             'Priority response times',
-                            'Chat history never deleted',
+                            'Session history always saved',
                         ].map((feature, i) => (
                             <li key={i} className="flex items-center gap-2 text-sm text-muted-foreground">
                                 <Check className="w-4 h-4 text-primary" />
