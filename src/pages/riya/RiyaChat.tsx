@@ -122,6 +122,7 @@ const RiyaChat = () => {
             }
 
             // Check subscription status
+            // @ts-ignore - Table exists after migration
             const { data: subscription } = await supabase
                 .from('riya_subscriptions')
                 .select('*')
@@ -136,6 +137,7 @@ const RiyaChat = () => {
             } else {
                 // Get today's message usage
                 const today = new Date().toISOString().split('T')[0];
+                // @ts-ignore - Table exists after migration
                 const { data: usage } = await supabase
                     .from('riya_daily_usage')
                     .select('message_count')
@@ -201,20 +203,26 @@ const RiyaChat = () => {
         setMessages(prev => [...prev, userMsgWithTimestamp]);
 
         try {
-            // Call Riya chat edge function using Supabase client
-            const { data, error: functionError } = await supabase.functions.invoke('riya-chat', {
-                body: {
+            // Use direct fetch to handle 429 responses properly
+            // supabase.functions.invoke doesn't expose response body on error
+            const session = (await supabase.auth.getSession()).data.session;
+            const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+
+            const response = await fetch(`${supabaseUrl}/functions/v1/riya-chat`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${session?.access_token || ''}`,
+                },
+                body: JSON.stringify({
                     userId,
                     message: userMessage,
-                },
+                }),
             });
 
-            if (functionError) {
-                console.error('Edge function error:', functionError);
-                throw new Error(functionError.message || 'Failed to get response');
-            }
+            const data = await response.json();
 
-            // Handle MESSAGE_LIMIT_REACHED error
+            // Handle MESSAGE_LIMIT_REACHED (429 status)
             if (data?.error === 'MESSAGE_LIMIT_REACHED') {
                 console.log('Daily message limit reached');
                 setPaywallResetTime(data.resetsAt);
@@ -226,9 +234,10 @@ const RiyaChat = () => {
                 return;
             }
 
-            if (data?.error) {
-                console.error('API error:', data.error);
-                throw new Error(data.error);
+            // Handle other errors
+            if (!response.ok || data?.error) {
+                console.error('API error:', data?.error || response.statusText);
+                throw new Error(data?.error || 'Failed to get response');
             }
 
             if (!data?.messages || !Array.isArray(data.messages)) {
@@ -457,12 +466,18 @@ const RiyaChat = () => {
                         </div>
 
                         <div className="flex flex-col">
-                            <h2 className="font-display font-semibold text-foreground text-base leading-tight">
+                            <h2 className="font-display font-semibold text-foreground text-base leading-tight flex items-center gap-2">
                                 Riya
+                                {isPro && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gradient-to-r from-yellow-500 to-orange-500 text-[10px] font-bold text-white">
+                                        <Crown className="w-3 h-3" />
+                                        PRO
+                                    </span>
+                                )}
                             </h2>
                             <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
                                 <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
-                                {isTyping ? 'typing...' : 'Online'}
+                                {isTyping ? 'typing...' : isPro ? '∞ Unlimited' : `${remainingMessages} messages left`}
                             </p>
                         </div>
                     </div>

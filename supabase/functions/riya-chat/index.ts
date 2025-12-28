@@ -373,38 +373,26 @@ serve(async (req) => {
         // 9. Increment daily message count for free users
         let newRemainingMessages = remainingMessages;
         if (!isPro) {
-            const today = new Date().toISOString().split('T')[0];
+            try {
+                // Use the RPC function for atomic increment
+                // This handles upsert + increment in a single atomic operation
+                const { data: rpcResult, error: rpcError } = await supabase
+                    .rpc('increment_riya_message_count', { p_user_id: userId });
 
-            const { data: upsertResult, error: usageError } = await supabase
-                .from('riya_daily_usage')
-                .upsert({
-                    user_id: userId,
-                    usage_date: today,
-                    message_count: 1
-                }, {
-                    onConflict: 'user_id,usage_date',
-                    ignoreDuplicates: false
-                })
-                .select('message_count')
-                .single();
+                if (rpcError) {
+                    console.error('RPC increment error:', rpcError);
+                    // Fallback: Calculate remaining based on our local tracking
+                    newRemainingMessages = Math.max(0, remainingMessages - 1);
+                } else {
+                    // RPC returns remaining messages directly
+                    newRemainingMessages = rpcResult ?? Math.max(0, remainingMessages - 1);
+                }
 
-            if (usageError) {
-                // If upsert failed, try increment directly
-                await supabase.rpc('increment_riya_message_count', { p_user_id: userId });
-            } else {
-                // Increment existing count
-                await supabase
-                    .from('riya_daily_usage')
-                    .update({
-                        message_count: (upsertResult?.message_count || 0) + 1,
-                        updated_at: new Date().toISOString()
-                    })
-                    .eq('user_id', userId)
-                    .eq('usage_date', today);
+                console.log(`📊 Updated: ${DAILY_MESSAGE_LIMIT - newRemainingMessages}/${DAILY_MESSAGE_LIMIT} messages used`);
+            } catch (incrementError) {
+                console.error('Failed to increment message count:', incrementError);
+                newRemainingMessages = Math.max(0, remainingMessages - 1);
             }
-
-            newRemainingMessages = Math.max(0, remainingMessages - 1);
-            console.log(`📊 Updated: ${DAILY_MESSAGE_LIMIT - newRemainingMessages}/${DAILY_MESSAGE_LIMIT} messages used`);
         }
 
         return new Response(JSON.stringify({
