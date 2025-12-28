@@ -136,6 +136,8 @@ const RiyaLanding = () => {
                     <Link to="/riya/privacy-policy" className="underline hover:text-foreground">Privacy Policy</Link>
                 </p>
                 <div className="flex flex-wrap justify-center gap-3 text-xs text-muted-foreground mt-2">
+                    <Link to="/riya/pricing" className="underline hover:text-foreground">Pricing</Link>
+                    <span>·</span>
                     <Link to="/riya/shipping-policy" className="underline hover:text-foreground">Shipping</Link>
                     <span>·</span>
                     <Link to="/riya/cancellation-refund" className="underline hover:text-foreground">Refunds</Link>
