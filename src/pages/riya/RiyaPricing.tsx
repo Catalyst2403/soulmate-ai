@@ -109,11 +109,11 @@ const RiyaPricing = () => {
         script.async = true;
         document.body.appendChild(script);
 
-        // Check user info and trial eligibility
+        // Check user info and trial eligibility (only if logged in)
         const checkUser = async () => {
             const userId = localStorage.getItem('riya_user_id');
             if (!userId) {
-                navigate('/riya');
+                // Allow viewing pricing without auth
                 return;
             }
 
@@ -147,9 +147,22 @@ const RiyaPricing = () => {
         return () => {
             document.body.removeChild(script);
         };
-    }, [navigate]);
+    }, []);
 
     const handleSelectPlan = async (planId: string) => {
+        // Check if user is logged in first
+        const userId = localStorage.getItem('riya_user_id');
+        if (!userId) {
+            // Save selected plan and redirect to login
+            localStorage.setItem('riya_selected_plan', planId);
+            toast({
+                title: 'Sign in required',
+                description: 'Please sign in to continue with your purchase.',
+            });
+            navigate('/riya');
+            return;
+        }
+
         // Don't allow trial if not eligible
         if (planId === 'trial' && !isTrialEligible) {
             toast({
@@ -164,11 +177,6 @@ const RiyaPricing = () => {
         setIsLoading(true);
 
         try {
-            const userId = localStorage.getItem('riya_user_id');
-            if (!userId) {
-                navigate('/riya');
-                return;
-            }
 
             // Create Razorpay order via Edge Function
             const { data, error } = await supabase.functions.invoke('create-razorpay-order', {
