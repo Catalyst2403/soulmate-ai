@@ -203,3 +203,35 @@
 ::-webkit-scrollbar-thumb:hover {
   background: hsl(240 10% 30%);
 }
+
+/* Mobile viewport height fix for keyboard */
+@supports (height: 100dvh) {
+  .h-screen-safe {
+    height: 100dvh;
+  }
+}
+
+/* Safe area handling for iOS devices */
+.safe-area-bottom {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
+
+.safe-area-top {
+  padding-top: max(0.75rem, env(safe-area-inset-top));
+}
+
+/* Prevent pull-to-refresh and overscroll on chat container */
+.chat-container {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Fix for mobile input focus - prevent zoom on iOS */
+@media screen and (max-width: 768px) {
+
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
