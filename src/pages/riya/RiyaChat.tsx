@@ -735,7 +735,7 @@ const RiyaChat = () => {
                     <AlertDialogHeader>
                         <AlertDialogTitle>Logout Confirmation</AlertDialogTitle>
                         <AlertDialogDescription>
-                            Are you sure you want to logout? You can always come back by signing in with Google.
+                            Are you sure you want to logout? You can always come back by signing in.
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
