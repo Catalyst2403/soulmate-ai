@@ -177,7 +177,7 @@ const RiyaChat = () => {
     }, []);
 
     const handleSend = async () => {
-        if (!inputMessage.trim() || isTyping) return;
+        if (!inputMessage.trim()) return;
 
         const userId = localStorage.getItem('riya_user_id');
         if (!userId) {
@@ -480,9 +480,6 @@ const RiyaChat = () => {
                                 {isTyping ? 'typing...' : 'online'}
                                 {isPro && !isTyping && (
                                     <span className="text-yellow-400 ml-1">• ∞ Unlimited</span>
-                                )}
-                                {!isPro && !isTyping && (
-                                    <span className="text-muted-foreground ml-1">• {remainingMessages} msgs left</span>
                                 )}
                             </p>
                         </div>

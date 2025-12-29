@@ -16,6 +16,7 @@ import RiyaCallback from "./pages/riya/RiyaCallback";
 import RiyaProfileSetup from "./pages/riya/RiyaProfileSetup";
 import RiyaChat from "./pages/riya/RiyaChat";
 import RiyaPricing from "./pages/riya/RiyaPricing";
+import RiyaEmailLogin from "./pages/riya/RiyaEmailLogin";
 
 // Riya Policy Pages
 import ShippingPolicy from "./pages/riya/ShippingPolicy";
@@ -45,6 +46,7 @@ const App = () => (
           <Route path="/riya/onboarding/profile" element={<RiyaProfileSetup />} />
           <Route path="/riya/chat" element={<RiyaChat />} />
           <Route path="/riya/pricing" element={<RiyaPricing />} />
+          <Route path="/riya/email-login" element={<RiyaEmailLogin />} />
 
           {/* Riya Policy Pages */}
           <Route path="/riya/shipping-policy" element={<ShippingPolicy />} />
