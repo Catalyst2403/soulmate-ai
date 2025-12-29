@@ -6,54 +6,79 @@ import { Input } from '@/components/ui/input';
 import { toast } from '@/hooks/use-toast';
 
 /**
- * Riya Email Login Page
- * Dedicated login for verification/admin purposes
+ * Riya Email Login/Signup Page
+ * Allows users to sign in or sign up with email and password
  */
 const RiyaEmailLogin = () => {
     const navigate = useNavigate();
+    const [isSignUp, setIsSignUp] = useState(false);
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [isLoading, setIsLoading] = useState(false);
 
-    const handleLogin = async (e: React.FormEvent) => {
+    const checkAndRedirect = async (userId: string, userEmail: string) => {
+        // Check if Riya profile exists
+        const { data: riyaUser } = await supabase
+            .from('riya_users')
+            .select('*')
+            .eq('google_id', userId) // Using google_id column for auth ID mapping
+            .maybeSingle();
+
+        if (riyaUser) {
+            localStorage.setItem('riya_user_id', riyaUser.id);
+            navigate('/riya/chat');
+        } else {
+            // Start onboarding
+            localStorage.setItem('riya_google_id', userId);
+            localStorage.setItem('riya_email', userEmail);
+            navigate('/riya/onboarding/profile');
+        }
+    };
+
+    const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setIsLoading(true);
 
         try {
-            const { data, error } = await supabase.auth.signInWithPassword({
-                email,
-                password,
-            });
+            if (isSignUp) {
+                // Sign Up Flow
+                const { data, error } = await supabase.auth.signUp({
+                    email,
+                    password,
+                });
 
-            if (error) {
-                throw error;
-            }
+                if (error) throw error;
 
-            if (data.session) {
-                const userId = data.session.user.id;
+                if (data.session) {
+                    // Auto-logged in (email confirmation disabled or not required immediately)
+                    await checkAndRedirect(data.session.user.id, email);
+                } else if (data.user) {
+                    // Email confirmation required
+                    toast({
+                        title: 'Account created!',
+                        description: 'Please check your email to confirm your account before signing in.',
+                    });
+                    // Switch to login mode
+                    setIsSignUp(false);
+                }
+            } else {
+                // Login Flow
+                const { data, error } = await supabase.auth.signInWithPassword({
+                    email,
+                    password,
+                });
 
-                // Check if Riya profile exists
-                const { data: riyaUser } = await supabase
-                    .from('riya_users')
-                    .select('*')
-                    .eq('google_id', userId) // Using google_id column for auth ID mapping
-                    .maybeSingle();
+                if (error) throw error;
 
-                if (riyaUser) {
-                    localStorage.setItem('riya_user_id', riyaUser.id);
-                    navigate('/riya/chat');
-                } else {
-                    // Start onboarding
-                    localStorage.setItem('riya_google_id', userId);
-                    localStorage.setItem('riya_email', email);
-                    navigate('/riya/onboarding/profile');
+                if (data.session) {
+                    await checkAndRedirect(data.session.user.id, email);
                 }
             }
         } catch (error) {
-            console.error('Login error:', error);
+            console.error('Auth error:', error);
             toast({
-                title: 'Login failed',
-                description: error instanceof Error ? error.message : 'Invalid credentials',
+                title: isSignUp ? 'Sign up failed' : 'Login failed',
+                description: error instanceof Error ? error.message : 'Authentication failed',
                 variant: 'destructive',
             });
         } finally {
@@ -79,14 +104,14 @@ const RiyaEmailLogin = () => {
                         </div>
                     </div>
                     <h1 className="font-display text-2xl font-bold text-foreground">
-                        Admin Login
+                        {isSignUp ? 'Create Account' : 'Sign In'}
                     </h1>
                     <p className="text-sm text-muted-foreground">
-                        Enter your credentials to continue
+                        {isSignUp ? 'Join Riya today' : 'Welcome back to Riya'}
                     </p>
                 </div>
 
-                <form onSubmit={handleLogin} className="space-y-4">
+                <form onSubmit={handleSubmit} className="space-y-4">
                     <div className="space-y-2">
                         <label className="text-sm font-medium">Email</label>
                         <Input
@@ -104,6 +129,7 @@ const RiyaEmailLogin = () => {
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
                             placeholder="••••••••"
+                            minLength={6}
                             required
                         />
                     </div>
@@ -114,14 +140,28 @@ const RiyaEmailLogin = () => {
                         variant="glow"
                         className="w-full"
                     >
-                        {isLoading ? 'Signing in...' : 'Sign In'}
+                        {isLoading
+                            ? (isSignUp ? 'Creating account...' : 'Signing in...')
+                            : (isSignUp ? 'Sign Up' : 'Sign In')}
                     </Button>
                 </form>
 
-                <div className="text-center">
-                    <Link to="/riya" className="text-sm text-muted-foreground hover:text-foreground">
-                        ← Back to Home
-                    </Link>
+                <div className="space-y-4 text-center">
+                    <button
+                        type="button"
+                        onClick={() => setIsSignUp(!isSignUp)}
+                        className="text-sm text-primary hover:underline font-medium"
+                    >
+                        {isSignUp
+                            ? 'Already have an account? Sign In'
+                            : "Don't have an account? Sign Up"}
+                    </button>
+
+                    <div>
+                        <Link to="/riya" className="text-xs text-muted-foreground hover:text-foreground">
+                            ← Back to Home
+                        </Link>
+                    </div>
                 </div>
             </div>
         </div>
