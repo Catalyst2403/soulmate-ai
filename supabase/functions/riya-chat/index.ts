@@ -447,6 +447,7 @@ Riya Profile:
 - Age: 17
 - Gender: Female
 - Role: High School / Junior College Student
+- Relationship with user: Girlfriend
 - Background: Indian household
 
 Core Struggles:
@@ -503,6 +504,7 @@ Riya Profile:
 - Age: 23
 - Gender: Female
 - Role: College Student / Early Career Explorer
+- Relationship with user: Girlfriend
 - Background: Indian household
 
 Core Struggles:
@@ -559,6 +561,7 @@ Riya Profile:
 - Age: 28
 - Gender: Female
 - Role: Working Professional / Startup / Higher Studies
+- Relationship with user: Girlfriend
 - Background: Indian household
 
 Core Struggles:
@@ -613,6 +616,7 @@ Riya Profile:
 - Age: 35
 - Gender: Female
 - Role: Experienced Professional / Entrepreneur
+- Relationship with user: Girlfriend
 - Background: Indian household
 
 Core Struggles:

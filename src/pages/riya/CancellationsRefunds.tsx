@@ -48,38 +48,9 @@ const CancellationsRefunds = () => {
                             </div>
 
                             <div className="p-4 rounded-lg bg-foreground/5 border border-border/50">
-                                <h3 className="font-semibold text-foreground mb-2">🍃 Perishable Items</h3>
-                                <p className="text-sm">
-                                    Miten Solanki does not accept cancellation requests for perishable items like
-                                    flowers, eatables etc. However, refund/replacement can be made if the customer
-                                    establishes that the quality of product delivered is not good.
-                                </p>
-                            </div>
-
-                            <div className="p-4 rounded-lg bg-foreground/5 border border-border/50">
-                                <h3 className="font-semibold text-foreground mb-2">📦 Damaged or Defective Items</h3>
-                                <p className="text-sm">
-                                    Please report the same to our Customer Service team. The request will, however,
-                                    be entertained once the merchant has checked and determined the same at his own end.
-                                    This should be reported within 7 days of receipt of the products.
-                                </p>
-                            </div>
-
-                            <div className="p-4 rounded-lg bg-foreground/5 border border-border/50">
                                 <h3 className="font-semibold text-foreground mb-2">🔍 Product Not as Described</h3>
                                 <p className="text-sm">
-                                    In case you feel that the product received is not as shown on the site or as per
-                                    your expectations, you must bring it to the notice of our customer service within
-                                    7 days of receiving the product. The Customer Service Team after looking into your
-                                    complaint will take an appropriate decision.
-                                </p>
-                            </div>
-
-                            <div className="p-4 rounded-lg bg-foreground/5 border border-border/50">
-                                <h3 className="font-semibold text-foreground mb-2">🛡️ Manufacturer Warranty</h3>
-                                <p className="text-sm">
-                                    In case of complaints regarding products that come with a warranty from manufacturers,
-                                    please refer the issue to them.
+                                    In case you do not like the chatbot experience, we'll refund your money within 7 days of your purchase.
                                 </p>
                             </div>
                         </div>
