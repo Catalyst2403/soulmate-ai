@@ -99,8 +99,12 @@ const RiyaEmailLogin = () => {
             <div className="relative z-10 max-w-md w-full glass-card p-8 space-y-6">
                 <div className="text-center space-y-2">
                     <div className="flex justify-center mb-4">
-                        <div className="w-16 h-16 rounded-full bg-gradient-to-br from-neon-cyan to-neon-magenta flex items-center justify-center text-2xl font-bold text-white shadow-lg neon-glow">
-                            R
+                        <div className="w-16 h-16 rounded-full overflow-hidden border-3 border-neon-cyan/50 shadow-lg neon-glow">
+                            <img
+                                src="/riya-avatar.jpg"
+                                alt="Riya"
+                                className="w-full h-full object-cover"
+                            />
                         </div>
                     </div>
                     <h1 className="font-display text-2xl font-bold text-foreground">
