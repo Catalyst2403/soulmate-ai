@@ -84,6 +84,19 @@ const RiyaProfileSetup = () => {
 
             console.log('Riya user created:', riyaUser);
 
+            // Update Supabase auth metadata with username
+            const { error: metadataError } = await supabase.auth.updateUser({
+                data: {
+                    full_name: username.trim(),
+                    name: username.trim(),
+                }
+            });
+
+            if (metadataError) {
+                console.warn('Failed to update auth metadata:', metadataError);
+                // Don't throw - this is non-critical
+            }
+
             // Save user ID and navigate to chat
             localStorage.setItem('riya_user_id', riyaUser.id);
 
