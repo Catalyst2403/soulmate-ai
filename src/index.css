@@ -144,6 +144,23 @@
     background-size: 200% 200%;
     animation: gradient-shift 3s ease infinite;
   }
+
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: hsl(240 10% 6%);
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: hsl(240 10% 20%);
+    border-radius: 3px;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: hsl(240 10% 30%);
+  }
 }
 
 @keyframes float {

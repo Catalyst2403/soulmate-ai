@@ -71,8 +71,12 @@ const RiyaLanding = () => {
             <div className="relative z-10 max-w-md w-full p-8 text-center space-y-8">
                 {/* Logo/Avatar */}
                 <div className="flex justify-center">
-                    <div className="w-24 h-24 rounded-full bg-gradient-to-br from-neon-cyan to-neon-magenta flex items-center justify-center text-4xl font-bold text-white shadow-lg neon-glow">
-                        R
+                    <div className="w-40 h-40 rounded-full overflow-hidden border-4 border-neon-cyan/50 shadow-lg neon-glow">
+                        <img
+                            src="/riya-avatar.jpg"
+                            alt="Riya"
+                            className="w-full h-full object-cover"
+                        />
                     </div>
                 </div>
 

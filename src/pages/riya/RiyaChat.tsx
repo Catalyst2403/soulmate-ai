@@ -8,6 +8,7 @@ import { Slider } from '@/components/ui/slider';
 import { toast } from '@/hooks/use-toast';
 import { Send, ArrowLeft, MoreVertical, Settings, LogOut, Crown } from 'lucide-react';
 import PaywallModal from '@/components/riya/PaywallModal';
+import RiyaProfile from './RiyaProfile';
 import {
     AlertDialog,
     AlertDialogAction,
@@ -53,6 +54,7 @@ const RiyaChat = () => {
     const [showLogoutDialog, setShowLogoutDialog] = useState(false);
     const [showSettingsDialog, setShowSettingsDialog] = useState(false);
     const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
+    const [showProfile, setShowProfile] = useState(false);
 
     // Subscription & limits state
     const [isPro, setIsPro] = useState(false);
@@ -461,27 +463,37 @@ const RiyaChat = () => {
                             <ArrowLeft className="w-5 h-5" />
                         </Button>
 
-                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-neon-cyan to-neon-magenta flex items-center justify-center text-lg">
-                            R
-                        </div>
+                        {/* Clickable Profile Section */}
+                        <div
+                            className="flex items-center gap-3 cursor-pointer hover:bg-muted/30 rounded-lg px-2 py-1 -ml-2 transition-colors"
+                            onClick={() => setShowProfile(true)}
+                        >
+                            <div className="w-10 h-10 rounded-full overflow-hidden border-2 border-neon-cyan/50">
+                                <img
+                                    src="/riya-avatar.jpg"
+                                    alt="Riya"
+                                    className="w-full h-full object-cover"
+                                />
+                            </div>
 
-                        <div className="flex flex-col">
-                            <h2 className="font-display font-semibold text-foreground text-base leading-tight flex items-center gap-2">
-                                Riya
-                                {isPro && (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gradient-to-r from-yellow-500 to-orange-500 text-[10px] font-bold text-white">
-                                        <Crown className="w-3 h-3" />
-                                        PRO
-                                    </span>
-                                )}
-                            </h2>
-                            <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
-                                <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
-                                {isTyping ? 'typing...' : 'online'}
-                                {isPro && !isTyping && (
-                                    <span className="text-yellow-400 ml-1">• ∞ Unlimited</span>
-                                )}
-                            </p>
+                            <div className="flex flex-col">
+                                <h2 className="font-display font-semibold text-foreground text-base leading-tight flex items-center gap-2">
+                                    Riya
+                                    {isPro && (
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gradient-to-r from-yellow-500 to-orange-500 text-[10px] font-bold text-white">
+                                            <Crown className="w-3 h-3" />
+                                            PRO
+                                        </span>
+                                    )}
+                                </h2>
+                                <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
+                                    <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+                                    {isTyping ? 'typing...' : 'online'}
+                                    {isPro && !isTyping && (
+                                        <span className="text-yellow-400 ml-1">• ∞ Unlimited</span>
+                                    )}
+                                </p>
+                            </div>
                         </div>
                     </div>
 
@@ -753,6 +765,14 @@ const RiyaChat = () => {
                 onClose={() => setShowPaywall(false)}
                 resetsAt={paywallResetTime}
             />
+
+            {/* Profile Page */}
+            {showProfile && (
+                <RiyaProfile
+                    age={userAge}
+                    onClose={() => setShowProfile(false)}
+                />
+            )}
         </div>
     );
 };
