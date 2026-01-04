@@ -11,8 +11,16 @@ export default function RiyaProfile({ age, onClose }: RiyaProfileProps) {
     const [isVisible, setIsVisible] = useState(false);
     const [showFullscreenImage, setShowFullscreenImage] = useState(false);
 
-    // Ensure age is a valid key, default to 23 if not
-    const riyaAge = ([17, 23, 28, 35].includes(age) ? age : 23) as RiyaAge;
+    // Map user age to Riya's age variant using same logic as backend
+    // Backend: ≤17 -> riya_17, ≤25 -> riya_23, ≤40 -> riya_28, >40 -> riya_35
+    const getRiyaAge = (userAge: number): RiyaAge => {
+        if (userAge <= 17) return 17;
+        if (userAge <= 25) return 23;
+        if (userAge <= 40) return 28;
+        return 35;
+    };
+
+    const riyaAge = getRiyaAge(age);
     const personality = RIYA_PERSONALITIES[riyaAge];
 
     useEffect(() => {
