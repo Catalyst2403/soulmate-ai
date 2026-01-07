@@ -833,7 +833,7 @@ NO plain text - JSON only!
 
     let promptKey: string;
     if (userAge <= 17) promptKey = 'riya_17';
-    else if (userAge <= 25) promptKey = 'riya_23';
+    else if (userAge <= 27) promptKey = 'riya_23';
     else if (userAge <= 40) promptKey = 'riya_28';
     else promptKey = 'riya_35';
 
