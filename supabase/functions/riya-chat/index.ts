@@ -101,6 +101,16 @@ serve(async (req) => {
             throw new Error('User not found');
         }
 
+        // Update last_active timestamp for analytics tracking
+        const { error: updateError } = await supabase
+            .from('riya_users')
+            .update({ last_active: new Date().toISOString() })
+            .eq('id', userId);
+
+        if (updateError) {
+            console.error('Error updating last_active:', updateError);
+        }
+
         // 2. Check subscription & message limits
         const DAILY_MESSAGE_LIMIT = 30;
 

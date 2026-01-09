@@ -76,35 +76,36 @@ serve(async (req) => {
         // ============================================
         // 3. DAILY ACTIVITY (Active Users + Conversations)
         // ============================================
-        const { data: dailyActivity } = await supabase.rpc('get_daily_activity');
 
-        // Fallback manual query
-        if (!dailyActivity) {
-            const thirtyDaysAgo = new Date();
-            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        // Direct manual query (RPC function doesn't exist)
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-            const { data: conversations } = await supabase
-                .from('riya_conversations')
-                .select('created_at, user_id')
-                .gte('created_at', thirtyDaysAgo.toISOString());
+        const { data: conversations, error: convError } = await supabase
+            .from('riya_conversations')
+            .select('created_at, user_id')
+            .gte('created_at', thirtyDaysAgo.toISOString());
 
-            const activityMap = new Map();
-
-            conversations?.forEach(conv => {
-                const date = new Date(conv.created_at).toISOString().split('T')[0];
-                if (!activityMap.has(date)) {
-                    activityMap.set(date, { date, users: new Set(), conversations: 0 });
-                }
-                activityMap.get(date).users.add(conv.user_id);
-                activityMap.get(date).conversations++;
-            });
-
-            var dailyActivityData = Array.from(activityMap.values()).map(d => ({
-                date: d.date,
-                active_users: d.users.size,
-                total_conversations: d.conversations
-            })).sort((a, b) => b.date.localeCompare(a.date));
+        if (convError) {
+            console.error('Error fetching conversations for daily activity:', convError);
         }
+
+        const activityMap = new Map();
+
+        conversations?.forEach(conv => {
+            const date = new Date(conv.created_at).toISOString().split('T')[0];
+            if (!activityMap.has(date)) {
+                activityMap.set(date, { date, users: new Set(), conversations: 0 });
+            }
+            activityMap.get(date).users.add(conv.user_id);
+            activityMap.get(date).conversations++;
+        });
+
+        const dailyActivityData = Array.from(activityMap.values()).map(d => ({
+            date: d.date,
+            active_users: d.users.size,
+            total_conversations: d.conversations
+        })).sort((a, b) => b.date.localeCompare(a.date));
 
         // ============================================
         // 4. ENGAGEMENT METRICS
@@ -235,7 +236,7 @@ serve(async (req) => {
                     { tier: '100+ msgs', count: tiers['100+'] }
                 ]
             },
-            dailyActivity: dailyActivityData || dailyActivity || [],
+            dailyActivity: dailyActivityData,
             engagement: {
                 avgMessagesPerUser,
                 totalMessages,
