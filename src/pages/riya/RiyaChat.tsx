@@ -205,6 +205,8 @@ const RiyaChat = () => {
         setMessages(prev => [...prev, userMsgWithTimestamp]);
 
         try {
+            console.log('🚀 [Message Count Debug] Sending message...', { userId, isPro, remainingMessages });
+
             // Use direct fetch to handle 429 responses properly
             // supabase.functions.invoke doesn't expose response body on error
             const session = (await supabase.auth.getSession()).data.session;
@@ -223,10 +225,15 @@ const RiyaChat = () => {
             });
 
             const data = await response.json();
+            console.log('📥 [Message Count Debug] Response received:', {
+                isPro: data.isPro,
+                remainingMessages: data.remainingMessages,
+                hasError: !!data.error
+            });
 
             // Handle MESSAGE_LIMIT_REACHED (429 status)
             if (data?.error === 'MESSAGE_LIMIT_REACHED') {
-                console.log('Daily message limit reached');
+                console.warn('❌ [Message Count Debug] LIMIT REACHED! Showing paywall');
                 setPaywallResetTime(data.resetsAt);
                 setShowPaywall(true);
                 setRemainingMessages(0);
@@ -249,9 +256,11 @@ const RiyaChat = () => {
 
             // Update remaining messages from response
             if (typeof data.remainingMessages === 'number') {
+                console.log('✅ [Message Count Debug] Updated remaining messages:', data.remainingMessages);
                 setRemainingMessages(data.remainingMessages);
             }
             if (typeof data.isPro === 'boolean') {
+                console.log('👤 [Message Count Debug] User Pro status:', data.isPro);
                 setIsPro(data.isPro);
             }
 
