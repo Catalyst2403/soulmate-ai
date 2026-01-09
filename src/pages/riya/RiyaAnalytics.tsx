@@ -17,7 +17,7 @@ interface AnalyticsData {
     dailyActivity: Array<{
         date: string;
         active_users: number;
-        total_conversations: number;
+        user_messages: number;
     }>;
     engagement: {
         avgMessagesPerUser: string;
@@ -25,10 +25,15 @@ interface AnalyticsData {
         totalSessions: number;
     };
     costs: {
-        totalCostINR: string;
+        calculatedCostINR: string;
         costPerUser: string;
         totalTokens: number;
-        googleCloudBilling: any;
+        actualCostUSD: number | null;
+        actualCostINR: string | null;
+        actualCurrency: string | null;
+        billingPeriod: string | null;
+        dataSource: 'google_cloud' | 'calculated';
+        lastUpdated: string;
     };
     revenue: {
         payingUsers: number;
@@ -83,7 +88,7 @@ const RiyaAnalytics = () => {
                 `${supabaseUrl}/functions/v1/riya-analytics?interval=${encodeURIComponent(activeUsersInterval)}`,
                 {
                     headers: {
-                        'Authorization': `Bearer ${supabaseAnonKey}`,
+                        'apikey': supabaseAnonKey,
                         'Content-Type': 'application/json'
                     }
                 }
@@ -94,6 +99,11 @@ const RiyaAnalytics = () => {
             }
 
             const data = await response.json();
+            console.log('📊 Analytics Data Received:', data);
+            console.log('💰 Costs Object:', data.costs);
+            console.log('  - calculatedCostINR:', data.costs?.calculatedCostINR);
+            console.log('  - actualCostINR:', data.costs?.actualCostINR);
+            console.log('  - dataSource:', data.costs?.dataSource);
             setAnalytics(data);
         } catch (error) {
             console.error('Error loading analytics:', error);
@@ -285,7 +295,7 @@ const RiyaAnalytics = () => {
                                     />
                                     <Legend />
                                     <Bar dataKey="active_users" fill="hsl(174, 100%, 50%)" name="Active Users" radius={[8, 8, 0, 0]} />
-                                    <Bar dataKey="total_conversations" fill="hsl(280, 100%, 70%)" name="Conversations" radius={[8, 8, 0, 0]} />
+                                    <Bar dataKey="user_messages" fill="hsl(280, 100%, 70%)" name="User Messages" radius={[8, 8, 0, 0]} />
                                 </BarChart>
                             </ResponsiveContainer>
                         </div>
@@ -338,10 +348,28 @@ const RiyaAnalytics = () => {
                     </h2>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div className="p-4 rounded-xl bg-primary/10">
-                            <p className="text-muted-foreground text-sm">Total API Cost</p>
-                            <p className="font-display text-3xl font-bold text-foreground">
-                                ₹{parseFloat(analytics.costs.totalCostINR).toFixed(2)}
+                            <p className="text-muted-foreground text-sm flex items-center gap-2">
+                                Total API Cost
+                                {analytics.costs.dataSource === 'google_cloud' && (
+                                    <span className="text-xs text-green-400 flex items-center gap-1">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse"></span>
+                                        Live
+                                    </span>
+                                )}
+                                {analytics.costs.dataSource === 'calculated' && (
+                                    <span className="text-xs text-yellow-400">Est.</span>
+                                )}
                             </p>
+                            <p className="font-display text-3xl font-bold text-foreground">
+                                ₹{analytics.costs.actualCostINR
+                                    ? parseFloat(analytics.costs.actualCostINR).toFixed(2)
+                                    : parseFloat(analytics.costs.calculatedCostINR).toFixed(2)}
+                            </p>
+                            {analytics.costs.billingPeriod && (
+                                <p className="text-xs text-muted-foreground mt-1">
+                                    {analytics.costs.billingPeriod}
+                                </p>
+                            )}
                         </div>
                         <div className="p-4 rounded-xl bg-secondary/10">
                             <p className="text-muted-foreground text-sm">Cost Per User</p>
@@ -404,7 +432,8 @@ const RiyaAnalytics = () => {
                 </motion.div>
 
                 {/* Retention Chart */}
-                <motion.div
+                {/* User Retention - Commented out until retention calculation is fixed */}
+                {/* <motion.div
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.5 }}
@@ -439,7 +468,7 @@ const RiyaAnalytics = () => {
                             </LineChart>
                         </ResponsiveContainer>
                     </div>
-                </motion.div>
+                </motion.div> */}
 
                 {/* Vercel Analytics */}
                 {analytics.vercelAnalytics && (

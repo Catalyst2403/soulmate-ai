@@ -74,38 +74,65 @@ serve(async (req) => {
         });
 
         // ============================================
-        // 3. DAILY ACTIVITY (Active Users + Conversations)
+        // 3. DAILY ACTIVITY (Active Users + User Messages)
         // ============================================
 
         // Direct manual query (RPC function doesn't exist)
         const thirtyDaysAgo = new Date();
         thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-        const { data: conversations, error: convError } = await supabase
+        console.log('🔍 Fetching user messages from:', thirtyDaysAgo.toISOString());
+
+        const { data: userMessages, error: convError } = await supabase
             .from('riya_conversations')
-            .select('created_at, user_id')
-            .gte('created_at', thirtyDaysAgo.toISOString());
+            .select('created_at, user_id, role')
+            .gte('created_at', thirtyDaysAgo.toISOString())
+            .eq('role', 'user')
+            .order('created_at', { ascending: false }) // Newest first to avoid old data truncation
+            .limit(50000); // Override default 1000 row limit
 
         if (convError) {
-            console.error('Error fetching conversations for daily activity:', convError);
+            console.error('Error fetching user messages for daily activity:', convError);
+        }
+
+        console.log(`📊 Total user messages fetched: ${userMessages?.length || 0}`);
+
+        // Debug: Log first few records
+        if (userMessages && userMessages.length > 0) {
+            console.log('First 5 records:', userMessages.slice(0, 5));
         }
 
         const activityMap = new Map();
 
-        conversations?.forEach(conv => {
-            const date = new Date(conv.created_at).toISOString().split('T')[0];
+        userMessages?.forEach(msg => {
+            const date = new Date(msg.created_at).toISOString().split('T')[0];
             if (!activityMap.has(date)) {
-                activityMap.set(date, { date, users: new Set(), conversations: 0 });
+                activityMap.set(date, { date, users: new Set(), user_messages: 0 });
             }
-            activityMap.get(date).users.add(conv.user_id);
-            activityMap.get(date).conversations++;
+            activityMap.get(date).users.add(msg.user_id);
+            activityMap.get(date).user_messages++;
         });
+
+        console.log('📅 Daily activity map size:', activityMap.size);
+
+        // Debug: Log today's data specifically
+        const today = new Date().toISOString().split('T')[0];
+        const todayData = activityMap.get(today);
+        if (todayData) {
+            console.log(`📌 Today (${today}):`, {
+                users: Array.from(todayData.users),
+                uniqueUsers: todayData.users.size,
+                user_messages: todayData.user_messages
+            });
+        }
 
         const dailyActivityData = Array.from(activityMap.values()).map(d => ({
             date: d.date,
             active_users: d.users.size,
-            total_conversations: d.conversations
+            user_messages: d.user_messages
         })).sort((a, b) => b.date.localeCompare(a.date));
+
+        console.log('✅ Daily activity data prepared:', dailyActivityData.slice(0, 3));
 
         // ============================================
         // 4. ENGAGEMENT METRICS
@@ -122,15 +149,23 @@ serve(async (req) => {
         // ============================================
         // 5. COST METRICS
         // ============================================
+        console.log('💰 Fetching cost data from riya_conversations...');
+
         const { data: costData } = await supabase
             .from('riya_conversations')
-            .select('cost_inr, input_tokens, output_tokens, user_id');
+            .select('cost_inr, input_tokens, output_tokens, user_id')
+            .order('created_at', { ascending: false })
+            .limit(50000); // Override default 1000 row limit
+
+        console.log(`💵 Total cost records fetched: ${costData?.length || 0}`);
 
         const totalCostINR = costData?.reduce((sum, c) => sum + (parseFloat(c.cost_inr) || 0), 0) || 0;
         const totalTokens = costData?.reduce((sum, c) => sum + (c.input_tokens || 0) + (c.output_tokens || 0), 0) || 0;
 
         const uniqueUsers = new Set(costData?.map(c => c.user_id) || []).size;
         const costPerUser = uniqueUsers > 0 ? (totalCostINR / uniqueUsers).toFixed(4) : '0';
+
+        console.log(`💰 Total cost calculated: ₹${totalCostINR.toFixed(2)} from ${costData?.length || 0} records`);
 
         // ============================================
         // 6. REVENUE METRICS
@@ -206,12 +241,23 @@ serve(async (req) => {
 
         try {
             // Google Cloud Billing (if configured)
-            const gcpKey = Deno.env.get('GOOGLE_CLOUD_BILLING_KEY');
-            if (gcpKey) {
+            console.log('🔍 Checking Google Cloud Billing configuration...');
+            const serviceAccount = Deno.env.get('GOOGLE_CLOUD_SERVICE_ACCOUNT');
+            const projectId = Deno.env.get('GOOGLE_CLOUD_PROJECT_ID');
+            const billingAccountId = Deno.env.get('GOOGLE_CLOUD_BILLING_ACCOUNT_ID');
+
+            console.log(`  - Service Account: ${serviceAccount ? 'SET' : 'NOT SET'}`);
+            console.log(`  - Project ID: ${projectId ? 'SET' : 'NOT SET'}`);
+            console.log(`  - Billing Account ID: ${billingAccountId ? 'SET' : 'NOT SET'}`);
+
+            if (serviceAccount && projectId && billingAccountId) {
+                console.log('✅ All credentials found, fetching Google Cloud billing...');
                 googleCloudBilling = await fetchGoogleCloudBilling();
+            } else {
+                console.log('⚠️ Google Cloud Billing not configured - missing credentials');
             }
         } catch (error) {
-            console.warn('Google Cloud Billing API not configured or failed:', error);
+            console.error('❌ Google Cloud Billing API error:', error);
         }
 
         try {
@@ -242,12 +288,34 @@ serve(async (req) => {
                 totalMessages,
                 totalSessions: sessions?.length || 0
             },
-            costs: {
-                totalCostINR: totalCostINR.toFixed(4),
-                costPerUser,
-                totalTokens,
-                googleCloudBilling
-            },
+            costs: (() => {
+                console.log('💰 Cost Metrics Debug:');
+                console.log('  - totalCostINR (raw):', totalCostINR);
+                console.log('  - totalCostINR (formatted):', totalCostINR.toFixed(4));
+                console.log('  - costPerUser:', costPerUser);
+                console.log('  - totalTokens:', totalTokens);
+                console.log('  - googleCloudBilling:', googleCloudBilling);
+
+                const costsObject = {
+                    // Calculated estimate (from token-based calculations)
+                    calculatedCostINR: totalCostINR.toFixed(4),
+                    costPerUser,
+                    totalTokens,
+
+                    // Actual from Google Cloud (when available)
+                    actualCostUSD: googleCloudBilling?.monthlyBill || null,
+                    actualCostINR: googleCloudBilling?.monthlyBillINR?.toFixed(4) || null,
+                    actualCurrency: googleCloudBilling?.currency || null,
+                    billingPeriod: googleCloudBilling?.period || null,
+
+                    // Metadata
+                    dataSource: googleCloudBilling ? 'google_cloud' : 'calculated',
+                    lastUpdated: googleCloudBilling?.lastUpdated || new Date().toISOString()
+                };
+
+                console.log('  - Final costs object:', JSON.stringify(costsObject, null, 2));
+                return costsObject;
+            })(),
             revenue: {
                 payingUsers,
                 freeUsers,
@@ -299,9 +367,31 @@ function parseInterval(interval: string): number {
 }
 
 async function fetchGoogleCloudBilling() {
-    // Placeholder for Google Cloud Billing integration
-    // TODO: Implement when credentials are provided
-    return { monthlyBill: 0, note: 'Not configured' };
+    try {
+        // Check if credentials are configured
+        const serviceAccountBase64 = Deno.env.get('GOOGLE_CLOUD_SERVICE_ACCOUNT');
+        const billingAccountId = Deno.env.get('GOOGLE_CLOUD_BILLING_ACCOUNT_ID');
+        const projectId = Deno.env.get('GOOGLE_CLOUD_PROJECT_ID');
+
+        if (!serviceAccountBase64 || !billingAccountId || !projectId) {
+            console.log('⚠️ Google Cloud Billing not configured - using calculated costs');
+            return null;
+        }
+
+        console.log('☁️ Google Cloud Billing credentials found');
+        console.log('⚠️ Note: Google Cloud Billing API integration requires BigQuery export setup');
+        console.log('   For now, using calculated costs. See documentation for export setup.');
+
+        // TODO: Implement proper billing data fetch using BigQuery
+        // The Cloud Billing API doesn't directly provide cost data
+        // You need to export billing data to BigQuery first
+        // See: https://cloud.google.com/billing/docs/how-to/export-data-bigquery
+
+        return null; // Fall back to calculated costs for now
+    } catch (error) {
+        console.error('❌ Google Cloud Billing API error:', error instanceof Error ? error.message : 'Unknown error');
+        return null; // Fallback to calculated costs
+    }
 }
 
 
