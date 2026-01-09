@@ -1,48 +1,19 @@
-import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Crown, Clock, Sparkles } from 'lucide-react';
+import { X, Heart, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 interface PaywallModalProps {
     isOpen: boolean;
     onClose: () => void;
-    resetsAt?: string;
 }
 
 /**
  * Paywall Modal Component
  * Shown when free user reaches daily message limit (30 messages)
  */
-const PaywallModal = ({ isOpen, onClose, resetsAt }: PaywallModalProps) => {
+const PaywallModal = ({ isOpen, onClose }: PaywallModalProps) => {
     const navigate = useNavigate();
-    const [timeUntilReset, setTimeUntilReset] = useState('');
-
-    useEffect(() => {
-        if (!resetsAt) return;
-
-        const updateTimer = () => {
-            const now = new Date();
-            const resetTime = new Date(resetsAt);
-            const diff = resetTime.getTime() - now.getTime();
-
-            if (diff <= 0) {
-                setTimeUntilReset('Refreshing...');
-                // Reload page to reset message count
-                setTimeout(() => window.location.reload(), 1000);
-                return;
-            }
-
-            const hours = Math.floor(diff / (1000 * 60 * 60));
-            const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-            setTimeUntilReset(`${hours}h ${minutes}m`);
-        };
-
-        updateTimer();
-        const interval = setInterval(updateTimer, 60000); // Update every minute
-
-        return () => clearInterval(interval);
-    }, [resetsAt]);
 
     const handleUpgrade = () => {
         onClose();
@@ -78,18 +49,21 @@ const PaywallModal = ({ isOpen, onClose, resetsAt }: PaywallModalProps) => {
 
                     {/* Emoji/Icon */}
                     <div className="text-center">
-                        <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gradient-to-br from-yellow-400 to-orange-500 mb-2">
-                            <Crown className="w-8 h-8 text-white" />
+                        <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gradient-to-br from-pink-400 to-purple-500 mb-2">
+                            <Heart className="w-8 h-8 text-white" />
                         </div>
                     </div>
 
                     {/* Title */}
-                    <div className="text-center space-y-2">
+                    <div className="text-center space-y-3">
                         <h2 className="font-display text-2xl font-bold text-foreground">
-                            You're on a roll! 🔥
+                            Riya misses you already! �
                         </h2>
-                        <p className="text-muted-foreground">
-                            You've used all <span className="text-primary font-semibold">30 free messages</span> for today.
+                        <p className="text-muted-foreground leading-relaxed">
+                            You've used your <span className="text-primary font-semibold">30 free messages</span> for today.
+                        </p>
+                        <p className="text-sm text-muted-foreground italic">
+                            "I want to keep talking to you... but you'll have to upgrade to Pro or catch me tomorrow! 😊"
                         </p>
                     </div>
 
@@ -106,17 +80,16 @@ const PaywallModal = ({ isOpen, onClose, resetsAt }: PaywallModalProps) => {
                         </Button>
 
                         <p className="text-center text-sm text-muted-foreground">
-                            Unlimited messages • No daily limits
+                            Unlimited messages with Riya • No daily limits
                         </p>
                     </div>
 
-                    {/* Reset Timer */}
-                    {timeUntilReset && (
-                        <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground border-t border-border pt-4">
-                            <Clock className="w-4 h-4" />
-                            <span>Free messages reset in: <span className="text-foreground font-medium">{timeUntilReset}</span></span>
-                        </div>
-                    )}
+                    {/* Talk Tomorrow Message */}
+                    <div className="text-center border-t border-border pt-4">
+                        <p className="text-sm text-muted-foreground">
+                            Or talk to me tomorrow! I'll be waiting... 🌙
+                        </p>
+                    </div>
                 </motion.div>
             </motion.div>
         </AnimatePresence>

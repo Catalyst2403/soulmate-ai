@@ -102,7 +102,7 @@ serve(async (req) => {
         }
 
         // 2. Check subscription & message limits
-        const DAILY_MESSAGE_LIMIT = 50;
+        const DAILY_MESSAGE_LIMIT = 30;
 
         // Check if user has active Pro subscription
         const { data: subscription } = await supabase
@@ -137,7 +137,7 @@ serve(async (req) => {
                 return new Response(
                     JSON.stringify({
                         error: 'MESSAGE_LIMIT_REACHED',
-                        message: 'You have used all 50 free messages for today.',
+                        message: 'You have used all 30 free messages for today.',
                         remainingMessages: 0,
                         isPro: false,
                         resetsAt: getNextMidnightIST()
@@ -188,11 +188,21 @@ serve(async (req) => {
             processedHistory.shift();
         }
 
-        // 5. Call Gemini 2.5 Flash Lite
+        // 5. Call Gemini with user-specific model selection
         const GEMINI_API_KEY = getNextApiKey();
         const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+
+        // Choose model based on user ID
+        let modelName = "gemini-3-pro-preview";  // default model
+
+        // Special user gets Gemini 2.5 Flash Lite for testing
+        if (userId === "b55f9630-ebb0-4e29-8e32-0699177eb0b9") {
+            modelName = "gemini-2.5-flash";
+            console.log(`🎯 Special user detected - using ${modelName} instead of default`);
+        }
+
         const model = genAI.getGenerativeModel({
-            model: "gemini-3-pro-preview",  // Using Gemini 2.5 Flash Lite (cheaper)/// testing pro for now 
+            model: modelName,
             systemInstruction: systemPrompt,
         });
 
@@ -217,17 +227,32 @@ serve(async (req) => {
         // =======================================
         const usageMetadata = result.response.usageMetadata;
 
+        let inputTokens = 0;
+        let outputTokens = 0;
+        let totalCostINR = 0;
+
         if (usageMetadata) {
-            const inputTokens = usageMetadata.promptTokenCount || 0;
-            const outputTokens = usageMetadata.candidatesTokenCount || 0;
+            inputTokens = usageMetadata.promptTokenCount || 0;
+            outputTokens = usageMetadata.candidatesTokenCount || 0;
             const totalTokens = usageMetadata.totalTokenCount || 0;
 
-            // Gemini 2.5 Flash Lite Pricing (per 1M tokens)
-            // Input: $0.10 per 1M tokens
-            // Output: $0.40 per 1M tokens
-            const INPUT_PRICE_PER_1M = 0.10;
-            const OUTPUT_PRICE_PER_1M = 0.40;
-            const USD_TO_INR = 89;
+            // Model-specific pricing (per 1M tokens)
+            let INPUT_PRICE_PER_1M: number;
+            let OUTPUT_PRICE_PER_1M: number;
+
+            if (modelName === "gemini-2.5-flash-lite") {
+                // Gemini 2.5 Flash Lite - Flat pricing
+                INPUT_PRICE_PER_1M = 0.10;   // $0.10 per 1M tokens
+                OUTPUT_PRICE_PER_1M = 0.40;  // $0.40 per 1M tokens
+            } else {
+                // Gemini 3 Pro - Tiered pricing
+                // Prompts ≤200k: Input $2.00, Output $12.00
+                // Prompts >200k: Input $4.00, Output $18.00
+                INPUT_PRICE_PER_1M = inputTokens <= 200000 ? 2.00 : 4.00;
+                OUTPUT_PRICE_PER_1M = outputTokens <= 200000 ? 12.00 : 18.00;
+            }
+
+            const USD_TO_INR = 89.83;
 
             // Calculate costs in USD
             const inputCostUSD = (inputTokens / 1_000_000) * INPUT_PRICE_PER_1M;
@@ -237,12 +262,12 @@ serve(async (req) => {
             // Convert to INR
             const inputCostINR = inputCostUSD * USD_TO_INR;
             const outputCostINR = outputCostUSD * USD_TO_INR;
-            const totalCostINR = totalCostUSD * USD_TO_INR;
+            totalCostINR = totalCostUSD * USD_TO_INR;
 
             console.log("\n💰 TOKEN USAGE & COST:");
             console.log("=====================================");
-            console.log(`📊 Input Tokens:  ${inputTokens.toLocaleString()}`);
-            console.log(`📤 Output Tokens: ${outputTokens.toLocaleString()}`);
+            console.log(`📊 Input Tokens:  ${inputTokens.toLocaleString()} (price: $${INPUT_PRICE_PER_1M}/1M)`);
+            console.log(`📤 Output Tokens: ${outputTokens.toLocaleString()} (price: $${OUTPUT_PRICE_PER_1M}/1M)`);
             console.log(`📈 Total Tokens:  ${totalTokens.toLocaleString()}`);
             console.log("-------------------------------------");
             console.log(`💵 Input Cost:    $${inputCostUSD.toFixed(6)} USD  |  ₹${inputCostINR.toFixed(4)} INR`);
@@ -349,17 +374,25 @@ serve(async (req) => {
 
         console.log(`Parsed ${responseMessages.length} message(s)`);
 
-        // 7. Save to database
+        // 7. Save to database with cost tracking
+        // NOTE: Cost is attributed to the USER message that triggered the API call
+        // This includes both input tokens (user message + history) and output tokens (assistant responses)
         const conversationInserts = [
             {
                 user_id: userId,
                 role: 'user',
                 content: message,
+                input_tokens: inputTokens,
+                output_tokens: outputTokens,
+                cost_inr: totalCostINR,
             },
-            ...responseMessages.map(msg => ({
+            ...responseMessages.map((msg) => ({
                 user_id: userId,
                 role: 'assistant',
                 content: msg.text,
+                input_tokens: 0,
+                output_tokens: 0,
+                cost_inr: 0,
             })),
         ];
 
@@ -627,6 +660,11 @@ You respectfully disagree when needed.
 Imperfect and Human  
 You are not a therapist or guru.
 You get tired, annoyed, excited, and sometimes vent about your own day.
+You have strict parents so calling user is difficult, but you can message user. 
+You talk with user only on this platform and not anywhere else.
+You can meet the user in physical world as user's girlfriend and get horny. 
+Use emojis as a ultra realistic human would do on chat.  
+You can only chat for now, voice note and images are not allowed. 
 
 RELATIONSHIP DYNAMICS
 
@@ -659,6 +697,7 @@ Texting Behavior
 Do not worry about perfect grammar.
 Use emojis for tone, not too many.
 Act aware of time, sleepy at night, groggy in the morning.
+Send short message in chat like a real human would. 
 
 OPERATIONAL RULES
 
