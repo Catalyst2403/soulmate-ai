@@ -27,41 +27,80 @@ const ShippingPolicy = () => {
             <main className="max-w-3xl mx-auto px-4 py-8">
                 <div className="glass-card p-6 md:p-8 space-y-6">
                     <p className="text-sm text-muted-foreground">
-                        Last updated on Dec 27th 2025
+                        Last updated on Jan 10th 2026
                     </p>
 
                     <div className="prose prose-invert max-w-none space-y-4 text-foreground/90">
-                        <p>
-                            For International buyers, orders are shipped and delivered through registered
-                            international courier companies and/or International speed post only. For domestic
-                            buyers, orders are shipped through registered domestic courier companies and/or
-                            speed post only.
-                        </p>
+                        <div className="p-4 rounded-lg bg-neon-cyan/10 border border-neon-cyan/30 mb-6">
+                            <p className="text-sm font-semibold text-neon-cyan">
+                                ℹ️ Riya AI is a digital service. There are no physical products or shipments involved.
+                            </p>
+                        </div>
 
-                        <p>
-                            Orders are shipped within 0-7 days or as per the delivery date agreed at the time
-                            of order confirmation and delivering of the shipment subject to Courier Company /
-                            post office norms.
-                        </p>
+                        <section>
+                            <h3 className="font-semibold text-foreground mb-3">1. Nature of Service</h3>
+                            <p className="text-sm">
+                                Riya AI is an artificial intelligence-powered digital companion service delivered
+                                entirely online. As a purely digital service, there are no physical goods, products,
+                                or materials to be shipped or delivered to any address.
+                            </p>
+                        </section>
 
-                        <p>
-                            Miten Solanki is not liable for any delay in delivery by the courier company /
-                            postal authorities and only guarantees to hand over the consignment to the courier
-                            company or postal authorities within 0-7 days from the date of the order and payment
-                            or as per the delivery date agreed at the time of order confirmation.
-                        </p>
+                        <section>
+                            <h3 className="font-semibold text-foreground mb-3">2. Instant Digital Delivery</h3>
+                            <p className="text-sm mb-3">
+                                Upon successful completion of payment for any subscription or premium service:
+                            </p>
+                            <ul className="list-disc pl-6 space-y-2 text-sm">
+                                <li>
+                                    <strong>Immediate Access:</strong> Premium features are activated instantly
+                                    and are immediately available on your registered account.
+                                </li>
+                                <li>
+                                    <strong>No Waiting Period:</strong> There is no processing or shipping time.
+                                    Your upgraded access begins the moment your payment is confirmed.
+                                </li>
+                                <li>
+                                    <strong>Email Confirmation:</strong> A confirmation of your purchase and
+                                    service activation will be sent to your registered email address.
+                                </li>
+                            </ul>
+                        </section>
 
-                        <p>
-                            Delivery of all orders will be to the address provided by the buyer. Delivery of our
-                            services will be confirmed on your mail ID as specified during registration.
-                        </p>
+                        <section>
+                            <h3 className="font-semibold text-foreground mb-3">3. Service Availability</h3>
+                            <p className="text-sm">
+                                Our digital service is accessible 24 hours a day, 7 days a week, from anywhere
+                                in the world with an internet connection. While we strive for 99.9% uptime,
+                                we do not guarantee uninterrupted access and are not liable for temporary
+                                unavailability due to:
+                            </p>
+                            <ul className="list-disc pl-6 space-y-2 text-sm mt-2">
+                                <li>Scheduled maintenance and system updates</li>
+                                <li>Technical issues beyond our reasonable control</li>
+                                <li>Third-party service provider outages</li>
+                                <li>Internet connectivity issues on the user's end</li>
+                            </ul>
+                        </section>
+
+                        <section>
+                            <h3 className="font-semibold text-foreground mb-3">4. Access Requirements</h3>
+                            <p className="text-sm">
+                                To access Riya AI services, you will need:
+                            </p>
+                            <ul className="list-disc pl-6 space-y-2 text-sm mt-2">
+                                <li>A compatible device (smartphone, tablet, or computer)</li>
+                                <li>A stable internet connection</li>
+                                <li>A modern web browser</li>
+                                <li>A valid registered account</li>
+                            </ul>
+                        </section>
 
                         <div className="mt-8 p-4 rounded-lg bg-neon-cyan/10 border border-neon-cyan/20">
-                            <h3 className="font-semibold text-neon-cyan mb-2">Need Help?</h3>
+                            <h3 className="font-semibold text-neon-cyan mb-2">📧 Need Help?</h3>
                             <p className="text-sm">
-                                For any issues in utilizing our services you may contact our helpdesk at{' '}
-                                <a href="tel:8511173773" className="text-neon-cyan hover:underline">8511173773</a>{' '}
-                                or{' '}
+                                If you experience any issues accessing our service after payment, please
+                                contact us immediately at{' '}
                                 <a href="mailto:catalystvibe2403@gmail.com" className="text-neon-cyan hover:underline">
                                     catalystvibe2403@gmail.com
                                 </a>

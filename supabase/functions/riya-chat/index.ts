@@ -173,19 +173,34 @@ serve(async (req) => {
         console.log(systemPrompt);
         console.log("=====================================\n");
 
-        // 3. Fetch FULL conversation history
-        const { data: history, error: historyError } = await supabase
+        // 3. Fetch conversation history
+        // For specific test user, limit to last 20 messages
+        const isTestUser = userId === "b55f9630-ebb0-4e29-8e32-0699177eb0b9";
+
+        let query = supabase
             .from('riya_conversations')
             .select('*')
-            .eq('user_id', userId)
-            .order('created_at', { ascending: true });
+            .eq('user_id', userId);
+
+        if (isTestUser) {
+            // For test user: Get last 20 messages
+            query = query
+                .order('created_at', { ascending: false })
+                .limit(20);
+        } else {
+            // For other users: Get full history
+            query = query.order('created_at', { ascending: true });
+        }
+
+        const { data: history, error: historyError } = await query;
 
         if (historyError) {
             console.error("Error fetching history:", historyError);
         }
 
-        const conversationHistory = history || [];
-        console.log(`Total conversation messages: ${conversationHistory.length}`);
+        // Reverse if limited (to get chronological order)
+        const conversationHistory = isTestUser ? (history || []).reverse() : (history || []);
+        console.log(`Total conversation messages: ${conversationHistory.length}${isTestUser ? ' (limited to last 20)' : ''}`);
 
         // 4. Format for Gemini
         let processedHistory = conversationHistory.map((msg: any) => ({
@@ -250,10 +265,10 @@ serve(async (req) => {
             let INPUT_PRICE_PER_1M: number;
             let OUTPUT_PRICE_PER_1M: number;
 
-            if (modelName === "gemini-2.5-flash-lite") {
-                // Gemini 2.5 Flash Lite - Flat pricing
-                INPUT_PRICE_PER_1M = 0.10;   // $0.10 per 1M tokens
-                OUTPUT_PRICE_PER_1M = 0.40;  // $0.40 per 1M tokens
+            if (modelName === "gemini-2.5-flash") {
+                // Gemini 2.5 Flash - Flat pricing (all context lengths)
+                INPUT_PRICE_PER_1M = 0.30;   // $0.30 per 1M tokens
+                OUTPUT_PRICE_PER_1M = 2.50;  // $2.50 per 1M tokens
             } else {
                 // Gemini 3 Pro - Tiered pricing
                 // Prompts ≤200k: Input $2.00, Output $12.00

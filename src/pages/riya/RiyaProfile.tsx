@@ -115,10 +115,13 @@ export default function RiyaProfile({ age, onClose }: RiyaProfileProps) {
                         />
                     </div>
 
-                    {/* Footer Info */}
-                    <div className="px-6 py-8 text-center">
+                    {/* AI Disclaimer Footer */}
+                    <div className="px-6 py-8 text-center border-t border-[#2A3942]">
+                        {/* <p className="text-[#8696A0] text-xs leading-relaxed mb-2">
+                            <span className="text-[#00A884] font-semibold">⚠️ AI Disclaimer</span>
+                        </p> */}
                         <p className="text-[#8696A0] text-xs leading-relaxed">
-                            Riya is your AI companion designed to feel like a real friend. Your conversations are private and secure.
+                            Riya is a fictional AI character and not a real person. Treat all interactions as entertainment only. Do not rely on responses for factual, medical, legal, or financial advice. Your conversations are private and secure.
                         </p>
                     </div>
                 </div>

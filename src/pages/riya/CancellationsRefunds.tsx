@@ -27,39 +27,111 @@ const CancellationsRefunds = () => {
             <main className="max-w-3xl mx-auto px-4 py-8">
                 <div className="glass-card p-6 md:p-8 space-y-6">
                     <p className="text-sm text-muted-foreground">
-                        Last updated on Dec 27th 2025
+                        Last updated on Jan 10th 2026
                     </p>
 
                     <div className="prose prose-invert max-w-none space-y-4 text-foreground/90">
-                        <p>
-                            Miten Solanki believes in helping its customers as far as possible, and has
-                            therefore a liberal cancellation policy. Under this policy:
-                        </p>
+                        {/* <div className="p-4 rounded-lg bg-red-500/10 border border-red-500/30 mb-6">
+                            <p className="text-sm font-semibold text-red-400">
+                                ⚠️ IMPORTANT: All payments are final and non-refundable. Please read this policy carefully before making a purchase.
+                            </p>
+                        </div> */}
 
-                        <div className="space-y-4">
-                            <div className="p-4 rounded-lg bg-foreground/5 border border-border/50">
-                                <h3 className="font-semibold text-foreground mb-2">📋 Cancellations</h3>
-                                <p className="text-sm">
-                                    Cancellations will be considered only if the request is made within 7 days
-                                    of placing the order. However, the cancellation request may not be entertained
-                                    if the orders have been communicated to the vendors/merchants and they have
-                                    initiated the process of shipping them.
-                                </p>
-                            </div>
+                        <section>
+                            <h3 className="font-semibold text-foreground mb-3">1. No Refund Policy</h3>
+                            <p className="text-sm mb-3">
+                                All payments made for subscription plans, premium features, and any other paid
+                                services offered by Miten Solanki ("Riya AI") are <strong>FINAL AND NON-REFUNDABLE</strong>.
+                                By completing a purchase, you expressly acknowledge and agree to the following:
+                            </p>
+                            <ul className="list-disc pl-6 space-y-2 text-sm">
+                                <li>
+                                    All charges are non-refundable, regardless of whether you choose to use the
+                                    service or not after purchase.
+                                </li>
+                                <li>
+                                    No pro-rata, partial, or proportionate refunds shall be provided for any
+                                    unused portion of your subscription period.
+                                </li>
+                                <li>
+                                    Dissatisfaction with the service, change of mind, or failure to use the
+                                    service does not entitle you to a refund.
+                                </li>
+                                <li>
+                                    Technical issues on your end (device compatibility, internet connectivity,
+                                    etc.) do not qualify for refunds.
+                                </li>
+                            </ul>
+                        </section>
 
-                            <div className="p-4 rounded-lg bg-foreground/5 border border-border/50">
-                                <h3 className="font-semibold text-foreground mb-2">🔍 Product Not as Described</h3>
-                                <p className="text-sm">
-                                    In case you do not like the chatbot experience, we'll refund your money within 7 days of your purchase.
-                                </p>
-                            </div>
-                        </div>
+                        <section>
+                            <h3 className="font-semibold text-foreground mb-3">2. Digital Services Acknowledgment</h3>
+                            <p className="text-sm">
+                                You acknowledge that Riya AI is a digital service that is delivered immediately
+                                upon successful payment. As such, you expressly waive any statutory "cooling-off"
+                                period or right of withdrawal that may otherwise apply to consumer transactions,
+                                to the extent permitted by applicable law. The nature of digital goods and services
+                                makes them non-returnable once access has been granted.
+                            </p>
+                        </section>
+
+                        <section>
+                            <h3 className="font-semibold text-foreground mb-3">3. Subscription Cancellation</h3>
+                            <p className="text-sm mb-3">
+                                You may cancel your subscription at any time through your account settings or by
+                                contacting our support team. Upon cancellation:
+                            </p>
+                            <ul className="list-disc pl-6 space-y-2 text-sm">
+                                <li>
+                                    Your subscription will remain active until the end of your current billing period.
+                                </li>
+                                <li>
+                                    You will not be charged for subsequent billing periods after cancellation.
+                                </li>
+                                <li>
+                                    <strong>No refund will be issued</strong> for the remaining days of your
+                                    current billing period or any prior billing periods.
+                                </li>
+                                <li>
+                                    After the billing period ends, your account will revert to free tier access.
+                                </li>
+                            </ul>
+                        </section>
+
+                        <section>
+                            <h3 className="font-semibold text-foreground mb-3">4. Exceptional Circumstances</h3>
+                            <p className="text-sm">
+                                Refunds may be considered solely at the discretion of Miten Solanki in cases of:
+                            </p>
+                            <ul className="list-disc pl-6 space-y-2 text-sm mt-2">
+                                <li>Duplicate or erroneous charges caused by payment processing errors</li>
+                                <li>Unauthorized transactions (subject to verification and investigation)</li>
+                            </ul>
+                            <p className="text-sm mt-3">
+                                Any such refund requests must be submitted within 7 days of the transaction
+                                date with supporting documentation. Approval of refunds under exceptional
+                                circumstances is not guaranteed and remains at our sole discretion.
+                            </p>
+                        </section>
+
+                        <section>
+                            <h3 className="font-semibold text-foreground mb-3">5. Legal Compliance</h3>
+                            <p className="text-sm">
+                                This no-refund policy is established in accordance with applicable consumer
+                                protection laws governing digital services and intangible goods in India.
+                                By making a purchase, you confirm that you have read, understood, and agreed
+                                to this policy.
+                            </p>
+                        </section>
 
                         <div className="mt-8 p-4 rounded-lg bg-neon-cyan/10 border border-neon-cyan/20">
-                            <h3 className="font-semibold text-neon-cyan mb-2">💳 Refund Processing</h3>
+                            <h3 className="font-semibold text-neon-cyan mb-2">📧 Contact Us</h3>
                             <p className="text-sm">
-                                In case of any Refunds approved by Miten Solanki, it'll take{' '}
-                                <strong>3-5 business days</strong> for the refund to be processed to the end customer.
+                                For any questions regarding this policy or to report payment issues, please
+                                contact us at{' '}
+                                <a href="mailto:catalystvibe2403@gmail.com" className="text-neon-cyan hover:underline">
+                                    catalystvibe2403@gmail.com
+                                </a>
                             </p>
                         </div>
                     </div>
