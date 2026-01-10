@@ -27,7 +27,7 @@ const PrivacyPolicy = () => {
             <main className="max-w-3xl mx-auto px-4 py-8">
                 <div className="glass-card p-6 md:p-8 space-y-6">
                     <p className="text-sm text-muted-foreground">
-                        Last updated on Dec 27th 2025
+                        Last updated on Jan 10th 2026
                     </p>
 
                     <div className="prose prose-invert max-w-none space-y-6 text-foreground/90">
@@ -76,7 +76,73 @@ const PrivacyPolicy = () => {
 
                         <section>
                             <h2 className="text-lg font-semibold text-foreground mb-3">
-                                3. Data Security
+                                3. Anonymized Data and Service Improvement
+                            </h2>
+                            <p className="text-sm mb-3">
+                                We may collect, use, and process aggregated and anonymized data derived from
+                                your usage of our service, including but not limited to conversation patterns,
+                                interaction metrics, and behavioral analytics. Such anonymized data:
+                            </p>
+                            <ul className="list-disc pl-6 space-y-2 text-sm">
+                                <li>
+                                    Shall be used to analyze trends, improve our AI models, enhance service
+                                    quality, and develop new features
+                                </li>
+                                <li>
+                                    Does not personally identify you and cannot be traced back to any individual user
+                                </li>
+                                <li>
+                                    May be retained indefinitely for analytical and research purposes
+                                </li>
+                                <li>
+                                    May be used to train, fine-tune, and improve our artificial intelligence systems
+                                </li>
+                            </ul>
+                            <p className="text-sm mt-3">
+                                By using our service, you expressly consent to the collection and use of such
+                                anonymized data for the purposes described herein.
+                            </p>
+                        </section>
+
+                        <section>
+                            <h2 className="text-lg font-semibold text-foreground mb-3">
+                                4. Third-Party Service Providers
+                            </h2>
+                            <p className="text-sm mb-3">
+                                To provide our service, we engage third-party service providers who may have
+                                access to your personal information. These providers are contractually obligated
+                                to protect your data and use it only for the purposes specified by us:
+                            </p>
+                            <ul className="list-disc pl-6 space-y-2 text-sm">
+                                <li>
+                                    <strong>AI Processing Services:</strong> We utilize Google's Gemini AI
+                                    platform to power our conversational AI features. Your messages are processed
+                                    by Google's servers to generate AI responses. Google's privacy practices are
+                                    governed by their own privacy policy.
+                                </li>
+                                <li>
+                                    <strong>Authentication Services:</strong> We use Google OAuth for secure
+                                    sign-in functionality.
+                                </li>
+                                <li>
+                                    <strong>Cloud Infrastructure:</strong> Your data is stored and processed
+                                    using secure cloud infrastructure services.
+                                </li>
+                                <li>
+                                    <strong>Payment Processing:</strong> Transactions are processed by
+                                    third-party payment gateways that maintain their own security standards
+                                    and privacy policies.
+                                </li>
+                            </ul>
+                            <p className="text-sm mt-3">
+                                We ensure that all third-party service providers adhere to appropriate data
+                                protection standards and are bound by confidentiality obligations.
+                            </p>
+                        </section>
+
+                        <section>
+                            <h2 className="text-lg font-semibold text-foreground mb-3">
+                                5. Data Security
                             </h2>
                             <p className="text-sm">
                                 We implement appropriate technical and organizational security measures to protect
@@ -88,7 +154,7 @@ const PrivacyPolicy = () => {
 
                         <section>
                             <h2 className="text-lg font-semibold text-foreground mb-3">
-                                4. Data Sharing
+                                6. Data Sharing
                             </h2>
                             <p className="text-sm mb-3">
                                 We do not sell your personal information. We may share your information only in
@@ -104,7 +170,7 @@ const PrivacyPolicy = () => {
 
                         <section>
                             <h2 className="text-lg font-semibold text-foreground mb-3">
-                                5. Data Retention
+                                7. Data Retention
                             </h2>
                             <p className="text-sm">
                                 We retain your personal information for as long as your account is active or as
@@ -115,7 +181,7 @@ const PrivacyPolicy = () => {
 
                         <section>
                             <h2 className="text-lg font-semibold text-foreground mb-3">
-                                6. Your Rights
+                                8. Your Rights
                             </h2>
                             <p className="text-sm mb-3">Depending on your location, you may have the right to:</p>
                             <ul className="list-disc pl-6 space-y-2 text-sm">
@@ -128,7 +194,7 @@ const PrivacyPolicy = () => {
 
                         <section>
                             <h2 className="text-lg font-semibold text-foreground mb-3">
-                                7. Children's Privacy
+                                9. Children's Privacy
                             </h2>
                             <p className="text-sm">
                                 Our service is not intended for users under the age of 13. We do not knowingly
@@ -139,7 +205,7 @@ const PrivacyPolicy = () => {
 
                         <section>
                             <h2 className="text-lg font-semibold text-foreground mb-3">
-                                8. Changes to This Policy
+                                10. Changes to This Policy
                             </h2>
                             <p className="text-sm">
                                 We may update this Privacy Policy from time to time. We will notify you of any
