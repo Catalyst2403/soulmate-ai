@@ -14,8 +14,35 @@ interface RiyaChatRequest {
 
 /**
  * Riya Chat Edge Function
- * Uses Gemini 2.5 Flash Lite with full conversation history
+ * Uses sliding window + summarization for cost optimization
+ * - Keeps last 50 messages raw
+ * - Summarizes older messages into relationship memory
+ * - Falls back through multiple models if summarization fails
  */
+
+// =======================================
+// CONFIGURATION CONSTANTS
+// =======================================
+
+// Summarization settings
+const RECENT_MESSAGES_LIMIT = 50;           // Keep last 50 messages raw (~15-20 user turns)
+const SUMMARIZE_THRESHOLD = 80;             // Trigger summarization when total > 80
+const SUMMARY_MODEL_PRIMARY = "gemini-2.5-flash-lite";
+const SUMMARY_MODEL_FALLBACK = "gemini-2.5-flash";
+const SUMMARY_MODEL_LAST_RESORT = "gemini-3-pro-preview";
+
+// Tiered model settings for free users
+const PRO_MODEL = "gemini-3-pro-preview";   // Best quality model for Pro users & first 20 msgs
+const FREE_MODEL = "gemini-2.5-flash-lite"; // Cost-effective model after 20 msgs
+const PRO_MODEL_LIMIT = 20;                  // First 20 messages use Pro model
+const DAILY_MESSAGE_LIMIT_FREE = 200;        // Soft cap: 200 msgs/day for free users (DDoS protection)
+
+// Rate limiting (per-user, per-minute)
+const RATE_LIMIT_WINDOW_MS = 60_000;         // 1 minute window
+const RATE_LIMIT_MAX_REQUESTS = 30;          // Max 30 requests per minute
+
+// In-memory rate limit store (resets on cold start, acceptable for DDoS protection)
+const rateLimitStore: Map<string, { count: number; windowStart: number }> = new Map();
 
 // Initialize API key pool
 let apiKeyPool: string[] = [];
@@ -77,6 +104,127 @@ function getNextMidnightIST(): string {
     return midnightISTinUTC.toISOString();
 }
 
+// =======================================
+// RATE LIMITING HELPER
+// =======================================
+
+/**
+ * Check if user is rate limited (DDoS protection)
+ * Returns true if request should be blocked
+ */
+function isRateLimited(userId: string): boolean {
+    const now = Date.now();
+    const userLimit = rateLimitStore.get(userId);
+
+    if (!userLimit || (now - userLimit.windowStart) > RATE_LIMIT_WINDOW_MS) {
+        // Start new window
+        rateLimitStore.set(userId, { count: 1, windowStart: now });
+        return false;
+    }
+
+    if (userLimit.count >= RATE_LIMIT_MAX_REQUESTS) {
+        console.log(`🚫 Rate limit exceeded for user ${userId}: ${userLimit.count}/${RATE_LIMIT_MAX_REQUESTS} in window`);
+        return true;
+    }
+
+    // Increment counter
+    userLimit.count++;
+    return false;
+}
+
+// =======================================
+// SUMMARIZATION HELPERS
+// =======================================
+
+/**
+ * Format messages for the summarization prompt
+ */
+function formatMessagesForSummary(messages: any[]): string {
+    return messages.map((msg: any) => {
+        const role = msg.role === 'user' ? 'User' : 'Riya';
+        return `${role}: ${msg.content}`;
+    }).join('\n');
+}
+
+/**
+ * Simple extractive summary when all LLM calls fail
+ * Extracts key topics without using an LLM
+ */
+function createSimpleSummary(messages: any[], existingSummary: string | null): string {
+    const userMessages = messages.filter((m: any) => m.role === 'user');
+    const sample = userMessages.slice(0, 30).map((m: any) => m.content).join(' | ');
+    const truncatedSample = sample.substring(0, 800);
+
+    if (existingSummary) {
+        return `${existingSummary}\n\n[Recent conversation topics: ${truncatedSample}...]`;
+    }
+    return `[Conversation topics: ${truncatedSample}...]`;
+}
+
+/**
+ * Generate conversation summary using tiered model fallback
+ * Tries Flash Lite → Flash → Pro → Simple extraction
+ */
+async function generateConversationSummary(
+    messages: any[],
+    existingSummary: string | null,
+    genAI: any
+): Promise<string> {
+    const formattedMessages = formatMessagesForSummary(messages);
+
+    const summaryPrompt = existingSummary
+        ? `You are creating a relationship memory for Riya (an AI girlfriend). Update this existing memory with the new conversations:
+
+EXISTING MEMORY:
+${existingSummary}
+
+NEW CONVERSATIONS TO INCORPORATE:
+${formattedMessages}
+
+Create an updated memory that captures:
+- Key relationship dynamics and inside jokes
+- User's life details (job, hobbies, family, location)
+- Shared experiences and memorable moments
+- Emotional patterns and what makes the user happy/sad
+- User's preferences and dislikes
+
+Write in third person about the user. Keep under 600 words. Be specific, not generic.`
+        : `You are creating a relationship memory for Riya (an AI girlfriend) based on these conversations:
+
+${formattedMessages}
+
+Create a memory that captures:
+- Key relationship dynamics and inside jokes
+- User's life details (job, hobbies, family, location)
+- Shared experiences and memorable moments
+- Emotional patterns and what makes the user happy/sad
+- User's preferences and dislikes
+
+Write in third person about the user. Keep under 600 words. Be specific, not generic.`;
+
+    // Try models in order: Flash Lite → Flash → Pro
+    const models = [SUMMARY_MODEL_PRIMARY, SUMMARY_MODEL_FALLBACK, SUMMARY_MODEL_LAST_RESORT];
+
+    for (const modelName of models) {
+        try {
+            console.log(`📝 Attempting summary generation with ${modelName}...`);
+            const model = genAI.getGenerativeModel({ model: modelName });
+            const result = await model.generateContent(summaryPrompt);
+            const summary = result.response.text();
+            console.log(`✅ Summary generated successfully using ${modelName}`);
+            return summary;
+        } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            console.warn(`⚠️ ${modelName} failed: ${errorMsg}`);
+            // Continue to next model
+        }
+    }
+
+    // Ultimate fallback: simple extraction without LLM
+    console.log("⚠️ All models failed, using simple extraction fallback");
+    return createSimpleSummary(messages, existingSummary);
+}
+
 serve(async (req) => {
     if (req.method === "OPTIONS") {
         return new Response(null, { headers: corsHeaders });
@@ -111,10 +259,18 @@ serve(async (req) => {
             console.error('Error updating last_active:', updateError);
         }
 
-        // 2. Check subscription & message limits
-        const DAILY_MESSAGE_LIMIT = 30;
+        // 2. Rate limiting check (DDoS protection)
+        if (isRateLimited(userId)) {
+            return new Response(
+                JSON.stringify({
+                    error: 'RATE_LIMITED',
+                    message: 'Too many requests. Please slow down.',
+                }),
+                { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+        }
 
-        // Check if user has active Pro subscription
+        // 3. Check subscription & message limits
         const { data: subscription } = await supabase
             .from('riya_subscriptions')
             .select('*')
@@ -124,7 +280,9 @@ serve(async (req) => {
             .single();
 
         const isPro = !!subscription;
-        let remainingMessages = -1; // -1 means unlimited (Pro user)
+        let remainingProMessages = -1;  // -1 means unlimited Pro model access
+        let usingFreeModel = false;     // Flag to tell frontend to show soft paywall
+        let currentCount = 0;
 
         if (!isPro) {
             // Get today's message count for free user
@@ -137,19 +295,28 @@ serve(async (req) => {
                 .eq('usage_date', today)
                 .single();
 
-            const currentCount = dailyUsage?.message_count || 0;
-            remainingMessages = Math.max(0, DAILY_MESSAGE_LIMIT - currentCount);
+            currentCount = dailyUsage?.message_count || 0;
 
-            console.log(`📊 Free user daily usage: ${currentCount}/${DAILY_MESSAGE_LIMIT} messages`);
+            // Calculate remaining Pro-quality messages
+            remainingProMessages = Math.max(0, PRO_MODEL_LIMIT - currentCount);
 
-            if (currentCount >= DAILY_MESSAGE_LIMIT) {
-                console.log("❌ Daily message limit reached for user:", userId);
+            // Check if using free model (after first 20 messages)
+            if (currentCount >= PRO_MODEL_LIMIT) {
+                usingFreeModel = true;
+            }
+
+            console.log(`📊 Free user: ${currentCount} msgs today | Pro remaining: ${remainingProMessages} | Using free model: ${usingFreeModel}`);
+
+            // Soft cap at 200 messages (DDoS/abuse protection)
+            if (currentCount >= DAILY_MESSAGE_LIMIT_FREE) {
+                console.log("❌ Soft daily limit reached for user:", userId);
                 return new Response(
                     JSON.stringify({
-                        error: 'MESSAGE_LIMIT_REACHED',
-                        message: 'You have used all 30 free messages for today.',
-                        remainingMessages: 0,
+                        error: 'SOFT_LIMIT_REACHED',
+                        message: 'You\'ve sent a lot of messages today! Take a break and come back tomorrow 💤',
+                        remainingProMessages: 0,
                         isPro: false,
+                        usingFreeModel: true,
                         resetsAt: getNextMidnightIST()
                     }),
                     { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -173,57 +340,100 @@ serve(async (req) => {
         console.log(systemPrompt);
         console.log("=====================================\n");
 
-        // 3. Fetch conversation history
-        // For specific test user, limit to last 20 messages
-        const isTestUser = userId === "b55f9630-ebb0-4e29-8e32-0699177eb0b9";
+        // =======================================
+        // 4. SLIDING WINDOW + SUMMARY CONTEXT
+        // =======================================
 
-        let query = supabase
+        // 4a. Get total message count for this user
+        const { count: totalMessages, error: countError } = await supabase
             .from('riya_conversations')
-            .select('*')
+            .select('*', { count: 'exact', head: true })
             .eq('user_id', userId);
 
-        if (isTestUser) {
-            // For test user: Get last 20 messages
-            query = query
-                .order('created_at', { ascending: false })
-                .limit(20);
-        } else {
-            // For other users: Get full history
-            query = query.order('created_at', { ascending: true });
+        if (countError) {
+            console.error("Error counting messages:", countError);
         }
 
-        const { data: history, error: historyError } = await query;
+        const totalMsgCount = totalMessages || 0;
+        console.log(`📊 Total messages for user: ${totalMsgCount}`);
+
+        // 4b. Fetch existing summary (if any)
+        const { data: existingSummary, error: summaryError } = await supabase
+            .from('riya_conversation_summaries')
+            .select('*')
+            .eq('user_id', userId)
+            .single();
+
+        if (summaryError && summaryError.code !== 'PGRST116') {
+            // PGRST116 = no rows found (expected for new users)
+            console.error("Error fetching summary:", summaryError);
+        }
+
+        // 4c. Always fetch last 50 messages (sliding window)
+        const { data: recentHistory, error: historyError } = await supabase
+            .from('riya_conversations')
+            .select('*')
+            .eq('user_id', userId)
+            .order('created_at', { ascending: false })
+            .limit(RECENT_MESSAGES_LIMIT);
 
         if (historyError) {
             console.error("Error fetching history:", historyError);
         }
 
-        // Reverse if limited (to get chronological order)
-        const conversationHistory = isTestUser ? (history || []).reverse() : (history || []);
-        console.log(`Total conversation messages: ${conversationHistory.length}${isTestUser ? ' (limited to last 20)' : ''}`);
+        // Reverse to chronological order
+        const conversationHistory = (recentHistory || []).reverse();
 
-        // 4. Format for Gemini
+        console.log(`📝 Context: ${existingSummary ? 'Summary + ' : ''}${conversationHistory.length} recent messages`);
+        if (existingSummary) {
+            console.log(`   └─ Summary covers ${existingSummary.messages_summarized} older messages`);
+        }
+
+        // 4d. Format for Gemini
         let processedHistory = conversationHistory.map((msg: any) => ({
             role: msg.role === "assistant" ? "model" : "user",
             parts: [{ text: msg.content }],
         }));
 
-        // Remove leading model messages (Gemini requirement)
+        // 4e. Inject summary as context (if exists)
+        if (existingSummary?.summary) {
+            // Add summary as first user message for context
+            // Using user role because Gemini requires alternating roles starting with user
+            processedHistory.unshift({
+                role: "user",
+                parts: [{ text: `[RIYA'S MEMORY OF THIS RELATIONSHIP]\n${existingSummary.summary}\n[END MEMORY - Continue the conversation naturally based on recent messages]` }]
+            });
+
+            // Need a model response after the memory injection to maintain alternation
+            processedHistory.splice(1, 0, {
+                role: "model",
+                parts: [{ text: "I remember everything about us 💕" }]
+            });
+        }
+
+        // Remove leading model messages if no summary (Gemini requirement)
         while (processedHistory.length > 0 && processedHistory[0].role === "model") {
             processedHistory.shift();
         }
 
-        // 5. Call Gemini with user-specific model selection
+        // 6. Call Gemini with tiered model selection
         const GEMINI_API_KEY = getNextApiKey();
         const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 
-        // Choose model based on user ID
-        let modelName = "gemini-3-pro-preview";  // default model
+        // Choose model based on subscription and daily usage
+        let modelName = PRO_MODEL;  // Default for Pro users
 
-        // Special user gets Gemini 2.5 Flash Lite for testing
-        if (userId === "b55f9630-ebb0-4e29-8e32-0699177eb0b9") {
-            modelName = "gemini-2.5-flash";
-            console.log(`🎯 Special user detected - using ${modelName} instead of default`);
+        if (!isPro) {
+            if (usingFreeModel) {
+                // After 20 messages: use cheaper model
+                modelName = FREE_MODEL;
+                console.log(`📉 Free user (${currentCount} msgs) - using ${FREE_MODEL}`);
+            } else {
+                // First 20 messages: use Pro model
+                console.log(`⭐ Free user (${currentCount} msgs) - using ${PRO_MODEL} (${remainingProMessages} Pro msgs left)`);
+            }
+        } else {
+            console.log(`👑 Pro user - using ${PRO_MODEL}`);
         }
 
         const model = genAI.getGenerativeModel({
@@ -445,7 +655,7 @@ serve(async (req) => {
         }
 
         // 9. Increment daily message count for free users
-        let newRemainingMessages = remainingMessages;
+        let newRemainingProMessages = remainingProMessages;
         if (!isPro) {
             try {
                 // Use the RPC function for atomic increment
@@ -456,23 +666,95 @@ serve(async (req) => {
                 if (rpcError) {
                     console.error('RPC increment error:', rpcError);
                     // Fallback: Calculate remaining based on our local tracking
-                    newRemainingMessages = Math.max(0, remainingMessages - 1);
+                    newRemainingProMessages = Math.max(0, remainingProMessages - 1);
                 } else {
-                    // RPC returns remaining messages directly
-                    newRemainingMessages = rpcResult ?? Math.max(0, remainingMessages - 1);
+                    // RPC returns remaining messages directly (but we track Pro msgs remaining)
+                    newRemainingProMessages = Math.max(0, remainingProMessages - 1);
                 }
 
-                console.log(`📊 Updated: ${DAILY_MESSAGE_LIMIT - newRemainingMessages}/${DAILY_MESSAGE_LIMIT} messages used`);
+                console.log(`📊 Free user: ${currentCount + 1} msgs today | Pro remaining: ${newRemainingProMessages}`);
             } catch (incrementError) {
                 console.error('Failed to increment message count:', incrementError);
-                newRemainingMessages = Math.max(0, remainingMessages - 1);
+                newRemainingProMessages = Math.max(0, remainingProMessages - 1);
             }
+        }
+
+        // =======================================
+        // 10. TRIGGER SUMMARY GENERATION (Async)
+        // =======================================
+        // Check if we need to generate/update the summary
+        // This is done AFTER sending response to not block the user
+        const newTotalMessages = totalMsgCount + 1 + responseMessages.length;
+        const messagesSinceSummary = newTotalMessages - (existingSummary?.messages_summarized || 0);
+
+        if (newTotalMessages > SUMMARIZE_THRESHOLD && messagesSinceSummary > RECENT_MESSAGES_LIMIT) {
+            console.log(`🔄 Summary update needed: ${messagesSinceSummary} new messages since last summary`);
+
+            // Run summarization asynchronously (don't await)
+            (async () => {
+                try {
+                    // Calculate range: from last summarized to (total - 50)
+                    const startIndex = existingSummary?.messages_summarized || 0;
+                    const endIndex = newTotalMessages - RECENT_MESSAGES_LIMIT - 1;
+
+                    if (endIndex <= startIndex) {
+                        console.log("⏭️ Not enough messages to summarize yet");
+                        return;
+                    }
+
+                    console.log(`📚 Fetching messages ${startIndex} to ${endIndex} for summarization...`);
+
+                    // Fetch messages to summarize
+                    const { data: msgsToSummarize, error: fetchError } = await supabase
+                        .from('riya_conversations')
+                        .select('*')
+                        .eq('user_id', userId)
+                        .order('created_at', { ascending: true })
+                        .range(startIndex, endIndex);
+
+                    if (fetchError || !msgsToSummarize || msgsToSummarize.length === 0) {
+                        console.error("Error fetching messages for summary:", fetchError);
+                        return;
+                    }
+
+                    console.log(`📝 Summarizing ${msgsToSummarize.length} messages...`);
+
+                    // Generate summary with fallback chain
+                    const newSummary = await generateConversationSummary(
+                        msgsToSummarize,
+                        existingSummary?.summary || null,
+                        genAI
+                    );
+
+                    // Save the summary
+                    const { error: upsertError } = await supabase
+                        .from('riya_conversation_summaries')
+                        .upsert({
+                            user_id: userId,
+                            summary: newSummary,
+                            messages_summarized: newTotalMessages - RECENT_MESSAGES_LIMIT,
+                            last_summarized_msg_id: msgsToSummarize[msgsToSummarize.length - 1]?.id,
+                            last_summarized_at: new Date().toISOString(),
+                            updated_at: new Date().toISOString()
+                        }, { onConflict: 'user_id' });
+
+                    if (upsertError) {
+                        console.error("Error saving summary:", upsertError);
+                    } else {
+                        console.log(`✅ Summary saved! Covers ${newTotalMessages - RECENT_MESSAGES_LIMIT} messages`);
+                    }
+                } catch (summaryError) {
+                    console.error("Summary generation failed:", summaryError);
+                }
+            })();
         }
 
         return new Response(JSON.stringify({
             messages: responseMessages,
             isPro,
-            remainingMessages: newRemainingMessages
+            remainingProMessages: newRemainingProMessages,
+            usingFreeModel,
+            modelUsed: modelName  // Debug info
         }), {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
