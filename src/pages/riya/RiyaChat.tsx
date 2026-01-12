@@ -6,8 +6,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Slider } from '@/components/ui/slider';
 import { toast } from '@/hooks/use-toast';
-import { Send, ArrowLeft, MoreVertical, Settings, LogOut, Crown } from 'lucide-react';
+import { Send, ArrowLeft, MoreVertical, Settings, LogOut, Crown, Zap } from 'lucide-react';
 import PaywallModal from '@/components/riya/PaywallModal';
+import SoftPaywallBanner from '@/components/riya/SoftPaywallBanner';
 import RiyaProfile from './RiyaProfile';
 import {
     AlertDialog,
@@ -58,8 +59,10 @@ const RiyaChat = () => {
 
     // Subscription & limits state
     const [isPro, setIsPro] = useState(false);
-    const [remainingMessages, setRemainingMessages] = useState(30);
-    const [showPaywall, setShowPaywall] = useState(false);
+    const [remainingProMessages, setRemainingProMessages] = useState(20);  // Pro-quality messages remaining
+    const [usingFreeModel, setUsingFreeModel] = useState(false);           // True after 20 msgs
+    const [showPaywall, setShowPaywall] = useState(false);                 // Hard limit paywall (200 msgs)
+    const [showSoftPaywall, setShowSoftPaywall] = useState(false);         // Soft paywall (after 20 msgs)
     const [paywallResetTime, setPaywallResetTime] = useState<string | undefined>();
 
     // Settings form state
@@ -135,7 +138,7 @@ const RiyaChat = () => {
 
             if (subscription) {
                 setIsPro(true);
-                setRemainingMessages(-1); // Unlimited
+                setRemainingProMessages(-1); // Unlimited for Pro
             } else {
                 // Get today's message usage
                 const today = new Date().toISOString().split('T')[0];
@@ -148,7 +151,12 @@ const RiyaChat = () => {
                     .single();
 
                 const used = usage?.message_count || 0;
-                setRemainingMessages(Math.max(0, 30 - used));
+                // Calculate remaining Pro-quality messages (first 20)
+                setRemainingProMessages(Math.max(0, 20 - used));
+                // Check if already using free model
+                if (used >= 20) {
+                    setUsingFreeModel(true);
+                }
             }
         };
 
@@ -205,7 +213,7 @@ const RiyaChat = () => {
         setMessages(prev => [...prev, userMsgWithTimestamp]);
 
         try {
-            console.log('🚀 [Message Count Debug] Sending message...', { userId, isPro, remainingMessages });
+            console.log('🚀 [Tiered Model] Sending message...', { userId, isPro, remainingProMessages, usingFreeModel });
 
             // Use direct fetch to handle 429 responses properly
             // supabase.functions.invoke doesn't expose response body on error
@@ -225,19 +233,33 @@ const RiyaChat = () => {
             });
 
             const data = await response.json();
-            console.log('📥 [Message Count Debug] Response received:', {
+            console.log('📥 [Tiered Model Debug] Response received:', {
                 isPro: data.isPro,
-                remainingMessages: data.remainingMessages,
+                remainingProMessages: data.remainingProMessages,
+                usingFreeModel: data.usingFreeModel,
+                modelUsed: data.modelUsed,
                 hasError: !!data.error
             });
 
-            // Handle MESSAGE_LIMIT_REACHED (429 status)
-            if (data?.error === 'MESSAGE_LIMIT_REACHED') {
-                console.warn('❌ [Message Count Debug] LIMIT REACHED! Showing paywall');
+            // Handle SOFT_LIMIT_REACHED (200 msgs/day cap)
+            if (data?.error === 'SOFT_LIMIT_REACHED') {
+                console.warn('❌ Soft daily limit reached! Showing paywall');
                 setPaywallResetTime(data.resetsAt);
                 setShowPaywall(true);
-                setRemainingMessages(0);
-                // Remove user message since it wasn't processed
+                setRemainingProMessages(0);
+                setMessages(prev => prev.slice(0, -1));
+                setIsTyping(false);
+                return;
+            }
+
+            // Handle rate limiting
+            if (data?.error === 'RATE_LIMITED') {
+                console.warn('🚫 Rate limited! Slow down');
+                toast({
+                    title: 'Slow down!',
+                    description: 'You\'re sending messages too fast. Please wait a moment.',
+                    variant: 'destructive',
+                });
                 setMessages(prev => prev.slice(0, -1));
                 setIsTyping(false);
                 return;
@@ -254,14 +276,19 @@ const RiyaChat = () => {
                 throw new Error('Invalid response from server');
             }
 
-            // Update remaining messages from response
-            if (typeof data.remainingMessages === 'number') {
-                console.log('✅ [Message Count Debug] Updated remaining messages:', data.remainingMessages);
-                setRemainingMessages(data.remainingMessages);
+            // Update Pro messages remaining and free model status
+            if (typeof data.remainingProMessages === 'number') {
+                setRemainingProMessages(data.remainingProMessages);
             }
             if (typeof data.isPro === 'boolean') {
-                console.log('👤 [Message Count Debug] User Pro status:', data.isPro);
                 setIsPro(data.isPro);
+            }
+
+            // Check if switched to free model for first time - show soft paywall
+            if (data.usingFreeModel && !usingFreeModel && !isPro) {
+                console.log('📉 Switched to free model - showing soft paywall');
+                setUsingFreeModel(true);
+                setShowSoftPaywall(true);
             }
 
             // ============================================
@@ -494,12 +521,21 @@ const RiyaChat = () => {
                                             PRO
                                         </span>
                                     )}
+                                    {!isPro && usingFreeModel && (
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-muted text-[10px] font-medium text-muted-foreground">
+                                            <Zap className="w-3 h-3" />
+                                            Lite
+                                        </span>
+                                    )}
                                 </h2>
                                 <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
                                     <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
                                     {isTyping ? 'typing...' : 'online'}
                                     {isPro && !isTyping && (
                                         <span className="text-yellow-400 ml-1">• ∞ Unlimited</span>
+                                    )}
+                                    {!isPro && !isTyping && remainingProMessages > 0 && (
+                                        <span className="text-muted-foreground ml-1">• {remainingProMessages} Pro left</span>
                                     )}
                                 </p>
                             </div>
@@ -768,11 +804,16 @@ const RiyaChat = () => {
                 </AlertDialogContent>
             </AlertDialog>
 
-            {/* Paywall Modal */}
+            {/* Hard Paywall Modal (200 msgs limit) */}
             <PaywallModal
                 isOpen={showPaywall}
                 onClose={() => setShowPaywall(false)}
-                resetsAt={paywallResetTime}
+            />
+
+            {/* Soft Paywall Banner (after 20 Pro msgs) */}
+            <SoftPaywallBanner
+                isOpen={showSoftPaywall}
+                onClose={() => setShowSoftPaywall(false)}
             />
 
             {/* Profile Page */}
