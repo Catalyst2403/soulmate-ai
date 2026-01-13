@@ -137,13 +137,37 @@ function isRateLimited(userId: string): boolean {
 // =======================================
 
 /**
- * Format messages for the summarization prompt
+ * Format messages for the summarization prompt (with time context)
  */
 function formatMessagesForSummary(messages: any[]): string {
     return messages.map((msg: any) => {
         const role = msg.role === 'user' ? 'User' : 'Riya';
-        return `${role}: ${msg.content}`;
+        const timestamp = msg.created_at ? formatRelativeTime(msg.created_at) : '';
+        return timestamp ? `[${timestamp}] ${role}: ${msg.content}` : `${role}: ${msg.content}`;
     }).join('\n');
+}
+
+/**
+ * Format timestamp to relative time (e.g., "2 days ago", "3 hours ago")
+ */
+function formatRelativeTime(isoDate: string): string {
+    const date = new Date(isoDate);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffDays > 7) {
+        return date.toLocaleDateString('en-IN', { month: 'short', day: 'numeric', timeZone: 'Asia/Kolkata' });
+    } else if (diffDays > 0) {
+        return `${diffDays}d ago`;
+    } else if (diffHours > 0) {
+        return `${diffHours}h ago`;
+    } else if (diffMins > 5) {
+        return `${diffMins}m ago`;
+    }
+    return 'now';
 }
 
 /**
@@ -173,34 +197,32 @@ async function generateConversationSummary(
     const formattedMessages = formatMessagesForSummary(messages);
 
     const summaryPrompt = existingSummary
-        ? `You are creating a relationship memory for Riya (an AI girlfriend). Update this existing memory with the new conversations:
+        ? `Update Riya's memory of this relationship. Be super brief and casual.
 
-EXISTING MEMORY:
+CURRENT MEMORY:
 ${existingSummary}
 
-NEW CONVERSATIONS TO INCORPORATE:
+NEW CHATS (timestamps in brackets):
 ${formattedMessages}
 
-Create an updated memory that captures:
-- Key relationship dynamics and inside jokes
-- User's life details (job, hobbies, family, location)
-- Shared experiences and memorable moments
-- Emotional patterns and what makes the user happy/sad
-- User's preferences and dislikes
+Write a short updated memory (MAX 200 words). Include:
+- User's name, job, family, location
+- What they like/dislike
+- Important moments with approximate time (e.g., "told me about his job last week")
+- How they usually feel
 
-Write in third person about the user. Keep under 600 words. Be specific, not generic.`
-        : `You are creating a relationship memory for Riya (an AI girlfriend) based on these conversations:
+Keep it simple like texting. Third person about user.`
+        : `Create Riya's memory of this relationship from these chats:
 
 ${formattedMessages}
 
-Create a memory that captures:
-- Key relationship dynamics and inside jokes
-- User's life details (job, hobbies, family, location)
-- Shared experiences and memorable moments
-- Emotional patterns and what makes the user happy/sad
-- User's preferences and dislikes
+Write a short memory (MAX 200 words). Include:
+- User's name, job, family, location  
+- What they like/dislike
+- Important moments with approximate time (e.g., "started chatting 3 days ago")
+- How they usually feel
 
-Write in third person about the user. Keep under 600 words. Be specific, not generic.`;
+Keep it simple like texting. Third person about user.`;
 
     // Try models in order: Flash Lite → Flash → Pro
     const models = [SUMMARY_MODEL_PRIMARY, SUMMARY_MODEL_FALLBACK, SUMMARY_MODEL_LAST_RESORT];
@@ -326,12 +348,26 @@ serve(async (req) => {
             console.log(`⭐ Pro user detected, subscription expires: ${subscription.expires_at}`);
         }
 
-        // 3. Generate age-based system prompt
-        const systemPrompt = getRiyaSystemPrompt(
+        // 3. Generate age-based system prompt with current time context
+        const now = new Date();
+        const currentTimeIST = now.toLocaleString('en-IN', {
+            weekday: 'long',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            timeZone: 'Asia/Kolkata'
+        });
+
+        const baseSystemPrompt = getRiyaSystemPrompt(
             user.user_age,
             user.username,
             user.user_gender
         );
+
+        // Append current time to system prompt
+        const systemPrompt = `${baseSystemPrompt}\n\n[CURRENT TIME: ${currentTimeIST}]\nUse this to greet appropriately (good morning/evening) and reference time naturally.`;
 
         console.log("=== RIYA CHAT SESSION ===");
         console.log("User:", user.username, "Age:", user.user_age, "Gender:", user.user_gender);
@@ -389,11 +425,17 @@ serve(async (req) => {
             console.log(`   └─ Summary covers ${existingSummary.messages_summarized} older messages`);
         }
 
-        // 4d. Format for Gemini
-        let processedHistory = conversationHistory.map((msg: any) => ({
-            role: msg.role === "assistant" ? "model" : "user",
-            parts: [{ text: msg.content }],
-        }));
+        // 4d. Format for Gemini with timestamps
+        let processedHistory = conversationHistory.map((msg: any) => {
+            const timestamp = msg.created_at ? formatRelativeTime(msg.created_at) : '';
+            const contentWithTime = timestamp
+                ? `[${timestamp}] ${msg.content}`
+                : msg.content;
+            return {
+                role: msg.role === "assistant" ? "model" : "user",
+                parts: [{ text: contentWithTime }],
+            };
+        });
 
         // 4e. Inject summary as context (if exists)
         if (existingSummary?.summary) {
@@ -475,12 +517,17 @@ serve(async (req) => {
             let INPUT_PRICE_PER_1M: number;
             let OUTPUT_PRICE_PER_1M: number;
 
-            if (modelName === "gemini-2.5-flash") {
+            if (modelName === "gemini-2.5-flash-lite") {
+                // Gemini 2.5 Flash Lite - Cheapest model (for free users after 20 msgs)
+                // Pricing: https://cloud.google.com/vertex-ai/generative-ai/pricing
+                INPUT_PRICE_PER_1M = 0.075;   // $0.075 per 1M tokens
+                OUTPUT_PRICE_PER_1M = 0.30;   // $0.30 per 1M tokens
+            } else if (modelName === "gemini-2.5-flash") {
                 // Gemini 2.5 Flash - Flat pricing (all context lengths)
                 INPUT_PRICE_PER_1M = 0.30;   // $0.30 per 1M tokens
                 OUTPUT_PRICE_PER_1M = 2.50;  // $2.50 per 1M tokens
             } else {
-                // Gemini 3 Pro - Tiered pricing
+                // Gemini 3 Pro - Tiered pricing (default for Pro users)
                 // Prompts ≤200k: Input $2.00, Output $12.00
                 // Prompts >200k: Input $4.00, Output $18.00
                 INPUT_PRICE_PER_1M = inputTokens <= 200000 ? 2.00 : 4.00;
@@ -620,6 +667,7 @@ serve(async (req) => {
                 input_tokens: inputTokens,
                 output_tokens: outputTokens,
                 cost_inr: totalCostINR,
+                model_used: modelName,  // Track which model was used
             },
             ...responseMessages.map((msg) => ({
                 user_id: userId,
@@ -628,6 +676,7 @@ serve(async (req) => {
                 input_tokens: 0,
                 output_tokens: 0,
                 cost_inr: 0,
+                model_used: modelName,  // Track which model was used
             })),
         ];
 
