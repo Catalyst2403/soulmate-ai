@@ -233,7 +233,11 @@ const RiyaChat = () => {
             });
 
             const data = await response.json();
-            console.log('📥 [Tiered Model Debug] Response received:', {
+
+            // Prominent logging for model verification
+            console.log(`🤖 MODEL USED: ${data.modelUsed} | Pro remaining: ${data.remainingProMessages} | Free model: ${data.usingFreeModel}`);
+
+            console.log('📥 [Tiered Model Debug] Full response:', {
                 isPro: data.isPro,
                 remainingProMessages: data.remainingProMessages,
                 usingFreeModel: data.usingFreeModel,
@@ -284,11 +288,19 @@ const RiyaChat = () => {
                 setIsPro(data.isPro);
             }
 
-            // Check if switched to free model for first time - show soft paywall
-            if (data.usingFreeModel && !usingFreeModel && !isPro) {
-                console.log('📉 Switched to free model - showing soft paywall');
+            // Check if switched to free model for first time today - show soft paywall
+            // Use localStorage to remember if we've shown it today (survives refresh)
+            if (data.usingFreeModel) {
                 setUsingFreeModel(true);
-                setShowSoftPaywall(true);
+
+                const today = new Date().toISOString().split('T')[0];
+                const softPaywallShownDate = localStorage.getItem('riya_soft_paywall_shown');
+
+                if (softPaywallShownDate !== today && !data.isPro) {
+                    console.log('📉 First time hitting 20 msgs today - showing soft paywall');
+                    localStorage.setItem('riya_soft_paywall_shown', today);
+                    setShowSoftPaywall(true);
+                }
             }
 
             // ============================================
