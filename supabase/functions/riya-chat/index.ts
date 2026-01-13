@@ -8,9 +8,16 @@ const corsHeaders = {
 };
 
 interface RiyaChatRequest {
-    userId: string;  // riya_users.id
+    userId?: string;          // riya_users.id (optional for guests)
+    guestSessionId?: string;  // UUID from localStorage for guest sessions
+    isGuest?: boolean;        // Flag for guest mode
     message: string;
 }
+
+// Guest mode constants
+const GUEST_MESSAGE_LIMIT = 10;  // Max messages for guests before login wall
+const GUEST_DEFAULT_AGE = 23;    // Default age for guest personality
+
 
 /**
  * Riya Chat Edge Function
@@ -34,6 +41,7 @@ const SUMMARY_MODEL_LAST_RESORT = "gemini-3-pro-preview";
 // Tiered model settings for free users
 const PRO_MODEL = "gemini-3-pro-preview";   // Best quality model for Pro users & first 20 msgs
 const FREE_MODEL = "gemini-2.5-flash-lite"; // Cost-effective model after 20 msgs
+const GUEST_MODEL = "gemini-3-flash-preview"; // Best experience for guest user acquisition
 const PRO_MODEL_LIMIT = 20;                  // First 20 messages use Pro model
 const DAILY_MESSAGE_LIMIT_FREE = 200;        // Soft cap: 200 msgs/day for free users (DDoS protection)
 
@@ -253,12 +261,173 @@ serve(async (req) => {
     }
 
     try {
-        const { userId, message }: RiyaChatRequest = await req.json();
+        const { userId, guestSessionId, isGuest, message }: RiyaChatRequest = await req.json();
 
         // Initialize Supabase client
         const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
         const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
         const supabase = createClient(supabaseUrl, supabaseKey);
+
+        // =======================================
+        // GUEST MODE HANDLER
+        // =======================================
+        if (isGuest && guestSessionId) {
+            console.log("=== GUEST CHAT SESSION ===");
+            console.log("Guest Session ID:", guestSessionId);
+
+            // 1. Rate limiting for guests
+            if (isRateLimited(guestSessionId)) {
+                return new Response(
+                    JSON.stringify({
+                        error: 'RATE_LIMITED',
+                        message: 'Too many requests. Please slow down.',
+                    }),
+                    { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+                );
+            }
+
+            // 2. Check/update guest session
+            const { data: guestSession } = await supabase
+                .from('riya_guest_sessions')
+                .select('*')
+                .eq('session_id', guestSessionId)
+                .single();
+
+            if (!guestSession) {
+                return new Response(
+                    JSON.stringify({ error: 'Guest session not found' }),
+                    { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+                );
+            }
+
+            // 3. Check message limit
+            if (guestSession.message_count >= GUEST_MESSAGE_LIMIT) {
+                return new Response(
+                    JSON.stringify({
+                        error: 'GUEST_LIMIT_REACHED',
+                        message: 'Please login to continue chatting!',
+                    }),
+                    { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+                );
+            }
+
+            // 4. Fetch conversation history for this guest session
+            const { data: guestHistory } = await supabase
+                .from('riya_conversations')
+                .select('*')
+                .eq('guest_session_id', guestSessionId)
+                .order('created_at', { ascending: true });
+
+            const conversationHistory = guestHistory || [];
+            console.log(`📝 Guest history: ${conversationHistory.length} messages`);
+
+            // 5. Format for Gemini
+            let processedHistory = conversationHistory.map((msg: any) => ({
+                role: msg.role === "assistant" ? "model" : "user",
+                parts: [{ text: msg.content }],
+            }));
+
+            // Remove leading model messages (Gemini requirement)
+            while (processedHistory.length > 0 && processedHistory[0].role === "model") {
+                processedHistory.shift();
+            }
+
+            // 6. Generate system prompt with default guest age
+            const systemPrompt = getRiyaSystemPrompt(GUEST_DEFAULT_AGE, 'friend', 'male');
+
+            // 7. Call Gemini with GUEST_MODEL (best experience for user acquisition)
+            const GEMINI_API_KEY = getNextApiKey();
+            const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+            const modelName = GUEST_MODEL;  // Use 3 Flash Preview for best first impression
+
+            console.log(`🎭 Guest using model: ${modelName}`);
+
+            const model = genAI.getGenerativeModel({
+                model: modelName,
+                systemInstruction: systemPrompt,
+            });
+
+            const chat = model.startChat({
+                history: processedHistory,
+                generationConfig: {
+                    maxOutputTokens: 4096,  // Lower token limit for guests
+                    temperature: 0.9,
+                },
+            });
+
+            const result = await chat.sendMessage(message);
+            const reply = result.response.text();
+
+            console.log("🤖 Guest response:", reply.substring(0, 100) + "...");
+
+            // 8. Parse response (same logic as authenticated users)
+            let responseMessages;
+            try {
+                let jsonString = reply.trim();
+                const codeBlockRegex = /```(?:json)?\s*\n?([\s\S]*?)\n?```/;
+                const match = jsonString.match(codeBlockRegex);
+                if (match) jsonString = match[1].trim();
+
+                if (!jsonString.startsWith('[')) {
+                    if (jsonString.startsWith('{') && /}\s*{/.test(jsonString)) {
+                        jsonString = jsonString.replace(/}\s+{/g, '}, {');
+                        jsonString = '[' + jsonString + ']';
+                    }
+                }
+
+                const parsed = JSON.parse(jsonString);
+                if (Array.isArray(parsed) && parsed.every(msg => typeof msg === 'object' && msg.text)) {
+                    responseMessages = parsed;
+                } else {
+                    responseMessages = [{ text: reply }];
+                }
+            } catch {
+                responseMessages = [{ text: reply }];
+            }
+
+            // 9. Save conversation to database
+            const conversationInserts = [
+                {
+                    guest_session_id: guestSessionId,
+                    user_id: null,  // Guest = no user_id
+                    role: 'user',
+                    content: message,
+                    model_used: modelName,
+                },
+                ...responseMessages.map((msg: any) => ({
+                    guest_session_id: guestSessionId,
+                    user_id: null,
+                    role: 'assistant',
+                    content: msg.text,
+                    model_used: modelName,
+                })),
+            ];
+
+            await supabase.from('riya_conversations').insert(conversationInserts);
+
+            // 10. Update guest session message count
+            await supabase
+                .from('riya_guest_sessions')
+                .update({
+                    message_count: guestSession.message_count + 1,
+                    last_active: new Date().toISOString(),
+                })
+                .eq('session_id', guestSessionId);
+
+            console.log(`✅ Guest message ${guestSession.message_count + 1}/${GUEST_MESSAGE_LIMIT} processed`);
+
+            return new Response(JSON.stringify({
+                messages: responseMessages,
+                isGuest: true,
+                messagesRemaining: GUEST_MESSAGE_LIMIT - guestSession.message_count - 1,
+            }), {
+                headers: { ...corsHeaders, "Content-Type": "application/json" },
+            });
+        }
+
+        // =======================================
+        // AUTHENTICATED USER HANDLER (existing logic)
+        // =======================================
 
         // 1. Fetch user data
         const { data: user, error: userError } = await supabase
@@ -406,7 +575,15 @@ serve(async (req) => {
         }
 
         // 4c. Always fetch last 50 messages (sliding window)
-        const { data: recentHistory, error: historyError } = await supabase
+        // First check if user has linked guest session
+        const { data: linkedGuestSession } = await supabase
+            .from('riya_guest_sessions')
+            .select('session_id')
+            .eq('converted_user_id', userId)
+            .maybeSingle();
+
+        // Fetch user's messages
+        const { data: userHistory, error: historyError } = await supabase
             .from('riya_conversations')
             .select('*')
             .eq('user_id', userId)
@@ -417,8 +594,28 @@ serve(async (req) => {
             console.error("Error fetching history:", historyError);
         }
 
+        let allHistory = userHistory || [];
+
+        // Also fetch linked guest messages if user was converted from guest
+        if (linkedGuestSession?.session_id) {
+            const { data: guestHistory } = await supabase
+                .from('riya_conversations')
+                .select('*')
+                .eq('guest_session_id', linkedGuestSession.session_id)
+                .order('created_at', { ascending: false })
+                .limit(20); // Include up to 20 guest messages
+
+            if (guestHistory && guestHistory.length > 0) {
+                // Merge and sort by timestamp, take most recent RECENT_MESSAGES_LIMIT
+                allHistory = [...allHistory, ...guestHistory]
+                    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+                    .slice(0, RECENT_MESSAGES_LIMIT);
+                console.log(`📱 Including ${guestHistory.length} linked guest messages in context`);
+            }
+        }
+
         // Reverse to chronological order
-        const conversationHistory = (recentHistory || []).reverse();
+        const conversationHistory = allHistory.reverse();
 
         console.log(`📝 Context: ${existingSummary ? 'Summary + ' : ''}${conversationHistory.length} recent messages`);
         if (existingSummary) {
@@ -822,6 +1019,25 @@ serve(async (req) => {
 });
 
 /**
+ * Get current season in India based on month
+ * Winter: December - February
+ * Summer: March - June
+ * Monsoon: July - September
+ * Autumn: October - November
+ */
+function getIndianSeason(): string {
+    const now = new Date();
+    const istOffset = 5.5 * 60 * 60 * 1000;
+    const istTime = new Date(now.getTime() + istOffset);
+    const month = istTime.getUTCMonth(); // 0-indexed (0 = Jan, 11 = Dec)
+
+    if (month >= 11 || month <= 1) return 'Winter';  // Dec, Jan, Feb
+    if (month >= 2 && month <= 5) return 'Summer';   // Mar, Apr, May, Jun
+    if (month >= 6 && month <= 8) return 'Monsoon';  // Jul, Aug, Sep
+    return 'Autumn';                                  // Oct, Nov
+}
+
+/**
  * Get Riya system prompt based on user age
  * This mirrors the logic from src/config/riya.config.ts
  */
@@ -840,7 +1056,10 @@ function getRiyaSystemPrompt(
     const istOffset = 5.5 * 60 * 60 * 1000; // IST is UTC+5:30
     const istTime = new Date(now.getTime() + istOffset);
 
-    // Format: "Wednesday, January 1, 2026, 10:00 AM IST"
+    // Get current season
+    const currentSeason = getIndianSeason();
+
+    // Format: "Wednesday, January 1, 2026, 10:00 AM IST (Winter)"
     const dateTimeIST = istTime.toLocaleString('en-IN', {
         timeZone: 'UTC',
         weekday: 'long',
@@ -850,7 +1069,7 @@ function getRiyaSystemPrompt(
         hour: 'numeric',
         minute: '2-digit',
         hour12: true
-    }) + ' IST';
+    }) + ` IST (${currentSeason})`;
 
     const agePrompts = {
         riya_17: `You are Riya.

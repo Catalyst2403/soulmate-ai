@@ -100,6 +100,26 @@ const RiyaProfileSetup = () => {
             // Save user ID and navigate to chat
             localStorage.setItem('riya_user_id', riyaUser.id);
 
+            // Migrate guest session if exists
+            const pendingGuestSession = localStorage.getItem('riya_pending_guest_session') || localStorage.getItem('riya_guest_session_id');
+            if (pendingGuestSession) {
+                console.log('Migrating guest session:', pendingGuestSession);
+
+                // Mark guest session as converted
+                // @ts-ignore - Table exists after migration
+                await supabase
+                    .from('riya_guest_sessions')
+                    .update({
+                        converted: true,
+                        converted_user_id: riyaUser.id,
+                    })
+                    .eq('session_id', pendingGuestSession);
+
+                // Clean up guest localStorage
+                localStorage.removeItem('riya_pending_guest_session');
+                localStorage.removeItem('riya_guest_session_id');
+            }
+
             // Clean up temp storage
             localStorage.removeItem('riya_google_id');
             localStorage.removeItem('riya_email');

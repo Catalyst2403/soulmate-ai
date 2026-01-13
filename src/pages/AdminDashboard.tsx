@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Users, MessageSquare, TrendingUp, Lock } from 'lucide-react';
+import { Users, MessageSquare, TrendingUp, Lock, UserPlus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { supabase } from '@/integrations/supabase/client';
@@ -19,6 +19,13 @@ interface Stats {
   }[];
 }
 
+interface GuestStats {
+  totalSessions: number;
+  convertedCount: number;
+  conversionRate: number;
+  avgMessagesBeforeConvert: number;
+}
+
 const AdminDashboard = () => {
   const navigate = useNavigate();
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -29,6 +36,12 @@ const AdminDashboard = () => {
     vibeBreakdown: [],
     recentLogs: [],
   });
+  const [guestStats, setGuestStats] = useState<GuestStats>({
+    totalSessions: 0,
+    convertedCount: 0,
+    conversionRate: 0,
+    avgMessagesBeforeConvert: 0,
+  });
   const [isLoading, setIsLoading] = useState(false);
 
   const handlePinSubmit = (e: React.FormEvent) => {
@@ -36,6 +49,7 @@ const AdminDashboard = () => {
     if (pin === '1234') {
       setIsAuthenticated(true);
       loadStats();
+      loadGuestStats();
     } else {
       alert('Invalid PIN');
     }
@@ -104,6 +118,42 @@ const AdminDashboard = () => {
       console.error('Error loading stats:', error);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const loadGuestStats = async () => {
+    try {
+      // @ts-ignore - Table exists after migration
+      const { data: sessions, error } = await supabase
+        .from('riya_guest_sessions')
+        .select('*');
+
+      if (error) {
+        console.error('Error loading guest stats:', error);
+        return;
+      }
+
+      if (!sessions || sessions.length === 0) {
+        return;
+      }
+
+      const totalSessions = sessions.length;
+      const convertedSessions = sessions.filter((s: any) => s.converted);
+      const convertedCount = convertedSessions.length;
+      const conversionRate = totalSessions > 0 ? (convertedCount / totalSessions) * 100 : 0;
+
+      // Calculate avg messages for converted users
+      const totalMsgsConverted = convertedSessions.reduce((acc: number, s: any) => acc + (s.message_count || 0), 0);
+      const avgMessagesBeforeConvert = convertedCount > 0 ? totalMsgsConverted / convertedCount : 0;
+
+      setGuestStats({
+        totalSessions,
+        convertedCount,
+        conversionRate,
+        avgMessagesBeforeConvert,
+      });
+    } catch (error) {
+      console.error('Error loading guest stats:', error);
     }
   };
 
@@ -221,6 +271,45 @@ const AdminDashboard = () => {
             </div>
           </motion.div>
         </div>
+
+        {/* Guest Analytics Section */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.35 }}
+          className="mb-8"
+        >
+          <h2 className="font-display text-xl font-semibold text-foreground mb-4 flex items-center gap-2">
+            <UserPlus className="w-5 h-5 text-primary" />
+            Guest Analytics
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="glass-card p-4">
+              <p className="text-muted-foreground text-sm">Total Guest Sessions</p>
+              <p className="font-display text-2xl font-bold text-foreground">
+                {guestStats.totalSessions}
+              </p>
+            </div>
+            <div className="glass-card p-4">
+              <p className="text-muted-foreground text-sm">Converted to Users</p>
+              <p className="font-display text-2xl font-bold text-primary">
+                {guestStats.convertedCount}
+              </p>
+            </div>
+            <div className="glass-card p-4">
+              <p className="text-muted-foreground text-sm">Conversion Rate</p>
+              <p className="font-display text-2xl font-bold text-foreground">
+                {guestStats.conversionRate.toFixed(1)}%
+              </p>
+            </div>
+            <div className="glass-card p-4">
+              <p className="text-muted-foreground text-sm">Avg Msgs Before Convert</p>
+              <p className="font-display text-2xl font-bold text-foreground">
+                {guestStats.avgMessagesBeforeConvert.toFixed(1)}
+              </p>
+            </div>
+          </div>
+        </motion.div>
 
         {/* Vibe Chart */}
         <motion.div
