@@ -9,6 +9,8 @@ import { toast } from '@/hooks/use-toast';
 import { Send, ArrowLeft, MoreVertical, Settings, LogOut, Crown, Zap } from 'lucide-react';
 import PaywallModal from '@/components/riya/PaywallModal';
 import SoftPaywallBanner from '@/components/riya/SoftPaywallBanner';
+import QuickReplyButtons from '@/components/riya/QuickReplyButtons';
+import { getGreetingByTime } from '@/utils/riyaGreetings';
 import RiyaProfile from './RiyaProfile';
 import {
     AlertDialog,
@@ -70,6 +72,10 @@ const RiyaChat = () => {
     const [editAge, setEditAge] = useState(22);
     const [editGender, setEditGender] = useState<'male' | 'female' | 'other'>('male');
 
+    // Quick reply state for time-based greetings
+    const [showQuickReplies, setShowQuickReplies] = useState(false);
+    const [quickReplyOptions, setQuickReplyOptions] = useState<string[] | undefined>(undefined);
+
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const navigate = useNavigate();
@@ -101,29 +107,70 @@ const RiyaChat = () => {
                 setEditGender(user.user_gender as 'male' | 'female' | 'other');
             }
 
-            // Load conversation history
-            const { data: history } = await supabase
+            // Load conversation history (including linked guest messages)
+            // First check if user has a linked guest session
+            // @ts-ignore - Table exists after migration
+            const { data: linkedGuestSession } = await supabase
+                .from('riya_guest_sessions')
+                .select('session_id')
+                .eq('converted_user_id', userId)
+                .maybeSingle();
+
+            let allHistory: any[] = [];
+
+            // Fetch user's own messages
+            const { data: userHistory } = await supabase
                 .from('riya_conversations')
                 .select('*')
                 .eq('user_id', userId)
                 .order('created_at', { ascending: true });
 
-            if (history && history.length > 0) {
-                const formattedMessages = history.map(msg => ({
+            if (userHistory) {
+                allHistory = [...userHistory];
+            }
+
+            // Fetch linked guest messages if exists
+            if (linkedGuestSession?.session_id) {
+                const { data: guestHistory } = await supabase
+                    .from('riya_conversations')
+                    .select('*')
+                    .eq('guest_session_id', linkedGuestSession.session_id)
+                    .order('created_at', { ascending: true });
+
+                if (guestHistory && guestHistory.length > 0) {
+                    // Merge and sort by timestamp
+                    allHistory = [...guestHistory, ...allHistory].sort(
+                        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+                    );
+                }
+            }
+
+            if (allHistory.length > 0) {
+                const formattedMessages = allHistory.map(msg => ({
                     text: msg.content,
                     isUser: msg.role === 'user',
                     timestamp: msg.created_at,
                 }));
                 setMessages(formattedMessages);
+                setShowQuickReplies(false);
             } else {
-                // Add initial greeting if no history
+                // Add initial time-based greeting if no history
+                const greeting = getGreetingByTime();
+
+                // Add tiny delay for "typing" feel
+                await new Promise(resolve => setTimeout(resolve, 500));
+
                 setMessages([
                     {
-                        text: `hey ${user?.username || 'there'}! 👋\n\nkaise ho? ready to chat?`,
+                        text: greeting.text,
                         isUser: false,
                         timestamp: new Date().toISOString(),
                     },
                 ]);
+
+                // Set custom options for quick reply buttons
+                setQuickReplyOptions(greeting.options);
+                setShowQuickReplies(true);
             }
 
             // Check subscription status
@@ -659,6 +706,33 @@ const RiyaChat = () => {
 
                 <div ref={messagesEndRef} />
             </div>
+
+            {/* Quick Reply Buttons */}
+            <AnimatePresence>
+                {showQuickReplies && !isTyping && (
+                    <motion.div
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 10 }}
+                        className="fixed bottom-20 left-0 right-0 z-40"
+                    >
+                        <QuickReplyButtons
+                            onSelect={(text) => {
+                                setInputMessage(text);
+                                setShowQuickReplies(false);
+                                // Use setTimeout to allow state to update before sending
+                                setTimeout(() => {
+                                    const form = document.querySelector('form');
+                                    if (form) {
+                                        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+                                    }
+                                }, 50);
+                            }}
+                            options={quickReplyOptions}
+                        />
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
             {/* Fixed Input at bottom */}
             <form

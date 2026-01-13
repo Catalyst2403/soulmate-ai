@@ -12,6 +12,7 @@ import NotFound from "./pages/NotFound";
 
 // Riya Character System (separate from custom companions)
 import RiyaLanding from "./pages/riya/RiyaLanding";
+import RiyaGuestChat from "./pages/riya/RiyaGuestChat";  // New guest chat page
 import RiyaCallback from "./pages/riya/RiyaCallback";
 import RiyaProfileSetup from "./pages/riya/RiyaProfileSetup";
 import RiyaChat from "./pages/riya/RiyaChat";
@@ -51,7 +52,8 @@ const App = () => {
               <Route path="/admin-dashboard" element={<AdminDashboard />} />
 
               {/* Riya Character System */}
-              <Route path="/riya" element={<RiyaLanding />} />
+              <Route path="/riya" element={<RiyaGuestChat />} />  {/* Guest chat as default */}
+              <Route path="/riya/login" element={<RiyaLanding />} />  {/* Original login page */}
               <Route path="/riya/callback" element={<RiyaCallback />} />
               <Route path="/riya/onboarding/profile" element={<RiyaProfileSetup />} />
               <Route path="/riya/chat" element={<RiyaChat />} />

@@ -38,10 +38,36 @@ const RiyaCallback = () => {
                     console.error('Error fetching user:', fetchError);
                 }
 
+                // Helper to migrate guest session
+                const migrateGuestSession = async (riyaUserId: string) => {
+                    const pendingGuestSession = localStorage.getItem('riya_pending_guest_session');
+                    if (pendingGuestSession) {
+                        console.log('Migrating guest session:', pendingGuestSession);
+
+                        // Mark guest session as converted (don't update user_id on messages - keeps analytics clean)
+                        // @ts-ignore - Table exists after migration
+                        await supabase
+                            .from('riya_guest_sessions')
+                            .update({
+                                converted: true,
+                                converted_user_id: riyaUserId,
+                            })
+                            .eq('session_id', pendingGuestSession);
+
+                        // Clean up
+                        localStorage.removeItem('riya_pending_guest_session');
+                        localStorage.removeItem('riya_guest_session_id');
+                    }
+                };
+
                 if (existingUser) {
                     // Existing user - go to chat
                     console.log('Existing user found, redirecting to chat');
                     localStorage.setItem('riya_user_id', existingUser.id);
+
+                    // Migrate any guest session
+                    await migrateGuestSession(existingUser.id);
+
                     navigate('/riya/chat');
                 } else {
                     // New user - complete profile
