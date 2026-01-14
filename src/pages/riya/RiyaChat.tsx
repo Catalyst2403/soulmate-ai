@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Slider } from '@/components/ui/slider';
 import { toast } from '@/hooks/use-toast';
-import { Send, ArrowLeft, MoreVertical, Settings, LogOut, Crown, Zap } from 'lucide-react';
+import { Send, ArrowLeft, MoreVertical, Settings, LogOut, Crown, Zap, Camera, Lock, X } from 'lucide-react';
 import PaywallModal from '@/components/riya/PaywallModal';
 import SoftPaywallBanner from '@/components/riya/SoftPaywallBanner';
 import QuickReplyButtons from '@/components/riya/QuickReplyButtons';
@@ -40,6 +40,13 @@ interface MessageWithTimestamp {
     text: string;
     isUser: boolean;
     timestamp: string;
+    image?: {
+        url: string;
+        description: string;
+        category: string;
+        is_blurred: boolean;
+        is_premium: boolean;
+    };
 }
 
 /**
@@ -52,6 +59,7 @@ const RiyaChat = () => {
     const [inputMessage, setInputMessage] = useState('');
     const [isTyping, setIsTyping] = useState(false);
     const [userName, setUserName] = useState('');
+    const [userEmail, setUserEmail] = useState('');
     const [userAge, setUserAge] = useState(22);
     const [userGender, setUserGender] = useState<'male' | 'female' | 'other'>('male');
     const [showLogoutDialog, setShowLogoutDialog] = useState(false);
@@ -75,6 +83,10 @@ const RiyaChat = () => {
     // Quick reply state for time-based greetings
     const [showQuickReplies, setShowQuickReplies] = useState(false);
     const [quickReplyOptions, setQuickReplyOptions] = useState<string[] | undefined>(undefined);
+
+    // Image feature state
+    const [showImagePaywall, setShowImagePaywall] = useState(false);
+    const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
@@ -105,6 +117,12 @@ const RiyaChat = () => {
                 setEditUsername(user.username);
                 setEditAge(user.user_age);
                 setEditGender(user.user_gender as 'male' | 'female' | 'other');
+            }
+
+            // Fetch user email from auth session
+            const { data: { user: authUser } } = await supabase.auth.getUser();
+            if (authUser?.email) {
+                setUserEmail(authUser.email);
             }
 
             // Load conversation history (including linked guest messages)
@@ -150,6 +168,14 @@ const RiyaChat = () => {
                     text: msg.content,
                     isUser: msg.role === 'user',
                     timestamp: msg.created_at,
+                    // Load image data from DB for reload persistence
+                    image: msg.image_data ? {
+                        url: msg.image_data.url,
+                        description: msg.image_data.description,
+                        category: msg.image_data.category,
+                        is_premium: msg.image_data.is_premium,
+                        is_blurred: msg.image_data.is_blurred,
+                    } : undefined,
                 }));
                 setMessages(formattedMessages);
                 setShowQuickReplies(false);
@@ -188,16 +214,29 @@ const RiyaChat = () => {
                 setRemainingProMessages(-1); // Unlimited for Pro
             } else {
                 // Get today's message usage
-                const today = new Date().toISOString().split('T')[0];
+                // Use CURRENT_DATE from database to ensure timezone consistency
                 // @ts-ignore - Table exists after migration
-                const { data: usage } = await supabase
+                const { data: usage, error: usageError } = await supabase
                     .from('riya_daily_usage')
-                    .select('message_count')
+                    .select('message_count, usage_date')
                     .eq('user_id', userId)
-                    .eq('usage_date', today)
-                    .single();
+                    .order('usage_date', { ascending: false })
+                    .limit(1)
+                    .maybeSingle();
 
-                const used = usage?.message_count || 0;
+                console.log('📊 [Init] Daily usage query result:', { usage, usageError });
+
+                // Check if usage is from today (compare dates)
+                // IMPORTANT: Use UTC date to match database CURRENT_DATE (Supabase uses UTC)
+                const todayUTC = new Date().toISOString().split('T')[0];
+
+                // Normalize database date (could be 'YYYY-MM-DD' or 'YYYY-MM-DDTHH:mm:ss')
+                const dbDate = usage?.usage_date ? usage.usage_date.split('T')[0] : null;
+                const usageIsToday = dbDate === todayUTC;
+                const used = usageIsToday ? (usage?.message_count || 0) : 0;
+
+                console.log(`📊 [Init] Today (UTC): ${todayUTC}, DB date: ${dbDate}, Is today: ${usageIsToday}, Used: ${used}`);
+
                 // Calculate remaining Pro-quality messages (first 20)
                 setRemainingProMessages(Math.max(0, 20 - used));
                 // Check if already using free model
@@ -418,6 +457,19 @@ const RiyaChat = () => {
             // Configurable delay between burst messages (in milliseconds)
             const MESSAGE_DELAY_MS = 1500;
 
+            // DEBUG: Log processed messages to see image data
+            console.log('========== 📸 FRONTEND IMAGE DEBUG ==========');
+            console.log('Processed messages from API:', JSON.stringify(processedMessages, null, 2));
+            processedMessages.forEach((msg: any, idx: number) => {
+                console.log(`Message ${idx}: text="${msg.text?.substring(0, 50)}...", has image=${!!msg.image}`);
+                if (msg.image) {
+                    console.log(`  Image URL: ${msg.image.url}`);
+                    console.log(`  Image category: ${msg.image.category}`);
+                    console.log(`  Is blurred: ${msg.image.is_blurred}`);
+                }
+            });
+            console.log('========== END FRONTEND DEBUG ==========');
+
             // Display each message sequentially with typing animation
             for (let i = 0; i < processedMessages.length; i++) {
                 // Show typing indicator before each message
@@ -426,12 +478,15 @@ const RiyaChat = () => {
                 // Wait to simulate typing
                 await new Promise(resolve => setTimeout(resolve, MESSAGE_DELAY_MS));
 
-                // Add message with timestamp
+                // Add message with timestamp (including image if present)
                 const riyaMsg: MessageWithTimestamp = {
                     text: processedMessages[i].text,
                     isUser: false,
                     timestamp: new Date().toISOString(),
+                    image: processedMessages[i].image,
                 };
+
+                console.log(`📸 Adding message ${i}:`, { text: riyaMsg.text?.substring(0, 30), image: riyaMsg.image });
 
                 setMessages(prev => [...prev, riyaMsg]);
 
@@ -442,6 +497,11 @@ const RiyaChat = () => {
                 if (i < processedMessages.length - 1) {
                     await new Promise(resolve => setTimeout(resolve, 300));
                 }
+            }
+
+            // Show image paywall if limit exhausted
+            if (data.showUpgradePaywall || data.imageLimitExhausted) {
+                setTimeout(() => setShowImagePaywall(true), 500);
             }
         } catch (error) {
             console.error('Chat error:', error);
@@ -649,28 +709,66 @@ const RiyaChat = () => {
             {/* Messages - with padding for fixed header and input */}
             <div className="flex-1 overflow-y-auto px-4 pt-20 pb-24 space-y-4 relative z-10">
                 <AnimatePresence>
-                    {messages.map((message, index) => (
-                        <motion.div
-                            key={index}
-                            initial={{ opacity: 0, y: 20, scale: 0.95 }}
-                            animate={{ opacity: 1, y: 0, scale: 1 }}
-                            exit={{ opacity: 0, scale: 0.95 }}
-                            transition={{ duration: 0.3 }}
-                            className={`flex ${message.isUser ? 'justify-end' : 'justify-start'}`}
-                        >
-                            <div
-                                className={`max-w-[80%] ${message.isUser ? 'chat-bubble-user' : 'chat-bubble-bot'
-                                    }`}
+                    {messages.map((message, index) => {
+                        // Strip [Sent photo: ...] from display - it's for LLM context only
+                        const displayText = message.text.replace(/\n?\[Sent photo:.*?\]$/s, '').trim();
+
+                        return (
+                            <motion.div
+                                key={index}
+                                initial={{ opacity: 0, y: 20, scale: 0.95 }}
+                                animate={{ opacity: 1, y: 0, scale: 1 }}
+                                exit={{ opacity: 0, scale: 0.95 }}
+                                transition={{ duration: 0.3 }}
+                                className={`flex ${message.isUser ? 'justify-end' : 'justify-start'}`}
                             >
-                                <p className="text-sm text-foreground whitespace-pre-wrap">
-                                    {message.text}
-                                </p>
-                                <p className="text-[10px] text-muted-foreground mt-1 text-right">
-                                    {formatTime(message.timestamp)}
-                                </p>
-                            </div>
-                        </motion.div>
-                    ))}
+                                <div
+                                    className={`max-w-[80%] ${message.isUser ? 'chat-bubble-user' : 'chat-bubble-bot'
+                                        }`}
+                                >
+                                    <p className="text-sm text-foreground whitespace-pre-wrap">
+                                        {displayText}
+                                    </p>
+
+                                    {/* Image display */}
+                                    {message.image && (
+                                        <div
+                                            className={`mt-2 relative rounded-xl overflow-hidden cursor-pointer
+                                                    ${message.image.is_blurred ? 'ring-2 ring-pink-500/50' : ''}`}
+                                            onClick={() => {
+                                                if (message.image?.is_blurred) {
+                                                    setShowImagePaywall(true);
+                                                } else if (message.image) {
+                                                    setFullscreenImage(message.image.url);
+                                                }
+                                            }}
+                                        >
+                                            <img
+                                                src={message.image.url}
+                                                alt="Riya"
+                                                className={`max-w-[200px] w-full rounded-xl
+                                                       ${message.image.is_blurred ? 'blur-lg' : ''}`}
+                                            />
+
+                                            {/* Lock overlay for blurred images */}
+                                            {message.image.is_blurred && (
+                                                <div className="absolute inset-0 flex flex-col items-center justify-center 
+                                                            bg-black/40 rounded-xl">
+                                                    <Lock className="w-8 h-8 text-pink-400 mb-1" />
+                                                    <span className="text-white text-sm font-medium">Private Snap 🔒</span>
+                                                    <span className="text-pink-300 text-xs mt-0.5">Tap to unlock</span>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    <p className="text-[10px] text-muted-foreground mt-1 text-right">
+                                        {formatTime(message.timestamp)}
+                                    </p>
+                                </div>
+                            </motion.div>
+                        );
+                    })}
                 </AnimatePresence>
 
                 {/* Typing indicator */}
@@ -743,6 +841,33 @@ const RiyaChat = () => {
                 className="fixed bottom-0 left-0 right-0 z-50 glass-card rounded-none border-x-0 border-b-0 px-4 py-3 safe-area-bottom"
             >
                 <div className="flex items-center gap-2">
+                    {/* Camera button for photo requests */}
+                    <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="shrink-0 text-pink-400 hover:text-pink-300 hover:bg-pink-500/10"
+                        onClick={() => {
+                            // Track click for analytics
+                            const userId = localStorage.getItem('riya_user_id');
+                            // @ts-ignore - Table exists after migration
+                            supabase.from('riya_image_clicks').insert({
+                                user_type: isPro ? 'pro' : 'free',
+                                user_id: userId,
+                            }).then(() => { }); // Fire and forget
+
+                            setInputMessage("send a pic 📸");
+                            setTimeout(() => {
+                                const form = document.querySelector('form');
+                                if (form) {
+                                    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+                                }
+                            }, 50);
+                        }}
+                    >
+                        <Camera className="w-5 h-5" />
+                    </Button>
+
                     <Input
                         ref={inputRef}
                         value={inputMessage}
@@ -774,6 +899,18 @@ const RiyaChat = () => {
                     </DialogHeader>
 
                     <div className="space-y-5 py-4">
+                        {/* Email (read-only) */}
+                        {userEmail && (
+                            <div>
+                                <label className="block text-sm font-medium text-muted-foreground mb-2">
+                                    Email
+                                </label>
+                                <div className="w-full px-3 py-2 rounded-md bg-muted/20 border border-border/50 text-sm text-muted-foreground">
+                                    {userEmail}
+                                </div>
+                            </div>
+                        )}
+
                         {/* Username */}
                         <div>
                             <label className="block text-sm font-medium text-foreground mb-2">
@@ -901,6 +1038,74 @@ const RiyaChat = () => {
                 isOpen={showSoftPaywall}
                 onClose={() => setShowSoftPaywall(false)}
             />
+
+            {/* Image Upgrade Paywall */}
+            <AnimatePresence>
+                {showImagePaywall && (
+                    <motion.div
+                        initial={{ opacity: 0, y: 50 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 50 }}
+                        className="fixed inset-x-4 bottom-24 z-50 p-5 rounded-2xl
+                                   bg-gradient-to-br from-pink-900/95 to-purple-900/95
+                                   border border-pink-500/30 backdrop-blur-xl"
+                    >
+                        <button
+                            onClick={() => setShowImagePaywall(false)}
+                            className="absolute top-3 right-3 text-white/60 hover:text-white"
+                        >
+                            <X className="w-5 h-5" />
+                        </button>
+
+                        <div className="text-center">
+                            <div className="text-3xl mb-2">🔥</div>
+                            <h3 className="text-lg font-bold text-white mb-1">
+                                Unlock Riya's Private Photos
+                            </h3>
+                            <p className="text-sm text-pink-200/80 mb-4">
+                                Get unlimited access to all her exclusive pics
+                            </p>
+
+                            <Button
+                                onClick={() => navigate('/riya/pricing')}
+                                className="w-full bg-gradient-to-r from-pink-500 to-purple-500 font-bold"
+                            >
+                                <Crown className="w-4 h-4 mr-2" />
+                                Upgrade to Pro
+                            </Button>
+
+                            <p className="text-xs text-white/40 mt-3">
+                                Free: 3 pics/day • Pro: Unlimited 📸
+                            </p>
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* Fullscreen Image Viewer */}
+            <AnimatePresence>
+                {fullscreenImage && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-[60] bg-black/95 flex items-center justify-center"
+                        onClick={() => setFullscreenImage(null)}
+                    >
+                        <button
+                            className="absolute top-4 right-4 text-white/80 hover:text-white"
+                            onClick={() => setFullscreenImage(null)}
+                        >
+                            <X className="w-8 h-8" />
+                        </button>
+                        <img
+                            src={fullscreenImage}
+                            alt="Riya"
+                            className="max-w-full max-h-full object-contain p-4"
+                        />
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
             {/* Profile Page */}
             {showProfile && (
