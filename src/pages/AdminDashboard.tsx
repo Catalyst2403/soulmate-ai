@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Users, MessageSquare, TrendingUp, Lock, UserPlus } from 'lucide-react';
+import { Users, MessageSquare, TrendingUp, Lock, UserPlus, Camera } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { supabase } from '@/integrations/supabase/client';
@@ -26,6 +26,13 @@ interface GuestStats {
   avgMessagesBeforeConvert: number;
 }
 
+interface ImageStats {
+  clicksByType: { name: string; count: number }[];
+  totalClicks: number;
+  imagesByCategory: { name: string; count: number }[];
+  totalImagesSent: number;
+}
+
 const AdminDashboard = () => {
   const navigate = useNavigate();
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -42,6 +49,12 @@ const AdminDashboard = () => {
     conversionRate: 0,
     avgMessagesBeforeConvert: 0,
   });
+  const [imageStats, setImageStats] = useState<ImageStats>({
+    clicksByType: [],
+    totalClicks: 0,
+    imagesByCategory: [],
+    totalImagesSent: 0,
+  });
   const [isLoading, setIsLoading] = useState(false);
 
   const handlePinSubmit = (e: React.FormEvent) => {
@@ -50,6 +63,7 @@ const AdminDashboard = () => {
       setIsAuthenticated(true);
       loadStats();
       loadGuestStats();
+      loadImageStats();
     } else {
       alert('Invalid PIN');
     }
@@ -154,6 +168,56 @@ const AdminDashboard = () => {
       });
     } catch (error) {
       console.error('Error loading guest stats:', error);
+    }
+  };
+
+  const loadImageStats = async () => {
+    try {
+      // Get camera button clicks
+      // @ts-ignore - Table exists after migration
+      const { data: clicks, error: clickError } = await supabase
+        .from('riya_image_clicks')
+        .select('user_type');
+
+      if (clickError) {
+        console.error('Error loading image clicks:', clickError);
+      }
+
+      // Count by user type
+      const clickMap: Record<string, number> = { guest: 0, free: 0, pro: 0 };
+      clicks?.forEach((c: any) => {
+        clickMap[c.user_type] = (clickMap[c.user_type] || 0) + 1;
+      });
+
+      const clicksByType = Object.entries(clickMap).map(([name, count]) => ({ name, count }));
+      const totalClicks = clicks?.length || 0;
+
+      // Get images by category (from gallery times_sent)
+      // @ts-ignore - Table exists after migration
+      const { data: gallery, error: galleryError } = await supabase
+        .from('riya_gallery')
+        .select('category, times_sent');
+
+      let imagesByCategory: { name: string; count: number }[] = [];
+      let totalImagesSent = 0;
+
+      if (!galleryError && gallery) {
+        const categoryMap: Record<string, number> = {};
+        gallery.forEach((img: any) => {
+          categoryMap[img.category] = (categoryMap[img.category] || 0) + (img.times_sent || 0);
+          totalImagesSent += img.times_sent || 0;
+        });
+        imagesByCategory = Object.entries(categoryMap).map(([name, count]) => ({ name, count }));
+      }
+
+      setImageStats({
+        clicksByType,
+        totalClicks,
+        imagesByCategory,
+        totalImagesSent,
+      });
+    } catch (error) {
+      console.error('Error loading image stats:', error);
     }
   };
 
@@ -306,6 +370,65 @@ const AdminDashboard = () => {
               <p className="text-muted-foreground text-sm">Avg Msgs Before Convert</p>
               <p className="font-display text-2xl font-bold text-foreground">
                 {guestStats.avgMessagesBeforeConvert.toFixed(1)}
+              </p>
+            </div>
+          </div>
+        </motion.div>
+
+        {/* Image Analytics Section */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.38 }}
+          className="mb-8"
+        >
+          <h2 className="font-display text-xl font-semibold text-foreground mb-4 flex items-center gap-2">
+            <Camera className="w-5 h-5 text-pink-400" />
+            Image Analytics
+          </h2>
+
+          {/* Stats Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+            <div className="glass-card p-4">
+              <p className="text-muted-foreground text-sm">Total Camera Clicks</p>
+              <p className="font-display text-2xl font-bold text-foreground">
+                {imageStats.totalClicks}
+              </p>
+            </div>
+            <div className="glass-card p-4">
+              <p className="text-muted-foreground text-sm">Guest Clicks</p>
+              <p className="font-display text-2xl font-bold text-pink-400">
+                {imageStats.clicksByType.find(c => c.name === 'guest')?.count || 0}
+              </p>
+            </div>
+            <div className="glass-card p-4">
+              <p className="text-muted-foreground text-sm">Free User Clicks</p>
+              <p className="font-display text-2xl font-bold text-primary">
+                {imageStats.clicksByType.find(c => c.name === 'free')?.count || 0}
+              </p>
+            </div>
+            <div className="glass-card p-4">
+              <p className="text-muted-foreground text-sm">Pro User Clicks</p>
+              <p className="font-display text-2xl font-bold text-yellow-400">
+                {imageStats.clicksByType.find(c => c.name === 'pro')?.count || 0}
+              </p>
+            </div>
+          </div>
+
+          {/* Images Sent Stats */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="glass-card p-4">
+              <p className="text-muted-foreground text-sm">Total Images Sent</p>
+              <p className="font-display text-2xl font-bold text-foreground">
+                {imageStats.totalImagesSent}
+              </p>
+            </div>
+            <div className="glass-card p-4">
+              <p className="text-muted-foreground text-sm">Click-to-Image Rate</p>
+              <p className="font-display text-2xl font-bold text-foreground">
+                {imageStats.totalClicks > 0
+                  ? ((imageStats.totalImagesSent / imageStats.totalClicks) * 100).toFixed(1)
+                  : 0}%
               </p>
             </div>
           </div>

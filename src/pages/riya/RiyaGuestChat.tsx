@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send } from 'lucide-react';
+import { Send, Camera } from 'lucide-react';
 import GuestLoginModal from '@/components/riya/GuestLoginModal';
 import QuickReplyButtons from '@/components/riya/QuickReplyButtons';
 import { getGreetingByTime } from '@/utils/riyaGreetings';
@@ -29,6 +29,7 @@ const RiyaGuestChat = () => {
     const [guestSessionId, setGuestSessionId] = useState<string | null>(null);
     const [messageCount, setMessageCount] = useState(0);
     const [showLoginModal, setShowLoginModal] = useState(false);
+    const [canCloseModal, setCanCloseModal] = useState(true); // Can close if triggered by camera, not if 10 msgs exhausted
     const [isInitialized, setIsInitialized] = useState(false);
     const [quickReplyOptions, setQuickReplyOptions] = useState<string[] | undefined>(undefined);
     const [pendingGreeting, setPendingGreeting] = useState<string | null>(null); // Greeting to save on first interaction
@@ -113,6 +114,7 @@ const RiyaGuestChat = () => {
 
                     // Check if already at limit
                     if (userMsgCount >= GUEST_MESSAGE_LIMIT) {
+                        setCanCloseModal(false); // 10 msgs exhausted - must login
                         setShowLoginModal(true);
                     }
                 } else {
@@ -147,6 +149,7 @@ const RiyaGuestChat = () => {
 
         // Check message limit
         if (messageCount >= GUEST_MESSAGE_LIMIT) {
+            setCanCloseModal(false); // 10 msgs exhausted - must login
             setShowLoginModal(true);
             return;
         }
@@ -222,6 +225,7 @@ const RiyaGuestChat = () => {
 
                 // Show login modal after a brief delay
                 setTimeout(() => {
+                    setCanCloseModal(false); // 10 msgs exhausted - must login
                     setShowLoginModal(true);
                 }, 1500);
                 return;
@@ -306,7 +310,10 @@ const RiyaGuestChat = () => {
                     <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => setShowLoginModal(true)}
+                        onClick={() => {
+                            setCanCloseModal(true); // Login button - can close
+                            setShowLoginModal(true);
+                        }}
                         className="border-primary/50 text-primary hover:bg-primary/10"
                     >
                         Login
@@ -409,6 +416,33 @@ const RiyaGuestChat = () => {
                 className="fixed bottom-0 left-0 right-0 z-50 glass-card rounded-none border-x-0 border-b-0 px-4 py-3 safe-area-bottom"
             >
                 <div className="flex items-center gap-2">
+                    {/* Camera button - shows login wall for guests */}
+                    <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="shrink-0 text-pink-400 hover:text-pink-300 hover:bg-pink-500/10"
+                        onClick={async () => {
+                            // Track click for analytics
+                            // @ts-ignore - Table exists after migration
+                            const { error } = await supabase.from('riya_image_clicks').insert({
+                                user_type: 'guest',
+                                guest_session_id: guestSessionId,
+                            });
+                            if (error) {
+                                console.error('📸 Image click tracking error:', error);
+                            } else {
+                                console.log('📸 Guest camera click tracked');
+                            }
+
+                            setCanCloseModal(true);
+                            setShowLoginModal(true);
+                        }}
+                        title="Login to unlock photos 📸"
+                    >
+                        <Camera className="w-5 h-5" />
+                    </Button>
+
                     <Input
                         ref={inputRef}
                         value={inputMessage}
@@ -435,6 +469,7 @@ const RiyaGuestChat = () => {
                 isOpen={showLoginModal}
                 onClose={() => setShowLoginModal(false)}
                 guestSessionId={guestSessionId || ''}
+                canClose={canCloseModal}
             />
         </div>
     );

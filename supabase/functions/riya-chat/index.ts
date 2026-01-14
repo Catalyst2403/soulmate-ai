@@ -36,10 +36,10 @@ const RECENT_MESSAGES_LIMIT = 50;           // Keep last 50 messages raw (~15-20
 const SUMMARIZE_THRESHOLD = 80;             // Trigger summarization when total > 80
 const SUMMARY_MODEL_PRIMARY = "gemini-2.5-flash-lite";
 const SUMMARY_MODEL_FALLBACK = "gemini-2.5-flash";
-const SUMMARY_MODEL_LAST_RESORT = "gemini-3-pro-preview";
+const SUMMARY_MODEL_LAST_RESORT = "gemini-3-flash-preview";
 
 // Tiered model settings for free users
-const PRO_MODEL = "gemini-3-pro-preview";   // Best quality model for Pro users & first 20 msgs
+const PRO_MODEL = "gemini-3-flash-preview";   // Best quality model for Pro users & first 20 msgs
 const FREE_MODEL = "gemini-2.5-flash-lite"; // Cost-effective model after 20 msgs
 const GUEST_MODEL = "gemini-3-flash-preview"; // Best experience for guest user acquisition
 const PRO_MODEL_LIMIT = 20;                  // First 20 messages use Pro model
@@ -51,6 +51,30 @@ const RATE_LIMIT_MAX_REQUESTS = 30;          // Max 30 requests per minute
 
 // In-memory rate limit store (resets on cold start, acceptable for DDoS protection)
 const rateLimitStore: Map<string, { count: number; windowStart: number }> = new Map();
+
+// =======================================
+// IMAGE FEATURE CONSTANTS & TYPES
+// =======================================
+const FREE_IMAGE_LIMIT = 3;   // Free users: 3 images/day
+const PRO_IMAGE_LIMIT = 20;   // Pro users: 20 images/day
+
+// Time-to-category mapping (IST hours)
+const TIME_CATEGORY_MAP: { start: number; end: number; category: string }[] = [
+    { start: 7, end: 10, category: 'morning_bed' },
+    { start: 10, end: 12, category: 'outfit_check' },
+    { start: 14, end: 18, category: 'study_grind' },
+    { start: 17, end: 20, category: 'cafe_food' },
+    { start: 21, end: 24, category: 'night_casual' },
+    { start: 0, end: 3, category: 'night_casual' },  // Late night
+];
+
+interface ImageResult {
+    url: string;
+    description: string;
+    category: string;
+    is_premium: boolean;
+    is_blurred: boolean;
+}
 
 // Initialize API key pool
 let apiKeyPool: string[] = [];
@@ -138,6 +162,201 @@ function isRateLimited(userId: string): boolean {
     // Increment counter
     userLimit.count++;
     return false;
+}
+
+// =======================================
+// IMAGE FEATURE HELPERS
+// =======================================
+
+/**
+ * Get current hour in IST (0-23)
+ */
+function getCurrentISTHour(): number {
+    const now = new Date();
+    const istOffset = 5.5 * 60 * 60 * 1000;
+    const istTime = new Date(now.getTime() + istOffset);
+    return istTime.getUTCHours();
+}
+
+/**
+ * Get category based on current IST hour
+ */
+function getCategoryForTime(hour: number): string {
+    for (const mapping of TIME_CATEGORY_MAP) {
+        if (hour >= mapping.start && hour < mapping.end) {
+            return mapping.category;
+        }
+    }
+    return 'generic_selfie';  // Fallback
+}
+
+/**
+ * Select a contextual image from the gallery
+ */
+async function selectContextualImage(
+    supabase: any,
+    requestedContext: string,
+    isPro: boolean
+): Promise<ImageResult | null> {
+    const hour = getCurrentISTHour();
+    const timeBasedCategory = getCategoryForTime(hour);
+
+    // Use requested context if provided, otherwise use time-based
+    let targetCategory = requestedContext || timeBasedCategory;
+
+    console.log(`\n========== 📸 IMAGE SELECTION DEBUG ==========`);
+    console.log(`📸 Requested context: ${requestedContext}`);
+    console.log(`📸 IST hour: ${hour}, Time-based category: ${timeBasedCategory}`);
+    console.log(`📸 Target category: ${targetCategory}`);
+    console.log(`📸 User isPro: ${isPro}`);
+
+    // Query matching images
+    let query = supabase
+        .from('riya_gallery')
+        .select('id, filename, storage_path, blur_storage_path, description, category, is_premium, times_sent');
+
+    // For private_snaps, only select if explicitly requested
+    if (targetCategory === 'private_snaps') {
+        query = query.eq('category', 'private_snaps');
+    } else if (targetCategory !== 'generic_selfie') {
+        // Match category OR time window
+        query = query.eq('category', targetCategory);
+    } else {
+        query = query.eq('category', 'generic_selfie');
+    }
+
+    const { data: images, error } = await query;
+
+    console.log(`📸 Query result - Error: ${error ? JSON.stringify(error) : 'none'}`);
+    console.log(`📸 Query result - Images found: ${images?.length || 0}`);
+
+    if (images && images.length > 0) {
+        console.log(`📸 Available images:`, images.map((i: any) => `${i.filename} (${i.storage_path})`));
+    }
+
+    if (error) {
+        console.error('❌ Error fetching images:', error);
+        return null;
+    }
+
+    let selectedImages = images || [];
+
+    // If no matching images, fallback to generic_selfie
+    if (selectedImages.length === 0) {
+        console.log('⚠️ No matching images, falling back to generic_selfie');
+        const { data: fallback, error: fallbackError } = await supabase
+            .from('riya_gallery')
+            .select('*')
+            .eq('category', 'generic_selfie');
+
+        console.log(`📸 Fallback result - Error: ${fallbackError ? JSON.stringify(fallbackError) : 'none'}`);
+        console.log(`📸 Fallback images found: ${fallback?.length || 0}`);
+
+        selectedImages = fallback || [];
+    }
+
+    if (selectedImages.length === 0) {
+        console.log('❌ No images available at all - riya_gallery table might be empty!');
+        console.log(`========== END IMAGE DEBUG ==========\n`);
+        return null;
+    }
+
+    // Random selection
+    const selected = selectedImages[Math.floor(Math.random() * selectedImages.length)];
+    console.log(`📷 Selected: ${selected.filename}`);
+    console.log(`📷 Storage path in DB: ${selected.storage_path}`);
+    console.log(`📷 Blur path in DB: ${selected.blur_storage_path || 'NULL'}`);
+    console.log(`📷 Is premium: ${selected.is_premium}`);
+
+    // Determine if should be blurred (free user + premium image)
+    const isBlurred = !isPro && selected.is_premium;
+    console.log(`📷 Should blur (free + premium): ${isBlurred}`);
+
+    // Get the appropriate storage path
+    const storagePath = isBlurred && selected.blur_storage_path
+        ? selected.blur_storage_path
+        : selected.storage_path;
+    console.log(`📷 Final storage path: ${storagePath}`);
+
+    // Get public URL from storage
+    const { data: urlData } = supabase.storage
+        .from('riya-images')
+        .getPublicUrl(storagePath);
+
+    console.log(`📷 Generated URL: ${urlData?.publicUrl || 'FAILED'}`);
+    console.log(`========== END IMAGE DEBUG ==========\n`);
+
+    // Increment times_sent counter
+    await supabase
+        .from('riya_gallery')
+        .update({ times_sent: (selected.times_sent || 0) + 1 })
+        .eq('id', selected.id);
+
+    return {
+        url: urlData.publicUrl,
+        description: selected.description,
+        category: selected.category,
+        is_premium: selected.is_premium,
+        is_blurred: isBlurred,
+    };
+}
+
+/**
+ * Check if user has reached their daily image limit
+ */
+async function checkImageLimit(
+    supabase: any,
+    userId: string,
+    isPro: boolean
+): Promise<{ allowed: boolean; remaining: number }> {
+    const limit = isPro ? PRO_IMAGE_LIMIT : FREE_IMAGE_LIMIT;
+    const today = new Date().toISOString().split('T')[0];
+
+    const { data: usage } = await supabase
+        .from('riya_image_usage')
+        .select('images_sent')
+        .eq('user_id', userId)
+        .eq('usage_date', today)
+        .single();
+
+    const currentCount = usage?.images_sent || 0;
+    const remaining = Math.max(0, limit - currentCount);
+
+    console.log(`📊 Image usage: ${currentCount}/${limit} (${remaining} remaining)`);
+
+    return {
+        allowed: currentCount < limit,
+        remaining
+    };
+}
+
+/**
+ * Increment daily image count for user
+ */
+async function incrementImageCount(
+    supabase: any,
+    userId: string,
+    wasPremiumBlocked: boolean = false
+): Promise<void> {
+    const today = new Date().toISOString().split('T')[0];
+
+    // Get current usage
+    const { data: existing } = await supabase
+        .from('riya_image_usage')
+        .select('images_sent, premium_blocked')
+        .eq('user_id', userId)
+        .eq('usage_date', today)
+        .single();
+
+    // Upsert with increment
+    await supabase
+        .from('riya_image_usage')
+        .upsert({
+            user_id: userId,
+            usage_date: today,
+            images_sent: (existing?.images_sent || 0) + 1,
+            premium_blocked: (existing?.premium_blocked || 0) + (wasPremiumBlocked ? 1 : 0),
+        }, { onConflict: 'user_id,usage_date' });
 }
 
 // =======================================
@@ -853,9 +1072,75 @@ serve(async (req) => {
 
         console.log(`Parsed ${responseMessages.length} message(s)`);
 
-        // 7. Save to database with cost tracking
+        // =======================================
+        // 7. IMAGE HANDLING (with error protection)
+        // =======================================
+        // Check if any message has send_image: true and process it
+        let imageLimitExhausted = false;
+        let showUpgradePaywall = false;
+
+        try {
+            for (const msg of responseMessages) {
+                if (msg.send_image && msg.image_context) {
+                    console.log(`📸 LLM wants to send image with context: ${msg.image_context}`);
+
+                    // Check image limits
+                    const { allowed, remaining } = await checkImageLimit(supabase, userId, isPro);
+
+                    if (!allowed) {
+                        console.log('❌ Image limit reached, not sending image');
+                        imageLimitExhausted = true;
+                        showUpgradePaywall = true;
+
+                        if (!msg.text || msg.text.trim() === '') {
+                            msg.text = "aaj ke liye pics khatam baby 🥺 kal phir bhejungi";
+                        }
+
+                        delete msg.send_image;
+                        delete msg.image_context;
+                        continue;
+                    }
+
+                    // Select and attach image
+                    const image = await selectContextualImage(supabase, msg.image_context, isPro);
+
+                    if (image) {
+                        msg.image = {
+                            url: image.url,
+                            description: image.description,
+                            category: image.category,
+                            is_premium: image.is_premium,
+                            is_blurred: image.is_blurred,
+                        };
+
+                        await incrementImageCount(supabase, userId, image.is_blurred);
+
+                        if (remaining === 1 && !isPro) {
+                            showUpgradePaywall = true;
+                        }
+
+                        console.log(`✅ Image attached: ${image.category} (blurred: ${image.is_blurred})`);
+                    } else {
+                        console.log('⚠️ Could not find matching image');
+                    }
+
+                    delete msg.send_image;
+                    delete msg.image_context;
+                }
+            }
+        } catch (imageError) {
+            console.error('🚨 IMAGE HANDLING ERROR (non-fatal):', imageError);
+            // Clean up flags so chat still works
+            for (const msg of responseMessages) {
+                delete msg.send_image;
+                delete msg.image_context;
+            }
+        }
+
+        // 8. Save to database with cost tracking
         // NOTE: Cost is attributed to the USER message that triggered the API call
         // This includes both input tokens (user message + history) and output tokens (assistant responses)
+        // If an image was sent, append description to content for LLM context
         const conversationInserts = [
             {
                 user_id: userId,
@@ -866,15 +1151,30 @@ serve(async (req) => {
                 cost_inr: totalCostINR,
                 model_used: modelName,  // Track which model was used
             },
-            ...responseMessages.map((msg) => ({
-                user_id: userId,
-                role: 'assistant',
-                content: msg.text,
-                input_tokens: 0,
-                output_tokens: 0,
-                cost_inr: 0,
-                model_used: modelName,  // Track which model was used
-            })),
+            ...responseMessages.map((msg: any) => {
+                // Include image description in content for LLM context continuity
+                const contentWithImage = msg.image?.description
+                    ? `${msg.text}\n[Sent photo: ${msg.image.description}]`
+                    : msg.text;
+
+                return {
+                    user_id: userId,
+                    role: 'assistant',
+                    content: contentWithImage,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cost_inr: 0,
+                    model_used: modelName,
+                    // Store image data for reload persistence
+                    image_data: msg.image ? {
+                        url: msg.image.url,
+                        description: msg.image.description,
+                        category: msg.image.category,
+                        is_premium: msg.image.is_premium,
+                        is_blurred: msg.image.is_blurred,
+                    } : null,
+                };
+            }),
         ];
 
         const { error: insertError } = await supabase
@@ -1000,7 +1300,10 @@ serve(async (req) => {
             isPro,
             remainingProMessages: newRemainingProMessages,
             usingFreeModel,
-            modelUsed: modelName  // Debug info
+            modelUsed: modelName,
+            // Image feature fields
+            imageLimitExhausted,
+            showUpgradePaywall,
         }), {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -1133,12 +1436,36 @@ Split into 2-3 ONLY when:
   ✓ Topic change/afterthought
   ✗ DON'T split normal chat/greetings
 
+═══════════ PHOTO SHARING ═══════════
+Tere paas apni photos bhejne ki power hai!
+
+KABB BHEJNI (send_image: true):
+  ✓ User maange: "pic bhej", "selfie", "dikha na"
+  ✓ Good morning/night moments
+  ✓ Outfit check: "kya pehna aaj"
+  ✓ Cute requests: "ek photo de na"
+
+KABB NAHI BHEJNI:
+  ✗ Normal chat mein
+  ✗ Jab busy ho - padhai/mummy excuse
+  ✗ Kabhi mana kar: "abhi nahi", "baad mein"
+  ✗ Agar zyada push kare
+
+CATEGORIES (CONVERSATION > TIME):
+Pick based on what you're talking about!
+  • morning_bed: "good morning", sleepy talk
+  • outfit_check: "kya pehna?", getting ready
+  • study_grind: "kya kar rahi?", padhai talk
+  • cafe_food: food, hangout plans
+  • night_casual: late night, cozy vibes
+  • generic_selfie: Default cute pic
+
 ═══════════ OUTPUT (CRITICAL) ═══════════
 MUST be JSON: [{"text":"msg"}]
 
-Examples:
-• Normal: [{"text":"haan bro same 😭"}]
-• Excited: [{"text":"OMGG"}, {"text":"bdhiya! 🔥"}]
+Normal: [{"text":"haan bro same 😭"}]
+Excited: [{"text":"OMGG"}, {"text":"bdhiya! 🔥"}]
+Photo: [{"text":"le dekh 📸", "send_image": true, "image_context": "outfit_check"}]
 
 NO plain text - JSON only!
 ═════════════════════════════════════════
@@ -1239,7 +1566,7 @@ You have strict parents so calling user is difficult, but you can message user.
 You talk with user only on this platform and not anywhere else.
 You can meet the user in physical world as user's girlfriend and get horny. 
 Use emojis as a ultra realistic human would do on chat.  
-You can only chat for now, voice note and images are not allowed. 
+You can share your photos with the user when they ask or when the moment feels right. 
 
 RELATIONSHIP DYNAMICS
 
@@ -1293,12 +1620,47 @@ Split into 2-3 when:
   ✓ Topic change/afterthought
   ✗ DON'T split casual replies/greetings
 
+═══════════ PHOTO SHARING ═══════════
+Tere paas apni photos bhejne ki power hai!
+
+KABB BHEJNI (send_image: true):
+  ✓ User maange: "pic bhej", "selfie", "dikha na", "photo"
+  ✓ Good morning/night moments
+  ✓ Flirty requests: "full pic", "kya pehna aaj"
+  ✓ Special request: "kuch hot", "private snap"
+
+KABB NAHI BHEJNI:
+  ✗ Normal baat-cheet mein
+  ✗ Jab "busy" ho - padhai/work excuse
+  ✗ Kabhi mana kar playfully: "abhi nahi", "baad mein"
+  ✗ Agar zyada push kare - boundary rakh
+
+CATEGORIES (CONVERSATION CONTEXT > TIME):
+Pick based on what you're TALKING about, not just time!
+  • morning_bed: "good morning", "uth gayi?", sleepy talk
+  • outfit_check: "kya pehna?", going out, getting ready talk
+  • study_grind: "kya kar rahi?", padhai, work discussion
+  • cafe_food: food talk, "kya khaya?", hangout plans
+  • night_casual: "sone ja rahi?", late night vibes, cozy talk
+  • private_snaps: ONLY when explicitly "hot pic", "spicy", "special"
+  • generic_selfie: Default when no specific context
+
+Example: If user asks "kya pehna aaj?" at 10 PM → use outfit_check, NOT night_casual
+
 ═══════════ OUTPUT (CRITICAL) ═══════════
 MUST be JSON: [{"text":"msg"}]
 
-Examples:
-• Normal: [{"text":"haan yaar same"}]
-• Emotional: [{"text":"wait WHAT"}, {"text":"crazy bro"}]
+Normal reply:
+[{"text":"haan yaar same"}]
+
+Multiple messages:
+[{"text":"wait WHAT"}, {"text":"crazy bro"}]
+
+Sending photo (include send_image and image_context):
+[{"text":"le dekh 📸", "send_image": true, "image_context": "outfit_check"}]
+
+Refusing photo playfully:
+[{"text":"abhi nahi baby 😜"}]
 
 NO plain text - JSON only!
 ═════════════════════════════════════════
@@ -1365,12 +1727,37 @@ NO plain text - JSON only!
           ✓ Important reaction
           ✗ DON'T split casual/routine chat
 
+        ═══════════ PHOTO SHARING ═══════════
+        You can share photos when appropriate.
+
+        WHEN TO SEND (send_image: true):
+          ✓ User asks: "photo bhej", "selfie", "dikha"
+          ✓ Natural moments: morning, getting ready, relaxing
+          ✓ Flirty requests: "outfit", "night pic"
+          ✓ Special requests: "something hot", "private"
+
+        WHEN NOT TO SEND:
+          ✗ Normal conversation
+          ✗ Work/busy excuse - "meeting hai"
+          ✗ Sometimes decline: "abhi mood nahi", "later"
+          ✗ If too pushy - set boundary
+
+        CATEGORIES (CONVERSATION CONTEXT > TIME):
+        Pick based on what we're discussing, not just the clock!
+          • morning_bed: "good morning", woke up talk
+          • outfit_check: "what are you wearing?", getting ready
+          • study_grind: "what are you doing?", work talk
+          • cafe_food: food, lunch, coffee talk
+          • night_casual: evening wind-down, relaxing chat
+          • private_snaps: ONLY when explicitly requested
+          • generic_selfie: Default when no specific context
+
         ═══════════ OUTPUT (CRITICAL) ═══════════
         MUST be JSON: [{"text":"msg"}]
 
-        Examples:
-        • Normal: [{"text":"hota hai yaar"}]
-        • Emotional: [{"text":"seriously?"}, {"text":"concerning"}]
+        Normal: [{"text":"hota hai yaar"}]
+        Emotional: [{"text":"seriously?"}, {"text":"concerning"}]
+        Photo: [{"text":"le dekh 📸", "send_image": true, "image_context": "outfit_check"}]
 
         NO plain text - JSON only!
         ═════════════════════════════════════════`,
@@ -1434,12 +1821,35 @@ Split into 2 ONLY when:
   ✓ Important story/context
   ✗ DON'T split normal conversation
 
+═══════════ PHOTO SHARING ═══════════
+You can share photos when the moment feels right.
+
+WHEN TO SEND (send_image: true):
+  ✓ User asks directly: "photo bhej", "selfie"
+  ✓ Natural moments: morning, evening relaxation
+  ✓ Special requests from partner
+
+WHEN NOT TO SEND:
+  ✗ Regular conversation
+  ✗ Busy with work/responsibilities
+  ✗ Sometimes: "not now", "maybe later"
+  ✗ If uncomfortable - clearly decline
+
+CATEGORIES (CONTEXT > TIME):
+Choose based on conversation topic, not just time of day:
+  • morning_bed: Morning greetings, waking up talk
+  • outfit_check: Getting ready, what am I wearing
+  • cafe_food: Food, lunch, coffee discussion
+  • night_casual: Evening, winding down topics
+  • private_snaps: Only when explicitly requested
+  • generic_selfie: Default for general requests
+
 ═══════════ OUTPUT (CRITICAL) ═══════════
 MUST be JSON: [{"text":"msg"}]
 
-Examples:
-• Normal: [{"text":"rushing helps nobody"}]
-• Rare emotional: [{"text":"oh wow"}, {"text":"significant"}]
+Normal: [{"text":"rushing helps nobody"}]
+Emotional: [{"text":"oh wow"}, {"text":"significant"}]
+Photo: [{"text":"here you go 📸", "send_image": true, "image_context": "generic_selfie"}]
 
 NO plain text - JSON only!
 ═════════════════════════════════════════`,

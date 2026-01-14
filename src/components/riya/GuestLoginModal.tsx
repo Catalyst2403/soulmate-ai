@@ -2,18 +2,22 @@ import { Button } from '@/components/ui/button';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/integrations/supabase/client';
 import { useNavigate } from 'react-router-dom';
+import { X } from 'lucide-react';
 
 interface GuestLoginModalProps {
     isOpen: boolean;
     onClose: () => void;
     guestSessionId: string;
+    canClose?: boolean; // If false (10 msgs exhausted), cannot close modal
 }
 
 /**
- * Login wall shown after guest uses 10 messages
+ * Login wall shown after guest uses 10 messages or clicks camera
  * Full-screen modal with Hinglish copy and login options
+ * canClose=true: Shows X button (e.g., camera click)
+ * canClose=false: No X button (e.g., 10 msgs exhausted)
  */
-export default function GuestLoginModal({ isOpen, onClose, guestSessionId }: GuestLoginModalProps) {
+export default function GuestLoginModal({ isOpen, onClose, guestSessionId, canClose = true }: GuestLoginModalProps) {
     const navigate = useNavigate();
 
     const handleGoogleSignIn = async () => {
@@ -58,6 +62,16 @@ export default function GuestLoginModal({ isOpen, onClose, guestSessionId }: Gue
                         transition={{ type: 'spring', duration: 0.5 }}
                         className="relative w-full max-w-sm bg-background rounded-2xl overflow-hidden shadow-2xl border border-border"
                     >
+                        {/* Close button - only shown when canClose is true */}
+                        {canClose && (
+                            <button
+                                onClick={onClose}
+                                className="absolute top-3 right-3 z-10 w-8 h-8 flex items-center justify-center rounded-full bg-muted/50 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                            >
+                                <X className="w-4 h-4" />
+                            </button>
+                        )}
+
                         {/* Riya's Avatar */}
                         <div className="flex flex-col items-center pt-8 pb-4 bg-gradient-to-b from-primary/10 to-transparent">
                             <div className="w-24 h-24 rounded-full overflow-hidden border-4 border-primary/50 shadow-lg mb-4">
@@ -121,7 +135,7 @@ export default function GuestLoginModal({ isOpen, onClose, guestSessionId }: Gue
                         {/* Benefits */}
                         <div className="px-6 pb-6 text-center text-sm text-muted-foreground space-y-1">
                             <p>✨ 50 free messages daily after login</p>
-                            <p>💾 Your chats are saved forever</p>
+                            <p>📸 Unlock Riya's special photos & surprise pics</p>
                         </div>
                     </motion.div>
                 </motion.div>
