@@ -79,8 +79,8 @@ const RiyaCallback = () => {
                 }
             } catch (error) {
                 console.error('Callback error:', error);
+                navigate('/riya');
             }
-            navigate('/riya');
         };
 
         handleCallback();

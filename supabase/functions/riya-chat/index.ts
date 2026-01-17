@@ -551,8 +551,15 @@ serve(async (req) => {
                 processedHistory.shift();
             }
 
-            // 6. Generate system prompt with default guest age
-            const systemPrompt = getRiyaSystemPrompt(GUEST_DEFAULT_AGE, 'friend', 'male');
+            // 6. Generate system prompt with default guest age + guest status
+            const baseSystemPrompt = getRiyaSystemPrompt(GUEST_DEFAULT_AGE, 'friend', 'male');
+            const systemPrompt = `${baseSystemPrompt}
+
+[USER STATUS: GUEST - NOT LOGGED IN]
+This user is a GUEST (not logged in). You CANNOT send photos to guests.
+If they ask for pics, tease them and say something like:
+"Pics toh login ke baad milegi baby 😉 Pehle account bana, fir dekhte hai..."
+DO NOT set send_image: true for guests. Just playfully redirect to login.`;
 
             // 7. Call Gemini with GUEST_MODEL (best experience for user acquisition)
             const GEMINI_API_KEY = getNextApiKey();
@@ -754,8 +761,15 @@ serve(async (req) => {
             user.user_gender
         );
 
-        // Append current time to system prompt
-        const systemPrompt = `${baseSystemPrompt}\n\n[CURRENT TIME: ${currentTimeIST}]\nUse this to greet appropriately (good morning/evening) and reference time naturally.`;
+        // Append current time and user status to system prompt
+        const userStatus = isPro ? 'PRO SUBSCRIBER' : 'FREE USER (3 images/day limit)';
+        const systemPrompt = `${baseSystemPrompt}
+
+[CURRENT TIME: ${currentTimeIST}]
+Use this to greet appropriately (good morning/evening) and reference time naturally.
+
+[USER STATUS: ${userStatus}]
+This user is LOGGED IN. You CAN send photos when appropriate.`;
 
         console.log("=== RIYA CHAT SESSION ===");
         console.log("User:", user.username, "Age:", user.user_age, "Gender:", user.user_gender);
