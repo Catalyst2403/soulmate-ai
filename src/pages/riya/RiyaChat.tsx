@@ -582,6 +582,17 @@ const RiyaChat = () => {
         } finally {
             setIsTyping(false);
             isProcessingBatchRef.current = false;
+
+            // Check if new messages were queued during processing - process them!
+            // We need to access the latest state, so use a callback
+            setPendingMessages(currentPending => {
+                if (currentPending.length > 0) {
+                    console.log(`📬 Found ${currentPending.length} message(s) queued during processing, triggering new batch...`);
+                    // Use setTimeout to ensure state update completes first
+                    setTimeout(() => processBatchedMessages(userId), 50);
+                }
+                return currentPending; // Don't modify, just read
+            });
         }
     };
 

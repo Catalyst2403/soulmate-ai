@@ -454,8 +454,8 @@ const RiyaGuestChat = () => {
                 <div ref={messagesEndRef} />
             </div>
 
-            {/* Quick Reply Buttons (show when few messages) */}
-            {messages.length > 0 && messages.length <= 2 && !isTyping && (
+            {/* Quick Reply Buttons (show only before user sends first message) */}
+            {messages.length > 0 && messageCount === 0 && !isTyping && (
                 <div className="fixed bottom-20 left-0 right-0 z-40">
                     <QuickReplyButtons
                         onSelect={handleSend}

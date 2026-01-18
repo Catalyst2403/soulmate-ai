@@ -639,22 +639,26 @@ DO NOT set send_image: true for guests. Just playfully redirect to login.`;
             }
 
             // 9. Save conversation to database (each user message separately)
+            // Use explicit timestamps to ensure correct ordering
+            const baseTime = Date.now();
             const conversationInserts = [
-                // Save each user message in batch
-                ...userMessages.map((msg: string) => ({
+                // Save each user message in batch (with sequential timestamps)
+                ...userMessages.map((msg: string, idx: number) => ({
                     guest_session_id: guestSessionId,
                     user_id: null,
                     role: 'user',
                     content: msg,
                     model_used: modelName,
+                    created_at: new Date(baseTime + idx).toISOString(), // +1ms per message
                 })),
-                // Save assistant responses
-                ...responseMessages.map((msg: any) => ({
+                // Save assistant responses (after all user messages)
+                ...responseMessages.map((msg: any, idx: number) => ({
                     guest_session_id: guestSessionId,
                     user_id: null,
                     role: 'assistant',
                     content: msg.text,
                     model_used: modelName,
+                    created_at: new Date(baseTime + userMessages.length + idx + 100).toISOString(), // +100ms after last user msg
                 })),
             ];
 
@@ -1205,8 +1209,10 @@ This user is LOGGED IN. You CAN send photos when appropriate.`;
         // NOTE: Cost is attributed to the first USER message that triggered the API call
         // This includes both input tokens (user messages + history) and output tokens (assistant responses)
         // If an image was sent, append description to content for LLM context
+        // Use explicit timestamps to ensure correct ordering
+        const baseTime = Date.now();
         const conversationInserts = [
-            // Save each user message separately (batch support)
+            // Save each user message separately (batch support, with sequential timestamps)
             ...userMessages.map((msg: string, idx: number) => ({
                 user_id: userId,
                 role: 'user',
@@ -1216,8 +1222,9 @@ This user is LOGGED IN. You CAN send photos when appropriate.`;
                 output_tokens: idx === 0 ? outputTokens : 0,
                 cost_inr: idx === 0 ? totalCostINR : 0,
                 model_used: modelName,
+                created_at: new Date(baseTime + idx).toISOString(), // +1ms per message
             })),
-            ...responseMessages.map((msg: any) => {
+            ...responseMessages.map((msg: any, idx: number) => {
                 // Include image description in content for LLM context continuity
                 const contentWithImage = msg.image?.description
                     ? `${msg.text}\n[Sent photo: ${msg.image.description}]`
@@ -1231,6 +1238,7 @@ This user is LOGGED IN. You CAN send photos when appropriate.`;
                     output_tokens: 0,
                     cost_inr: 0,
                     model_used: modelName,
+                    created_at: new Date(baseTime + userMessages.length + idx + 100).toISOString(), // +100ms after last user msg
                     // Store image data for reload persistence
                     image_data: msg.image ? {
                         url: msg.image.url,
