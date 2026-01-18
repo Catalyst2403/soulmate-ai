@@ -597,8 +597,19 @@ DO NOT set send_image: true for guests. Just playfully redirect to login.`;
                 },
             });
 
-            const result = await chat.sendMessage(message);
-            const reply = result.response.text();
+            // Send user messages to Gemini (handles batch for guests too)
+            let reply = '';
+            if (userMessages.length === 1) {
+                const result = await chat.sendMessage(userMessages[0]);
+                reply = result.response.text();
+            } else {
+                // Batch mode for guests - send each message sequentially
+                for (let i = 0; i < userMessages.length - 1; i++) {
+                    await chat.sendMessage(userMessages[i]);
+                }
+                const result = await chat.sendMessage(userMessages[userMessages.length - 1]);
+                reply = result.response.text();
+            }
 
             console.log("🤖 Guest response:", reply.substring(0, 100) + "...");
 
@@ -627,15 +638,17 @@ DO NOT set send_image: true for guests. Just playfully redirect to login.`;
                 responseMessages = [{ text: reply }];
             }
 
-            // 9. Save conversation to database
+            // 9. Save conversation to database (each user message separately)
             const conversationInserts = [
-                {
+                // Save each user message in batch
+                ...userMessages.map((msg: string) => ({
                     guest_session_id: guestSessionId,
-                    user_id: null,  // Guest = no user_id
+                    user_id: null,
                     role: 'user',
-                    content: message,
+                    content: msg,
                     model_used: modelName,
-                },
+                })),
+                // Save assistant responses
                 ...responseMessages.map((msg: any) => ({
                     guest_session_id: guestSessionId,
                     user_id: null,
@@ -647,16 +660,16 @@ DO NOT set send_image: true for guests. Just playfully redirect to login.`;
 
             await supabase.from('riya_conversations').insert(conversationInserts);
 
-            // 10. Update guest session message count
+            // 10. Update guest session message count (by batch size)
             await supabase
                 .from('riya_guest_sessions')
                 .update({
-                    message_count: guestSession.message_count + 1,
+                    message_count: guestSession.message_count + userMessages.length,
                     last_active: new Date().toISOString(),
                 })
                 .eq('session_id', guestSessionId);
 
-            console.log(`✅ Guest message ${guestSession.message_count + 1}/${GUEST_MESSAGE_LIMIT} processed`);
+            console.log(`✅ Guest batch of ${userMessages.length} message(s) processed. Total: ${guestSession.message_count + userMessages.length}/${GUEST_MESSAGE_LIMIT}`);
 
             return new Response(JSON.stringify({
                 messages: responseMessages,

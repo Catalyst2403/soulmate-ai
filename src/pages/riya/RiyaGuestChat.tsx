@@ -54,7 +54,7 @@ const RiyaGuestChat = () => {
     const [pendingMessages, setPendingMessages] = useState<string[]>([]);
     const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
     const isProcessingBatchRef = useRef(false);
-    const DEBOUNCE_DELAY = 3500; // 3.5 seconds
+    const DEBOUNCE_DELAY = 5000; // 5 seconds
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
