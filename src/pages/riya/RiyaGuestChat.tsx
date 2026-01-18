@@ -18,6 +18,22 @@ interface MessageWithTimestamp {
 const GUEST_MESSAGE_LIMIT = 10;
 
 /**
+ * Calculate realistic typing delay based on message length
+ * ~35ms per character + base delay + random variance (±20%)
+ */
+const calculateTypingDelay = (message: string): number => {
+    const BASE_DELAY = 400;
+    const MS_PER_CHAR = 35;
+    const VARIANCE = 0.2;
+
+    const charDelay = message.length * MS_PER_CHAR;
+    const baseTotal = BASE_DELAY + charDelay;
+    const variance = baseTotal * VARIANCE * (Math.random() * 2 - 1);
+
+    return Math.min(4000, Math.max(500, baseTotal + variance));
+};
+
+/**
  * Guest Chat Interface
  * Allows unauthenticated users to chat with Riya (10 message limit)
  * Shows login wall after limit is reached
@@ -80,8 +96,9 @@ const RiyaGuestChat = () => {
                 // Store it so we can save when user sends first message
                 setPendingGreeting(greeting.text);
 
-                // Show greeting in UI with typing effect
+                // Show greeting in UI with dynamic typing delay
                 setIsTyping(true);
+                const greetingDelay = calculateTypingDelay(greeting.text);
                 setTimeout(() => {
                     setMessages([{
                         text: greeting.text,
@@ -90,7 +107,7 @@ const RiyaGuestChat = () => {
                     }]);
                     setQuickReplyOptions(greeting.options);
                     setIsTyping(false);
-                }, 1500);
+                }, greetingDelay);
             } else {
                 // Returning guest - load history
                 const { data: history } = await supabase
@@ -231,12 +248,12 @@ const RiyaGuestChat = () => {
                 return;
             }
 
-            // Display responses with typing animation
+            // Display responses with dynamic typing animation based on message length
             for (let i = 0; i < data.messages.length; i++) {
-                if (i > 0) {
-                    setIsTyping(true);
-                    await new Promise(r => setTimeout(r, 1000));
-                }
+                // Show typing for appropriate time based on message length
+                setIsTyping(true);
+                const typingDelay = calculateTypingDelay(data.messages[i].text || '');
+                await new Promise(r => setTimeout(r, typingDelay));
 
                 const riyaMsg: MessageWithTimestamp = {
                     text: data.messages[i].text,
@@ -244,6 +261,12 @@ const RiyaGuestChat = () => {
                     timestamp: new Date().toISOString(),
                 };
                 setMessages(prev => [...prev, riyaMsg]);
+                setIsTyping(false);
+
+                // Small gap between multiple messages
+                if (i < data.messages.length - 1) {
+                    await new Promise(r => setTimeout(r, 200));
+                }
             }
         } catch (error) {
             console.error('Chat error:', error);

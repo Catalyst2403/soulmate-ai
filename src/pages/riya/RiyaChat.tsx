@@ -54,6 +54,25 @@ interface MessageWithTimestamp {
  * Main chat page for conversations with Riya
  * Matches core soulmate product UI with dark theme and WhatsApp-style bubbles
  */
+/**
+ * Calculate realistic typing delay based on message length
+ * ~40ms per character + base delay + random variance (±20%)
+ */
+const calculateTypingDelay = (message: string): number => {
+    const BASE_DELAY = 400; // Minimum delay in ms
+    const MS_PER_CHAR = 35; // ~35ms per character (realistic typing)
+    const VARIANCE = 0.2; // ±20% random variance
+
+    const charDelay = message.length * MS_PER_CHAR;
+    const baseTotal = BASE_DELAY + charDelay;
+
+    // Add random variance for human feel
+    const variance = baseTotal * VARIANCE * (Math.random() * 2 - 1);
+
+    // Clamp between 500ms and 4000ms
+    return Math.min(4000, Math.max(500, baseTotal + variance));
+};
+
 const RiyaChat = () => {
     const [messages, setMessages] = useState<MessageWithTimestamp[]>([]);
     const [inputMessage, setInputMessage] = useState('');
@@ -69,6 +88,7 @@ const RiyaChat = () => {
 
     // Subscription & limits state
     const [isPro, setIsPro] = useState(false);
+    const [isSubscriptionLoaded, setIsSubscriptionLoaded] = useState(false); // Prevents flash of wrong state
     const [remainingProMessages, setRemainingProMessages] = useState(20);  // Pro-quality messages remaining
     const [usingFreeModel, setUsingFreeModel] = useState(false);           // True after 20 msgs
     const [showPaywall, setShowPaywall] = useState(false);                 // Hard limit paywall (200 msgs)
@@ -244,6 +264,9 @@ const RiyaChat = () => {
                     setUsingFreeModel(true);
                 }
             }
+
+            // Mark subscription as loaded (prevents flash of wrong UI)
+            setIsSubscriptionLoaded(true);
         };
 
         init();
@@ -454,9 +477,6 @@ const RiyaChat = () => {
                 }
             }
 
-            // Configurable delay between burst messages (in milliseconds)
-            const MESSAGE_DELAY_MS = 1500;
-
             // DEBUG: Log processed messages to see image data
             console.log('========== 📸 FRONTEND IMAGE DEBUG ==========');
             console.log('Processed messages from API:', JSON.stringify(processedMessages, null, 2));
@@ -470,13 +490,17 @@ const RiyaChat = () => {
             });
             console.log('========== END FRONTEND DEBUG ==========');
 
-            // Display each message sequentially with typing animation
+            // Display each message sequentially with dynamic typing animation
             for (let i = 0; i < processedMessages.length; i++) {
                 // Show typing indicator before each message
                 setIsTyping(true);
 
-                // Wait to simulate typing
-                await new Promise(resolve => setTimeout(resolve, MESSAGE_DELAY_MS));
+                // Calculate dynamic delay based on message length
+                const typingDelay = calculateTypingDelay(processedMessages[i].text || '');
+                console.log(`⏱️ Message ${i}: ${processedMessages[i].text?.length} chars → ${typingDelay}ms delay`);
+
+                // Wait to simulate realistic typing
+                await new Promise(resolve => setTimeout(resolve, typingDelay));
 
                 // Add message with timestamp (including image if present)
                 const riyaMsg: MessageWithTimestamp = {
@@ -634,13 +658,13 @@ const RiyaChat = () => {
                             <div className="flex flex-col">
                                 <h2 className="font-display font-semibold text-foreground text-base leading-tight flex items-center gap-2">
                                     Riya
-                                    {isPro && (
+                                    {isSubscriptionLoaded && isPro && (
                                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gradient-to-r from-yellow-500 to-orange-500 text-[10px] font-bold text-white">
                                             <Crown className="w-3 h-3" />
                                             PRO
                                         </span>
                                     )}
-                                    {!isPro && usingFreeModel && (
+                                    {isSubscriptionLoaded && !isPro && usingFreeModel && (
                                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-muted text-[10px] font-medium text-muted-foreground">
                                             <Zap className="w-3 h-3" />
                                             Lite
@@ -650,10 +674,10 @@ const RiyaChat = () => {
                                 <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
                                     <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
                                     {isTyping ? 'typing...' : 'online'}
-                                    {isPro && !isTyping && (
+                                    {isSubscriptionLoaded && isPro && !isTyping && (
                                         <span className="text-yellow-400 ml-1">• ∞ Unlimited</span>
                                     )}
-                                    {!isPro && !isTyping && remainingProMessages > 0 && (
+                                    {isSubscriptionLoaded && !isPro && !isTyping && remainingProMessages > 0 && (
                                         <span className="text-muted-foreground ml-1">• {remainingProMessages} Pro left</span>
                                     )}
                                 </p>
@@ -663,7 +687,7 @@ const RiyaChat = () => {
 
                     <div className="flex items-center gap-2">
                         {/* Pro upgrade button - only show for free users */}
-                        {!isPro && (
+                        {isSubscriptionLoaded && !isPro && (
                             <Button
                                 onClick={() => navigate('/riya/pricing')}
                                 variant="outline"

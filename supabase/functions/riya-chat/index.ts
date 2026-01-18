@@ -546,9 +546,12 @@ serve(async (req) => {
                 parts: [{ text: msg.content }],
             }));
 
-            // Remove leading model messages (Gemini requirement)
-            while (processedHistory.length > 0 && processedHistory[0].role === "model") {
-                processedHistory.shift();
+            // Preserve leading model messages by prepending a context user message (Gemini requires user first)
+            if (processedHistory.length > 0 && processedHistory[0].role === "model") {
+                processedHistory.unshift({
+                    role: "user",
+                    parts: [{ text: "[Conversation started - your greeting follows]" }]
+                });
             }
 
             // 6. Generate system prompt with default guest age + guest status
@@ -883,9 +886,12 @@ This user is LOGGED IN. You CAN send photos when appropriate.`;
             });
         }
 
-        // Remove leading model messages if no summary (Gemini requirement)
-        while (processedHistory.length > 0 && processedHistory[0].role === "model") {
-            processedHistory.shift();
+        // Preserve leading model messages by prepending a context user message (Gemini requires user first)
+        if (processedHistory.length > 0 && processedHistory[0].role === "model") {
+            processedHistory.unshift({
+                role: "user",
+                parts: [{ text: "[Conversation started - your greeting follows]" }]
+            });
         }
 
         // 6. Call Gemini with tiered model selection
