@@ -54,7 +54,7 @@ const RiyaGuestChat = () => {
     const [pendingMessages, setPendingMessages] = useState<string[]>([]);
     const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
     const isProcessingBatchRef = useRef(false);
-    const DEBOUNCE_DELAY = 3500; // 3.5 seconds
+    const DEBOUNCE_DELAY = 5000; // 5 seconds
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
@@ -454,8 +454,8 @@ const RiyaGuestChat = () => {
                 <div ref={messagesEndRef} />
             </div>
 
-            {/* Quick Reply Buttons (show when few messages) */}
-            {messages.length > 0 && messages.length <= 2 && !isTyping && (
+            {/* Quick Reply Buttons (show only before user sends first message) */}
+            {messages.length > 0 && messageCount === 0 && !isTyping && (
                 <div className="fixed bottom-20 left-0 right-0 z-40">
                     <QuickReplyButtons
                         onSelect={handleSend}

@@ -597,8 +597,19 @@ DO NOT set send_image: true for guests. Just playfully redirect to login.`;
                 },
             });
 
-            const result = await chat.sendMessage(message);
-            const reply = result.response.text();
+            // Send user messages to Gemini (handles batch for guests too)
+            let reply = '';
+            if (userMessages.length === 1) {
+                const result = await chat.sendMessage(userMessages[0]);
+                reply = result.response.text();
+            } else {
+                // Batch mode for guests - send each message sequentially
+                for (let i = 0; i < userMessages.length - 1; i++) {
+                    await chat.sendMessage(userMessages[i]);
+                }
+                const result = await chat.sendMessage(userMessages[userMessages.length - 1]);
+                reply = result.response.text();
+            }
 
             console.log("🤖 Guest response:", reply.substring(0, 100) + "...");
 
@@ -627,36 +638,42 @@ DO NOT set send_image: true for guests. Just playfully redirect to login.`;
                 responseMessages = [{ text: reply }];
             }
 
-            // 9. Save conversation to database
+            // 9. Save conversation to database (each user message separately)
+            // Use explicit timestamps to ensure correct ordering
+            const baseTime = Date.now();
             const conversationInserts = [
-                {
+                // Save each user message in batch (with sequential timestamps)
+                ...userMessages.map((msg: string, idx: number) => ({
                     guest_session_id: guestSessionId,
-                    user_id: null,  // Guest = no user_id
+                    user_id: null,
                     role: 'user',
-                    content: message,
+                    content: msg,
                     model_used: modelName,
-                },
-                ...responseMessages.map((msg: any) => ({
+                    created_at: new Date(baseTime + idx).toISOString(), // +1ms per message
+                })),
+                // Save assistant responses (after all user messages)
+                ...responseMessages.map((msg: any, idx: number) => ({
                     guest_session_id: guestSessionId,
                     user_id: null,
                     role: 'assistant',
                     content: msg.text,
                     model_used: modelName,
+                    created_at: new Date(baseTime + userMessages.length + idx + 100).toISOString(), // +100ms after last user msg
                 })),
             ];
 
             await supabase.from('riya_conversations').insert(conversationInserts);
 
-            // 10. Update guest session message count
+            // 10. Update guest session message count (by batch size)
             await supabase
                 .from('riya_guest_sessions')
                 .update({
-                    message_count: guestSession.message_count + 1,
+                    message_count: guestSession.message_count + userMessages.length,
                     last_active: new Date().toISOString(),
                 })
                 .eq('session_id', guestSessionId);
 
-            console.log(`✅ Guest message ${guestSession.message_count + 1}/${GUEST_MESSAGE_LIMIT} processed`);
+            console.log(`✅ Guest batch of ${userMessages.length} message(s) processed. Total: ${guestSession.message_count + userMessages.length}/${GUEST_MESSAGE_LIMIT}`);
 
             return new Response(JSON.stringify({
                 messages: responseMessages,
@@ -1192,8 +1209,10 @@ This user is LOGGED IN. You CAN send photos when appropriate.`;
         // NOTE: Cost is attributed to the first USER message that triggered the API call
         // This includes both input tokens (user messages + history) and output tokens (assistant responses)
         // If an image was sent, append description to content for LLM context
+        // Use explicit timestamps to ensure correct ordering
+        const baseTime = Date.now();
         const conversationInserts = [
-            // Save each user message separately (batch support)
+            // Save each user message separately (batch support, with sequential timestamps)
             ...userMessages.map((msg: string, idx: number) => ({
                 user_id: userId,
                 role: 'user',
@@ -1203,8 +1222,9 @@ This user is LOGGED IN. You CAN send photos when appropriate.`;
                 output_tokens: idx === 0 ? outputTokens : 0,
                 cost_inr: idx === 0 ? totalCostINR : 0,
                 model_used: modelName,
+                created_at: new Date(baseTime + idx).toISOString(), // +1ms per message
             })),
-            ...responseMessages.map((msg: any) => {
+            ...responseMessages.map((msg: any, idx: number) => {
                 // Include image description in content for LLM context continuity
                 const contentWithImage = msg.image?.description
                     ? `${msg.text}\n[Sent photo: ${msg.image.description}]`
@@ -1218,6 +1238,7 @@ This user is LOGGED IN. You CAN send photos when appropriate.`;
                     output_tokens: 0,
                     cost_inr: 0,
                     model_used: modelName,
+                    created_at: new Date(baseTime + userMessages.length + idx + 100).toISOString(), // +100ms after last user msg
                     // Store image data for reload persistence
                     image_data: msg.image ? {
                         url: msg.image.url,
