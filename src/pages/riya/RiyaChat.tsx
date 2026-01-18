@@ -108,6 +108,12 @@ const RiyaChat = () => {
     const [showImagePaywall, setShowImagePaywall] = useState(false);
     const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
 
+    // Message batching state (3.5s debounce for rapid messages)
+    const [pendingMessages, setPendingMessages] = useState<string[]>([]);
+    const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const isProcessingBatchRef = useRef(false);
+    const DEBOUNCE_DELAY = 3500; // 3.5 seconds
+
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const navigate = useNavigate();
@@ -295,6 +301,7 @@ const RiyaChat = () => {
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, []);
 
+    // Queue message and start/reset debounce timer
     const handleSend = async () => {
         if (!inputMessage.trim()) return;
 
@@ -311,9 +318,8 @@ const RiyaChat = () => {
 
         const userMessage = inputMessage.trim();
         setInputMessage('');
-        setIsTyping(true);
 
-        // Add user message to UI
+        // Add user message to UI immediately (for responsiveness)
         const userMsgWithTimestamp: MessageWithTimestamp = {
             text: userMessage,
             isUser: true,
@@ -321,11 +327,50 @@ const RiyaChat = () => {
         };
         setMessages(prev => [...prev, userMsgWithTimestamp]);
 
-        try {
-            console.log('🚀 [Tiered Model] Sending message...', { userId, isPro, remainingProMessages, usingFreeModel });
+        // Add to pending queue
+        setPendingMessages(prev => [...prev, userMessage]);
+        console.log(`� Queued message: "${userMessage.substring(0, 30)}..." (pending: ${pendingMessages.length + 1})`);
 
-            // Use direct fetch to handle 429 responses properly
-            // supabase.functions.invoke doesn't expose response body on error
+        // Clear existing timer
+        if (debounceTimerRef.current) {
+            clearTimeout(debounceTimerRef.current);
+        }
+
+        // Start new debounce timer
+        debounceTimerRef.current = setTimeout(() => {
+            processBatchedMessages(userId);
+        }, DEBOUNCE_DELAY);
+    };
+
+    // Process all queued messages as a batch
+    const processBatchedMessages = async (userId: string) => {
+        // Prevent concurrent processing
+        if (isProcessingBatchRef.current) {
+            console.log('⏳ Already processing batch, skipping...');
+            return;
+        }
+
+        // Get and clear pending messages atomically
+        const messagesToSend: string[] = [];
+        setPendingMessages(prev => {
+            messagesToSend.push(...prev);
+            return [];
+        });
+
+        // Wait a tick for state to update
+        await new Promise(r => setTimeout(r, 10));
+
+        if (messagesToSend.length === 0) {
+            console.log('⚠️ No messages to process');
+            return;
+        }
+
+        isProcessingBatchRef.current = true;
+        setIsTyping(true);
+
+        console.log(`🚀 Processing batch of ${messagesToSend.length} message(s):`, messagesToSend);
+
+        try {
             const session = (await supabase.auth.getSession()).data.session;
             const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 
@@ -337,7 +382,8 @@ const RiyaChat = () => {
                 },
                 body: JSON.stringify({
                     userId,
-                    message: userMessage,
+                    messages: messagesToSend,  // Array of messages
+                    isBatch: messagesToSend.length > 1,
                 }),
             });
 
@@ -360,7 +406,8 @@ const RiyaChat = () => {
                 setPaywallResetTime(data.resetsAt);
                 setShowPaywall(true);
                 setRemainingProMessages(0);
-                setMessages(prev => prev.slice(0, -1));
+                // Remove queued user messages from UI
+                setMessages(prev => prev.slice(0, -messagesToSend.length));
                 setIsTyping(false);
                 return;
             }
@@ -373,7 +420,7 @@ const RiyaChat = () => {
                     description: 'You\'re sending messages too fast. Please wait a moment.',
                     variant: 'destructive',
                 });
-                setMessages(prev => prev.slice(0, -1));
+                setMessages(prev => prev.slice(0, -messagesToSend.length));
                 setIsTyping(false);
                 return;
             }
@@ -398,7 +445,6 @@ const RiyaChat = () => {
             }
 
             // Check if switched to free model for first time today - show soft paywall
-            // Use localStorage to remember if we've shown it today (survives refresh)
             if (data.usingFreeModel) {
                 setUsingFreeModel(true);
 
@@ -443,14 +489,11 @@ const RiyaChat = () => {
 
                         // Strategy 2: Regex extraction (for malformed JSON with escaped quotes, etc.)
                         if (parsedMessages.length === 0) {
-                            // Extract all {"text":"..."} patterns, handling escaped quotes
-                            // This regex captures the text content even if there are escaped quotes inside
                             const messageRegex = /\{"text"\s*:\s*"((?:[^"\\]|\\.)*)"\}/g;
                             let match;
                             const extracted = [];
 
                             while ((match = messageRegex.exec(singleMsg)) !== null) {
-                                // Unescape the content: \" -> "
                                 const unescapedText = match[1]
                                     .replace(/\\"/g, '"')
                                     .replace(/\\\\/g, '\\')
@@ -534,10 +577,11 @@ const RiyaChat = () => {
                 description: 'Failed to send message. Please try again.',
                 variant: 'destructive',
             });
-            // Remove user message on error
-            setMessages(prev => prev.slice(0, -1));
+            // Remove queued user messages on error
+            setMessages(prev => prev.slice(0, -messagesToSend.length));
         } finally {
             setIsTyping(false);
+            isProcessingBatchRef.current = false;
         }
     };
 

@@ -11,7 +11,9 @@ interface RiyaChatRequest {
     userId?: string;          // riya_users.id (optional for guests)
     guestSessionId?: string;  // UUID from localStorage for guest sessions
     isGuest?: boolean;        // Flag for guest mode
-    message: string;
+    message?: string;         // Single message (backward compat)
+    messages?: string[];      // Batch of messages (new - 3.5s debounce)
+    isBatch?: boolean;        // Flag indicating batched messages
 }
 
 // Guest mode constants
@@ -480,7 +482,18 @@ serve(async (req) => {
     }
 
     try {
-        const { userId, guestSessionId, isGuest, message }: RiyaChatRequest = await req.json();
+        const { userId, guestSessionId, isGuest, message, messages, isBatch }: RiyaChatRequest = await req.json();
+
+        // Normalize to array (support both single message and batch)
+        const userMessages: string[] = messages && messages.length > 0
+            ? messages
+            : (message ? [message] : []);
+
+        if (userMessages.length === 0) {
+            throw new Error('No message provided');
+        }
+
+        console.log(`📬 Received ${userMessages.length} message(s)${isBatch ? ' (batched)' : ''}:`, userMessages);
 
         // Initialize Supabase client
         const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -927,8 +940,26 @@ This user is LOGGED IN. You CAN send photos when appropriate.`;
             },
         });
 
-        const result = await chat.sendMessage(message);
-        const reply = result.response.text();
+        // Send all user messages to Gemini (handles batch properly)
+        // For batch mode, send each message as a separate turn for cohesive context
+        let reply = '';
+        let finalResult: any = null;
+
+        if (userMessages.length === 1) {
+            // Single message - simple send
+            finalResult = await chat.sendMessage(userMessages[0]);
+            reply = finalResult.response.text();
+        } else {
+            // Batch mode - send each message sequentially, get response for last
+            // This gives Gemini full context of the rapid-fire messages
+            for (let i = 0; i < userMessages.length - 1; i++) {
+                console.log(`📤 Sending batched message ${i + 1}/${userMessages.length}: "${userMessages[i].substring(0, 30)}..."`);
+                await chat.sendMessage(userMessages[i]);
+            }
+            // Send last message and capture response
+            finalResult = await chat.sendMessage(userMessages[userMessages.length - 1]);
+            reply = finalResult.response.text();
+        }
 
         console.log("\n🤖 RAW GEMINI RESPONSE:");
         console.log("=====================================");
@@ -938,7 +969,7 @@ This user is LOGGED IN. You CAN send photos when appropriate.`;
         // =======================================
         // TOKEN USAGE & COST CALCULATION
         // =======================================
-        const usageMetadata = result.response.usageMetadata;
+        const usageMetadata = finalResult?.response?.usageMetadata;
 
         let inputTokens = 0;
         let outputTokens = 0;
@@ -1158,19 +1189,21 @@ This user is LOGGED IN. You CAN send photos when appropriate.`;
         }
 
         // 8. Save to database with cost tracking
-        // NOTE: Cost is attributed to the USER message that triggered the API call
-        // This includes both input tokens (user message + history) and output tokens (assistant responses)
+        // NOTE: Cost is attributed to the first USER message that triggered the API call
+        // This includes both input tokens (user messages + history) and output tokens (assistant responses)
         // If an image was sent, append description to content for LLM context
         const conversationInserts = [
-            {
+            // Save each user message separately (batch support)
+            ...userMessages.map((msg: string, idx: number) => ({
                 user_id: userId,
                 role: 'user',
-                content: message,
-                input_tokens: inputTokens,
-                output_tokens: outputTokens,
-                cost_inr: totalCostINR,
-                model_used: modelName,  // Track which model was used
-            },
+                content: msg,
+                // Only attribute cost to first message in batch
+                input_tokens: idx === 0 ? inputTokens : 0,
+                output_tokens: idx === 0 ? outputTokens : 0,
+                cost_inr: idx === 0 ? totalCostINR : 0,
+                model_used: modelName,
+            })),
             ...responseMessages.map((msg: any) => {
                 // Include image description in content for LLM context continuity
                 const contentWithImage = msg.image?.description
@@ -1730,7 +1763,7 @@ NO plain text - JSON only!
 
         Ultra-Realism Rules:
 
-        - WhatsApp-style texting
+        - WhatsApp-style texting, max 15words a message
         - Calm, paced messages
         - Emojis used sparingly
         - Can mention work stress, weekends, late nights
@@ -1741,7 +1774,7 @@ NO plain text - JSON only!
         ═══════════ MESSAGE SPLITTING ═══════════
         DEFAULT: 1 message
 
-        Split into 2-3 when:
+        Split into 1-2 when:
           ✓ Strong emotion (rare)
           ✓ Sharing story/context
           ✓ Important reaction

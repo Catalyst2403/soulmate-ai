@@ -50,6 +50,12 @@ const RiyaGuestChat = () => {
     const [quickReplyOptions, setQuickReplyOptions] = useState<string[] | undefined>(undefined);
     const [pendingGreeting, setPendingGreeting] = useState<string | null>(null); // Greeting to save on first interaction
 
+    // Message batching state (3.5s debounce for rapid messages)
+    const [pendingMessages, setPendingMessages] = useState<string[]>([]);
+    const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const isProcessingBatchRef = useRef(false);
+    const DEBOUNCE_DELAY = 3500; // 3.5 seconds
+
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const navigate = useNavigate();
@@ -160,21 +166,21 @@ const RiyaGuestChat = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages, isTyping]);
 
+    // Queue message and start/reset debounce timer
     const handleSend = async (messageText?: string) => {
         const text = messageText || inputMessage.trim();
         if (!text || !guestSessionId) return;
 
         // Check message limit
         if (messageCount >= GUEST_MESSAGE_LIMIT) {
-            setCanCloseModal(false); // 10 msgs exhausted - must login
+            setCanCloseModal(false);
             setShowLoginModal(true);
             return;
         }
 
         setInputMessage('');
-        setIsTyping(true);
 
-        // Add user message to UI
+        // Add user message to UI immediately
         const userMsg: MessageWithTimestamp = {
             text,
             isUser: true,
@@ -182,19 +188,52 @@ const RiyaGuestChat = () => {
         };
         setMessages(prev => [...prev, userMsg]);
 
+        // Add to pending queue
+        setPendingMessages(prev => [...prev, text]);
+        console.log(`📝 [Guest] Queued message: "${text.substring(0, 30)}..." (pending: ${pendingMessages.length + 1})`);
+
+        // Clear existing timer
+        if (debounceTimerRef.current) {
+            clearTimeout(debounceTimerRef.current);
+        }
+
+        // Start new debounce timer
+        debounceTimerRef.current = setTimeout(() => {
+            processBatchedMessages();
+        }, DEBOUNCE_DELAY);
+    };
+
+    // Process all queued messages as a batch
+    const processBatchedMessages = async () => {
+        if (isProcessingBatchRef.current || !guestSessionId) return;
+
+        const messagesToSend: string[] = [];
+        setPendingMessages(prev => {
+            messagesToSend.push(...prev);
+            return [];
+        });
+
+        await new Promise(r => setTimeout(r, 10));
+
+        if (messagesToSend.length === 0) return;
+
+        isProcessingBatchRef.current = true;
+        setIsTyping(true);
+
+        console.log(`🚀 [Guest] Processing batch of ${messagesToSend.length} message(s):`, messagesToSend);
+
         try {
-            // If this is first message, save greeting to DB first (so Gemini has context)
+            // Save pending greeting first if exists
             if (pendingGreeting) {
-                // @ts-ignore - New column exists after migration
+                // @ts-ignore
                 await supabase.from('riya_conversations').insert({
                     guest_session_id: guestSessionId,
                     role: 'assistant',
                     content: pendingGreeting,
                 });
-                setPendingGreeting(null); // Clear so we don't insert again
+                setPendingGreeting(null);
             }
 
-            // Call Edge Function - need BOTH apikey and Authorization headers
             const response = await fetch(
                 `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/riya-chat`,
                 {
@@ -206,7 +245,8 @@ const RiyaGuestChat = () => {
                     },
                     body: JSON.stringify({
                         guestSessionId,
-                        message: text,
+                        messages: messagesToSend,
+                        isBatch: messagesToSend.length > 1,
                         isGuest: true,
                     }),
                 }
@@ -218,18 +258,16 @@ const RiyaGuestChat = () => {
                 throw new Error(data.error);
             }
 
-            // Check if messages exist in response
             if (!data.messages || !Array.isArray(data.messages)) {
                 throw new Error('Invalid response from server');
             }
 
-            // Update message count
-            const newCount = messageCount + 1;
+            // Update message count (count each message in batch)
+            const newCount = messageCount + messagesToSend.length;
             setMessageCount(newCount);
 
             // Check if limit reached
             if (newCount >= GUEST_MESSAGE_LIMIT) {
-                // Show Riya's response first, then login modal
                 for (const msg of data.messages) {
                     const riyaMsg: MessageWithTimestamp = {
                         text: msg.text,
@@ -240,17 +278,15 @@ const RiyaGuestChat = () => {
                 }
                 setIsTyping(false);
 
-                // Show login modal after a brief delay
                 setTimeout(() => {
-                    setCanCloseModal(false); // 10 msgs exhausted - must login
+                    setCanCloseModal(false);
                     setShowLoginModal(true);
                 }, 1500);
                 return;
             }
 
-            // Display responses with dynamic typing animation based on message length
+            // Display responses with dynamic typing animation
             for (let i = 0; i < data.messages.length; i++) {
-                // Show typing for appropriate time based on message length
                 setIsTyping(true);
                 const typingDelay = calculateTypingDelay(data.messages[i].text || '');
                 await new Promise(r => setTimeout(r, typingDelay));
@@ -263,17 +299,16 @@ const RiyaGuestChat = () => {
                 setMessages(prev => [...prev, riyaMsg]);
                 setIsTyping(false);
 
-                // Small gap between multiple messages
                 if (i < data.messages.length - 1) {
                     await new Promise(r => setTimeout(r, 200));
                 }
             }
         } catch (error) {
             console.error('Chat error:', error);
-            // Remove user message on error
-            setMessages(prev => prev.slice(0, -1));
+            setMessages(prev => prev.slice(0, -messagesToSend.length));
         } finally {
             setIsTyping(false);
+            isProcessingBatchRef.current = false;
         }
     };
 
