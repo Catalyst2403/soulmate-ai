@@ -19,18 +19,19 @@ const GUEST_MESSAGE_LIMIT = 10;
 
 /**
  * Calculate realistic typing delay based on message length
- * ~35ms per character + base delay + random variance (±20%)
+ * ~50ms per character + base delay + random variance (±25%)
  */
 const calculateTypingDelay = (message: string): number => {
-    const BASE_DELAY = 400;
-    const MS_PER_CHAR = 35;
-    const VARIANCE = 0.2;
+    const BASE_DELAY = 800; // Minimum delay in ms (increased from 400)
+    const MS_PER_CHAR = 50; // ~50ms per character (increased from 35)
+    const VARIANCE = 0.25; // ±25% random variance
 
     const charDelay = message.length * MS_PER_CHAR;
     const baseTotal = BASE_DELAY + charDelay;
     const variance = baseTotal * VARIANCE * (Math.random() * 2 - 1);
 
-    return Math.min(4000, Math.max(500, baseTotal + variance));
+    // Clamp between 1000ms and 6000ms (increased from 500-4000)
+    return Math.min(6000, Math.max(1000, baseTotal + variance));
 };
 
 /**
@@ -59,6 +60,29 @@ const RiyaGuestChat = () => {
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const navigate = useNavigate();
+
+    // Keyboard height for mobile input adjustment
+    const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+    // Listen for mobile keyboard show/hide using visualViewport
+    useEffect(() => {
+        const viewport = window.visualViewport;
+        if (!viewport) return;
+
+        const handleResize = () => {
+            // Calculate keyboard height as difference between window height and viewport height
+            const keyboardH = window.innerHeight - viewport.height;
+            setKeyboardHeight(keyboardH > 50 ? keyboardH : 0); // Only set if substantial (>50px)
+        };
+
+        viewport.addEventListener('resize', handleResize);
+        viewport.addEventListener('scroll', handleResize);
+
+        return () => {
+            viewport.removeEventListener('resize', handleResize);
+            viewport.removeEventListener('scroll', handleResize);
+        };
+    }, []);
 
     useEffect(() => {
         const init = async () => {
@@ -359,7 +383,9 @@ const RiyaGuestChat = () => {
                             <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
                                 <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
                                 {isTyping ? 'typing...' : 'online'}
+                                {/* Commented out: msgs left count
                                 <span className="ml-1">• {GUEST_MESSAGE_LIMIT - messageCount} msgs left</span>
+                                */}
                             </p>
                         </div>
                     </div>
@@ -472,7 +498,8 @@ const RiyaGuestChat = () => {
                     e.preventDefault();
                     handleSend();
                 }}
-                className="fixed bottom-0 left-0 right-0 z-50 glass-card rounded-none border-x-0 border-b-0 px-4 py-3 safe-area-bottom"
+                className="fixed left-0 right-0 z-50 glass-card rounded-none border-x-0 border-b-0 px-4 py-3 safe-area-bottom transition-[bottom] duration-100"
+                style={{ bottom: keyboardHeight }}
             >
                 <div className="flex items-center gap-2">
                     {/* Camera button - shows login wall for guests */}
