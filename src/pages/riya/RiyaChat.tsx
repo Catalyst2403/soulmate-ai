@@ -930,7 +930,8 @@ const RiyaChat = () => {
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: 10 }}
-                        className="fixed bottom-20 left-0 right-0 z-40"
+                        className="fixed left-0 right-0 z-40 transition-[bottom] duration-100"
+                        style={{ bottom: keyboardHeight + 70 }} // 70px = input bar height + padding
                     >
                         <QuickReplyButtons
                             onSelect={(text) => {
