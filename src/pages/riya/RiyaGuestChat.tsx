@@ -497,7 +497,10 @@ const RiyaGuestChat = () => {
 
             {/* Quick Reply Buttons (show only before user sends first message) */}
             {messages.length > 0 && messageCount === 0 && !isTyping && (
-                <div className="fixed bottom-20 left-0 right-0 z-40">
+                <div
+                    className="fixed left-0 right-0 z-40 transition-[bottom] duration-100"
+                    style={{ bottom: keyboardHeight + 70 }} // 70px = input bar height + padding
+                >
                     <QuickReplyButtons
                         onSelect={handleSend}
                         disabled={messageCount >= GUEST_MESSAGE_LIMIT}
