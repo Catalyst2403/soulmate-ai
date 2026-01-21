@@ -157,9 +157,15 @@ const RiyaLanding = () => {
                     </Button>
                 </div>
 
-                <p className="text-xs text-center text-muted-foreground">
-                    No credit card needed • Free to start
-                </p>
+                {/* Free badge */}
+                <div className="text-center space-y-2">
+                    <span className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full bg-green-500/15 border border-green-500/30 text-green-400 text-sm font-medium">
+                        ✅ It's 100% free to login!
+                    </span>
+                    <p className="text-xs text-muted-foreground">
+                        Get 50 free messages daily • No credit card needed
+                    </p>
+                </div>
 
                 <p className="text-xs text-muted-foreground">
                     By continuing, you agree to our{' '}
