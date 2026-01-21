@@ -58,7 +58,7 @@ const RiyaGuestChat = () => {
     const DEBOUNCE_DELAY = 5000; // 5 seconds
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
-    const inputRef = useRef<HTMLInputElement>(null);
+    const inputRef = useRef<HTMLTextAreaElement>(null);
     const navigate = useNavigate();
 
     // Keyboard height for mobile input adjustment
@@ -75,10 +75,24 @@ const RiyaGuestChat = () => {
             setKeyboardHeight(keyboardH > 50 ? keyboardH : 0); // Only set if substantial (>50px)
         };
 
+        // Also check on input focus (for first focus case)
+        const handleFocus = () => {
+            // Delay to allow keyboard to fully open on first focus
+            setTimeout(handleResize, 300);
+        };
+
+        const inputEl = inputRef.current;
+        if (inputEl) {
+            inputEl.addEventListener('focus', handleFocus);
+        }
+
         viewport.addEventListener('resize', handleResize);
         viewport.addEventListener('scroll', handleResize);
 
         return () => {
+            if (inputEl) {
+                inputEl.removeEventListener('focus', handleFocus);
+            }
             viewport.removeEventListener('resize', handleResize);
             viewport.removeEventListener('scroll', handleResize);
         };
@@ -529,13 +543,25 @@ const RiyaGuestChat = () => {
                         <Camera className="w-5 h-5" />
                     </Button>
 
-                    <Input
+                    <textarea
                         ref={inputRef}
                         value={inputMessage}
-                        onChange={(e) => setInputMessage(e.target.value)}
+                        onChange={(e) => {
+                            setInputMessage(e.target.value);
+                            // Auto-resize textarea
+                            e.target.style.height = 'auto';
+                            e.target.style.height = Math.min(e.target.scrollHeight, 100) + 'px';
+                        }}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                                e.preventDefault();
+                                handleSend();
+                            }
+                        }}
                         placeholder={messageCount >= GUEST_MESSAGE_LIMIT ? "Login to continue..." : "Type a message..."}
-                        className="flex-1 bg-muted/30 border-0 focus-visible:ring-1"
+                        className="flex-1 bg-muted/30 border-0 focus-visible:ring-1 focus-visible:ring-ring rounded-md px-3 py-2 text-sm resize-none overflow-hidden min-h-[40px] max-h-[100px]"
                         disabled={messageCount >= GUEST_MESSAGE_LIMIT}
+                        rows={1}
                     />
 
                     <Button
