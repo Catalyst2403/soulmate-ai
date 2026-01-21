@@ -132,10 +132,18 @@ export default function GuestLoginModal({ isOpen, onClose, guestSessionId, canCl
                             </Button>
                         </div>
 
+                        {/* Free badge */}
+                        <div className="px-6 text-center">
+                            <span className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full bg-green-500/15 border border-green-500/30 text-green-400 text-sm font-medium">
+                                ✅ It's 100% free to login!
+                            </span>
+                        </div>
+
                         {/* Benefits */}
-                        <div className="px-6 pb-6 text-center text-sm text-muted-foreground space-y-1">
-                            <p>✨ 50 free messages daily after login</p>
+                        <div className="px-6 pb-6 pt-4 text-center text-sm text-muted-foreground space-y-1">
+                            <p>✨ Get 50 <span className="text-green-400 font-medium">free</span> messages daily</p>
                             <p>📸 Unlock Riya's special photos & surprise pics</p>
+                            <p className="text-xs text-muted-foreground/70 mt-2">No credit card needed</p>
                         </div>
                     </motion.div>
                 </motion.div>
