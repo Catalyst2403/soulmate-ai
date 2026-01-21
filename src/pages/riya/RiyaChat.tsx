@@ -56,12 +56,12 @@ interface MessageWithTimestamp {
  */
 /**
  * Calculate realistic typing delay based on message length
- * ~40ms per character + base delay + random variance (±20%)
+ * ~50ms per character + base delay + random variance (±20%)
  */
 const calculateTypingDelay = (message: string): number => {
-    const BASE_DELAY = 400; // Minimum delay in ms
-    const MS_PER_CHAR = 35; // ~35ms per character (realistic typing)
-    const VARIANCE = 0.2; // ±20% random variance
+    const BASE_DELAY = 800; // Minimum delay in ms (increased from 400)
+    const MS_PER_CHAR = 50; // ~50ms per character (increased from 35)
+    const VARIANCE = 0.25; // ±25% random variance
 
     const charDelay = message.length * MS_PER_CHAR;
     const baseTotal = BASE_DELAY + charDelay;
@@ -69,8 +69,8 @@ const calculateTypingDelay = (message: string): number => {
     // Add random variance for human feel
     const variance = baseTotal * VARIANCE * (Math.random() * 2 - 1);
 
-    // Clamp between 500ms and 4000ms
-    return Math.min(4000, Math.max(500, baseTotal + variance));
+    // Clamp between 1000ms and 6000ms (increased from 500-4000)
+    return Math.min(6000, Math.max(1000, baseTotal + variance));
 };
 
 const RiyaChat = () => {
@@ -115,8 +115,45 @@ const RiyaChat = () => {
     const DEBOUNCE_DELAY = 5000; // 5 seconds
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
-    const inputRef = useRef<HTMLInputElement>(null);
+    const inputRef = useRef<HTMLTextAreaElement>(null);
     const navigate = useNavigate();
+
+    // Keyboard height for mobile input adjustment
+    const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+    // Listen for mobile keyboard show/hide using visualViewport
+    useEffect(() => {
+        const viewport = window.visualViewport;
+        if (!viewport) return;
+
+        const handleResize = () => {
+            // Calculate keyboard height as difference between window height and viewport height
+            const keyboardH = window.innerHeight - viewport.height;
+            setKeyboardHeight(keyboardH > 50 ? keyboardH : 0); // Only set if substantial (>50px)
+        };
+
+        // Also check on input focus (for first focus case)
+        const handleFocus = () => {
+            // Delay to allow keyboard to fully open on first focus
+            setTimeout(handleResize, 300);
+        };
+
+        const inputEl = inputRef.current;
+        if (inputEl) {
+            inputEl.addEventListener('focus', handleFocus);
+        }
+
+        viewport.addEventListener('resize', handleResize);
+        viewport.addEventListener('scroll', handleResize);
+
+        return () => {
+            if (inputEl) {
+                inputEl.removeEventListener('focus', handleFocus);
+            }
+            viewport.removeEventListener('resize', handleResize);
+            viewport.removeEventListener('scroll', handleResize);
+        };
+    }, []);
 
     useEffect(() => {
         const init = async () => {
@@ -732,9 +769,11 @@ const RiyaChat = () => {
                                     {isSubscriptionLoaded && isPro && !isTyping && (
                                         <span className="text-yellow-400 ml-1">• ∞ Unlimited</span>
                                     )}
+                                    {/* Commented out: Pro messages remaining count
                                     {isSubscriptionLoaded && !isPro && !isTyping && remainingProMessages > 0 && (
                                         <span className="text-muted-foreground ml-1">• {remainingProMessages} Pro left</span>
                                     )}
+                                    */}
                                 </p>
                             </div>
                         </div>
@@ -917,7 +956,8 @@ const RiyaChat = () => {
                     e.preventDefault();
                     handleSend();
                 }}
-                className="fixed bottom-0 left-0 right-0 z-50 glass-card rounded-none border-x-0 border-b-0 px-4 py-3 safe-area-bottom"
+                className="fixed left-0 right-0 z-50 glass-card rounded-none border-x-0 border-b-0 px-4 py-3 safe-area-bottom transition-[bottom] duration-100"
+                style={{ bottom: keyboardHeight }}
             >
                 <div className="flex items-center gap-2">
                     {/* Camera button for photo requests */}
@@ -947,12 +987,24 @@ const RiyaChat = () => {
                         <Camera className="w-5 h-5" />
                     </Button>
 
-                    <Input
+                    <textarea
                         ref={inputRef}
                         value={inputMessage}
-                        onChange={(e) => setInputMessage(e.target.value)}
+                        onChange={(e) => {
+                            setInputMessage(e.target.value);
+                            // Auto-resize textarea
+                            e.target.style.height = 'auto';
+                            e.target.style.height = Math.min(e.target.scrollHeight, 100) + 'px';
+                        }}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                                e.preventDefault();
+                                handleSend();
+                            }
+                        }}
                         placeholder="Type a message..."
-                        className="flex-1 bg-muted/30 border-0 focus-visible:ring-1"
+                        className="flex-1 bg-muted/30 border-0 focus-visible:ring-1 focus-visible:ring-ring rounded-md px-3 py-2 text-sm resize-none overflow-hidden min-h-[40px] max-h-[100px]"
+                        rows={1}
                     />
 
                     <Button
