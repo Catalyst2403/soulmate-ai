@@ -107,10 +107,33 @@ serve(async (req) => {
         userMessages?.forEach(msg => {
             const date = new Date(msg.created_at).toISOString().split('T')[0];
             if (!activityMap.has(date)) {
-                activityMap.set(date, { date, users: new Set(), user_messages: 0 });
+                activityMap.set(date, { date, users: new Set(), user_messages: 0, guest_sessions: 0 });
             }
             activityMap.get(date).users.add(msg.user_id);
             activityMap.get(date).user_messages++;
+        });
+
+        // Fetch guest sessions for last 30 days (only those with messages)
+        console.log('👤 Fetching guest sessions from:', thirtyDaysAgo.toISOString());
+        const { data: guestSessions, error: guestError } = await supabase
+            .from('riya_guest_sessions')
+            .select('created_at')
+            .gte('created_at', thirtyDaysAgo.toISOString())
+            .gt('message_count', 0);
+
+        if (guestError) {
+            console.error('Error fetching guest sessions:', guestError);
+        }
+
+        console.log(`👤 Total guest sessions fetched: ${guestSessions?.length || 0}`);
+
+        // Add guest sessions to activity map
+        guestSessions?.forEach(session => {
+            const date = new Date(session.created_at).toISOString().split('T')[0];
+            if (!activityMap.has(date)) {
+                activityMap.set(date, { date, users: new Set(), user_messages: 0, guest_sessions: 0 });
+            }
+            activityMap.get(date).guest_sessions++;
         });
 
         console.log('📅 Daily activity map size:', activityMap.size);
@@ -129,7 +152,8 @@ serve(async (req) => {
         const dailyActivityData = Array.from(activityMap.values()).map(d => ({
             date: d.date,
             active_users: d.users.size,
-            user_messages: d.user_messages
+            user_messages: d.user_messages,
+            guest_sessions: d.guest_sessions
         })).sort((a, b) => b.date.localeCompare(a.date));
 
         console.log('✅ Daily activity data prepared:', dailyActivityData.slice(0, 3));
