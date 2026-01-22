@@ -18,6 +18,7 @@ interface AnalyticsData {
         date: string;
         active_users: number;
         user_messages: number;
+        guest_sessions: number;
     }>;
     engagement: {
         avgMessagesPerUser: string;
@@ -296,6 +297,7 @@ const RiyaAnalytics = () => {
                                     <Legend />
                                     <Bar dataKey="active_users" fill="hsl(174, 100%, 50%)" name="Active Users" radius={[8, 8, 0, 0]} />
                                     <Bar dataKey="user_messages" fill="hsl(280, 100%, 70%)" name="User Messages" radius={[8, 8, 0, 0]} />
+                                    <Bar dataKey="guest_sessions" fill="hsl(30, 100%, 60%)" name="Guest Sessions" radius={[8, 8, 0, 0]} />
                                 </BarChart>
                             </ResponsiveContainer>
                         </div>
