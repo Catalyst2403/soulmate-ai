@@ -64,10 +64,16 @@
     @apply border-border;
   }
 
+  html {
+    background-color: hsl(240 10% 4%);
+  }
+
   body {
     @apply bg-background text-foreground font-sans antialiased;
     font-family: 'Inter', sans-serif;
     background: linear-gradient(180deg, hsl(240 10% 4%) 0%, hsl(240 10% 2%) 100%);
+    min-height: 100vh;
+    min-height: 100dvh;
   }
 
   h1,
@@ -231,6 +237,8 @@
 /* Safe area handling for iOS devices */
 .safe-area-bottom {
   padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  /* Extend background through safe area to prevent white bar */
+  background-color: hsl(240 10% 8%);
 }
 
 .safe-area-top {
