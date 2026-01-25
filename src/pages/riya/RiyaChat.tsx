@@ -218,21 +218,34 @@ const RiyaChat = () => {
             }
 
             if (allHistory.length > 0) {
-                console.log('📜 Total messages to display:', allHistory.length);
-                const formattedMessages = allHistory.map(msg => ({
-                    text: msg.content,
-                    isUser: msg.role === 'user',
-                    timestamp: msg.created_at,
-                    // Load image data from DB for reload persistence
-                    image: msg.image_data ? {
-                        url: msg.image_data.url,
-                        description: msg.image_data.description,
-                        category: msg.image_data.category,
-                        is_premium: msg.image_data.is_premium,
-                        is_blurred: msg.image_data.is_blurred,
-                    } : undefined,
-                }));
-                console.log('📜 Setting formatted messages:', formattedMessages.length);
+                console.log('📜 Total messages found in DB:', allHistory.length);
+
+                // Filter out invalid messages and map safely
+                const formattedMessages = allHistory
+                    .filter(msg => msg && (msg.content || msg.image_data)) // Must have content or image
+                    .map(msg => {
+                        try {
+                            return {
+                                text: msg.content || '', // Ensure text is never null
+                                isUser: msg.role === 'user',
+                                timestamp: msg.created_at || new Date().toISOString(),
+                                // Load image data from DB for reload persistence
+                                image: msg.image_data ? {
+                                    url: msg.image_data.url || '',
+                                    description: msg.image_data.description || '',
+                                    category: msg.image_data.category || 'general',
+                                    is_premium: !!msg.image_data.is_premium,
+                                    is_blurred: !!msg.image_data.is_blurred,
+                                } : undefined,
+                            };
+                        } catch (err) {
+                            console.error('⚠️ Skipping malformed message:', msg, err);
+                            return null;
+                        }
+                    })
+                    .filter(Boolean) as MessageWithTimestamp[]; // Filter out failed mappings
+
+                console.log('📜 Valid messages loaded to state:', formattedMessages.length);
                 setMessages(formattedMessages);
                 setShowQuickReplies(false);
             } else {
