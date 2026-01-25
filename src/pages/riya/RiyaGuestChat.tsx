@@ -63,6 +63,7 @@ const RiyaGuestChat = () => {
 
     // Keyboard height for mobile input adjustment
     const [keyboardHeight, setKeyboardHeight] = useState(0);
+    const prevViewportHeightRef = useRef(window.visualViewport?.height || window.innerHeight);
 
     // Listen for mobile keyboard show/hide using visualViewport
     useEffect(() => {
@@ -71,30 +72,57 @@ const RiyaGuestChat = () => {
 
         const handleResize = () => {
             // Calculate keyboard height as difference between window height and viewport height
-            const keyboardH = window.innerHeight - viewport.height;
-            setKeyboardHeight(keyboardH > 50 ? keyboardH : 0); // Only set if substantial (>50px)
+            const keyboardH = window.innerHeight - viewport.height - (viewport.offsetTop || 0);
+            const newKeyboardHeight = keyboardH > 50 ? keyboardH : 0;
+
+            // Check if keyboard just opened (viewport got smaller)
+            const keyboardJustOpened = viewport.height < prevViewportHeightRef.current - 50 && newKeyboardHeight > 0;
+
+            setKeyboardHeight(newKeyboardHeight);
+            prevViewportHeightRef.current = viewport.height;
+
+            // Scroll to bottom when keyboard opens to keep messages visible
+            if (keyboardJustOpened) {
+                setTimeout(() => {
+                    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+                }, 100);
+            }
         };
 
         // Also check on input focus (for first focus case)
         const handleFocus = () => {
             // Delay to allow keyboard to fully open on first focus
-            setTimeout(handleResize, 300);
+            setTimeout(() => {
+                handleResize();
+                // Force scroll to bottom on focus
+                setTimeout(() => {
+                    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+                }, 150);
+            }, 300);
+        };
+
+        const handleBlur = () => {
+            // Reset keyboard height when input loses focus
+            setTimeout(() => {
+                setKeyboardHeight(0);
+                prevViewportHeightRef.current = window.visualViewport?.height || window.innerHeight;
+            }, 100);
         };
 
         const inputEl = inputRef.current;
         if (inputEl) {
             inputEl.addEventListener('focus', handleFocus);
+            inputEl.addEventListener('blur', handleBlur);
         }
 
         viewport.addEventListener('resize', handleResize);
-        viewport.addEventListener('scroll', handleResize);
 
         return () => {
             if (inputEl) {
                 inputEl.removeEventListener('focus', handleFocus);
+                inputEl.removeEventListener('blur', handleBlur);
             }
             viewport.removeEventListener('resize', handleResize);
-            viewport.removeEventListener('scroll', handleResize);
         };
     }, []);
 
@@ -421,7 +449,10 @@ const RiyaGuestChat = () => {
             </header>
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto px-4 pt-20 pb-36 space-y-4 relative z-10">
+            <div
+                className="flex-1 overflow-y-auto px-4 pt-20 space-y-4 relative z-10"
+                style={{ paddingBottom: keyboardHeight + 90 }} // 90px = input bar height + base padding
+            >
                 {/* Persistent Intro Card - Always visible at top of chat */}
                 <div className="flex flex-col items-center justify-center py-6 mb-4">
                     <div className="w-24 h-24 rounded-full overflow-hidden border-4 border-primary/30 shadow-lg mb-3">
