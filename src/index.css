@@ -287,6 +287,8 @@
 /* Messages area - takes remaining space, scrollable */
 .chat-messages-area {
   flex: 1;
+  min-height: 0;
+  /* Critical for flex child scrolling */
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;

@@ -819,6 +819,10 @@ const RiyaChat = () => {
 
             {/* Messages - scrollable area */}
             <div className="chat-messages-area px-4 py-4 space-y-4 relative z-10">
+                {/* DEBUG: Message count indicator */}
+                <div className="text-xs text-yellow-400 bg-yellow-900/30 p-2 rounded mb-2">
+                    DEBUG: {messages.length} messages in state
+                </div>
                 <AnimatePresence>
                     {messages.map((message, index) => {
                         // Strip [Sent photo: ...] from display - it's for LLM context only
