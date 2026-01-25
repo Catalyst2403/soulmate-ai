@@ -255,22 +255,29 @@ const RiyaChat = () => {
                 setShowQuickReplies(true);
             }
 
-            // Check subscription status
-            // @ts-ignore - Table exists after migration
-            const { data: subscription } = await supabase
-                .from('riya_subscriptions')
-                .select('*')
-                .eq('user_id', userId)
-                .eq('status', 'active')
-                .gte('expires_at', new Date().toISOString())
-                .single();
+            // Check subscription status (wrapped in try-catch to handle RLS 403 errors)
+            try {
+                // @ts-ignore - Table exists after migration
+                const { data: subscription, error: subError } = await supabase
+                    .from('riya_subscriptions')
+                    .select('*')
+                    .eq('user_id', userId)
+                    .eq('status', 'active')
+                    .gte('expires_at', new Date().toISOString())
+                    .maybeSingle();
 
-            if (subscription) {
-                setIsPro(true);
-                setRemainingProMessages(-1); // Unlimited for Pro
-            } else {
-                // Get today's message usage
-                // Use CURRENT_DATE from database to ensure timezone consistency
+                if (subError) {
+                    console.warn('⚠️ Subscription query error (RLS?):', subError.message);
+                } else if (subscription) {
+                    setIsPro(true);
+                    setRemainingProMessages(-1); // Unlimited for Pro
+                }
+            } catch (subErr) {
+                console.warn('⚠️ Subscription check failed:', subErr);
+            }
+
+            // Get today's message usage (wrapped in try-catch)
+            try {
                 // @ts-ignore - Table exists after migration
                 const { data: usage, error: usageError } = await supabase
                     .from('riya_daily_usage')
@@ -282,23 +289,26 @@ const RiyaChat = () => {
 
                 console.log('📊 [Init] Daily usage query result:', { usage, usageError });
 
-                // Check if usage is from today (compare dates)
-                // IMPORTANT: Use UTC date to match database CURRENT_DATE (Supabase uses UTC)
-                const todayUTC = new Date().toISOString().split('T')[0];
+                if (usageError) {
+                    console.warn('⚠️ Usage query error (RLS?):', usageError.message);
+                } else {
+                    // Check if usage is from today (compare dates)
+                    const todayUTC = new Date().toISOString().split('T')[0];
+                    const dbDate = usage?.usage_date ? usage.usage_date.split('T')[0] : null;
+                    const usageIsToday = dbDate === todayUTC;
+                    const used = usageIsToday ? (usage?.message_count || 0) : 0;
 
-                // Normalize database date (could be 'YYYY-MM-DD' or 'YYYY-MM-DDTHH:mm:ss')
-                const dbDate = usage?.usage_date ? usage.usage_date.split('T')[0] : null;
-                const usageIsToday = dbDate === todayUTC;
-                const used = usageIsToday ? (usage?.message_count || 0) : 0;
+                    console.log(`📊 [Init] Today (UTC): ${todayUTC}, DB date: ${dbDate}, Is today: ${usageIsToday}, Used: ${used}`);
 
-                console.log(`📊 [Init] Today (UTC): ${todayUTC}, DB date: ${dbDate}, Is today: ${usageIsToday}, Used: ${used}`);
-
-                // Calculate remaining Pro-quality messages (first 20)
-                setRemainingProMessages(Math.max(0, 20 - used));
-                // Check if already using free model
-                if (used >= 20) {
-                    setUsingFreeModel(true);
+                    // Calculate remaining Pro-quality messages (first 20)
+                    setRemainingProMessages(Math.max(0, 20 - used));
+                    // Check if already using free model
+                    if (used >= 20) {
+                        setUsingFreeModel(true);
+                    }
                 }
+            } catch (usageErr) {
+                console.warn('⚠️ Usage check failed:', usageErr);
             }
 
             // Mark subscription as loaded (prevents flash of wrong UI)
@@ -819,72 +829,62 @@ const RiyaChat = () => {
 
             {/* Messages - scrollable area */}
             <div className="chat-messages-area px-4 py-4 space-y-4 relative z-10">
-                {/* DEBUG: Message count indicator */}
-                <div className="text-xs text-yellow-400 bg-yellow-900/30 p-2 rounded mb-2">
-                    DEBUG: {messages.length} messages in state
-                </div>
-                <AnimatePresence>
-                    {messages.map((message, index) => {
-                        // Strip [Sent photo: ...] from display - it's for LLM context only
-                        const displayText = message.text.replace(/\n?\[Sent photo:.*?\]$/s, '').trim();
+                {messages.map((message, index) => {
+                    // Strip [Sent photo: ...] from display - it's for LLM context only
+                    const displayText = message.text.replace(/\n?\[Sent photo:.*?\]$/s, '').trim();
 
-                        return (
-                            <motion.div
-                                key={index}
-                                initial={{ opacity: 0, y: 20, scale: 0.95 }}
-                                animate={{ opacity: 1, y: 0, scale: 1 }}
-                                exit={{ opacity: 0, scale: 0.95 }}
-                                transition={{ duration: 0.3 }}
-                                className={`flex ${message.isUser ? 'justify-end' : 'justify-start'}`}
+                    return (
+                        <div
+                            key={index}
+                            className={`flex ${message.isUser ? 'justify-end' : 'justify-start'}`}
+                        >
+                            <div
+                                className={`max-w-[80%] ${message.isUser ? 'chat-bubble-user' : 'chat-bubble-bot'
+                                    }`}
                             >
-                                <div
-                                    className={`max-w-[80%] ${message.isUser ? 'chat-bubble-user' : 'chat-bubble-bot'
-                                        }`}
-                                >
-                                    <p className="text-sm text-foreground whitespace-pre-wrap">
-                                        {displayText}
-                                    </p>
+                                <p className="text-sm text-foreground whitespace-pre-wrap">
+                                    {displayText}
+                                </p>
 
-                                    {/* Image display */}
-                                    {message.image && (
-                                        <div
-                                            className={`mt-2 relative rounded-xl overflow-hidden cursor-pointer
-                                                    ${message.image.is_blurred ? 'ring-2 ring-pink-500/50' : ''}`}
-                                            onClick={() => {
-                                                if (message.image?.is_blurred) {
-                                                    setShowImagePaywall(true);
-                                                } else if (message.image) {
-                                                    setFullscreenImage(message.image.url);
-                                                }
-                                            }}
-                                        >
-                                            <img
-                                                src={message.image.url}
-                                                alt="Riya"
-                                                className={`max-w-[200px] w-full rounded-xl
-                                                       ${message.image.is_blurred ? 'blur-lg' : ''}`}
-                                            />
+                                {/* Image display */}
+                                {message.image && (
+                                    <div
+                                        className={`mt-2 relative rounded-xl overflow-hidden cursor-pointer
+                                                ${message.image.is_blurred ? 'ring-2 ring-pink-500/50' : ''}`}
+                                        onClick={() => {
+                                            if (message.image?.is_blurred) {
+                                                setShowImagePaywall(true);
+                                            } else if (message.image) {
+                                                setFullscreenImage(message.image.url);
+                                            }
+                                        }}
+                                    >
+                                        <img
+                                            src={message.image.url}
+                                            alt="Riya"
+                                            className={`max-w-[200px] w-full rounded-xl
+                                                   ${message.image.is_blurred ? 'blur-lg' : ''}`}
+                                        />
 
-                                            {/* Lock overlay for blurred images */}
-                                            {message.image.is_blurred && (
-                                                <div className="absolute inset-0 flex flex-col items-center justify-center 
-                                                            bg-black/40 rounded-xl">
-                                                    <Lock className="w-8 h-8 text-pink-400 mb-1" />
-                                                    <span className="text-white text-sm font-medium">Private Snap 🔒</span>
-                                                    <span className="text-pink-300 text-xs mt-0.5">Tap to unlock</span>
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
+                                        {/* Lock overlay for blurred images */}
+                                        {message.image.is_blurred && (
+                                            <div className="absolute inset-0 flex flex-col items-center justify-center 
+                                                        bg-black/40 rounded-xl">
+                                                <Lock className="w-8 h-8 text-pink-400 mb-1" />
+                                                <span className="text-white text-sm font-medium">Private Snap 🔒</span>
+                                                <span className="text-pink-300 text-xs mt-0.5">Tap to unlock</span>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
 
-                                    <p className="text-[10px] text-muted-foreground mt-1 text-right">
-                                        {formatTime(message.timestamp)}
-                                    </p>
-                                </div>
-                            </motion.div>
-                        );
-                    })}
-                </AnimatePresence>
+                                <p className="text-[10px] text-muted-foreground mt-1 text-right">
+                                    {formatTime(message.timestamp)}
+                                </p>
+                            </div>
+                        </div>
+                    );
+                })}
 
                 {/* Typing indicator */}
                 <AnimatePresence>
