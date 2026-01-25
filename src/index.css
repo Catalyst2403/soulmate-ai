@@ -260,3 +260,49 @@
     font-size: 16px !important;
   }
 }
+
+/* ============================================
+   MOBILE CHAT LAYOUT - Modern 2024 Approach
+   Uses flex layout instead of fixed positioning
+   for proper keyboard handling
+   ============================================ */
+
+/* Main chat container - full viewport height */
+.mobile-chat-container {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  height: 100vh;
+  /* fallback for older browsers */
+  overflow: hidden;
+  background-color: hsl(240 10% 4%);
+}
+
+/* Chat header - stays at top, doesn't scroll */
+.chat-header {
+  flex-shrink: 0;
+  z-index: 50;
+}
+
+/* Messages area - takes remaining space, scrollable */
+.chat-messages-area {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Input area - stays at bottom, doesn't scroll */
+.chat-input-area {
+  flex-shrink: 0;
+  z-index: 50;
+  background-color: hsl(240 10% 8%);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Ensure proper stacking during keyboard animation */
+@supports (height: 100dvh) {
+  .mobile-chat-container {
+    height: 100dvh;
+  }
+}

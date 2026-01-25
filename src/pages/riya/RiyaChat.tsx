@@ -118,70 +118,31 @@ const RiyaChat = () => {
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const navigate = useNavigate();
 
-    // Keyboard height for mobile input adjustment
-    const [keyboardHeight, setKeyboardHeight] = useState(0);
-    const prevViewportHeightRef = useRef(window.visualViewport?.height || window.innerHeight);
-
-    // Listen for mobile keyboard show/hide using visualViewport
+    // Scroll to bottom when input is focused (mobile keyboard opens)
     useEffect(() => {
-        const viewport = window.visualViewport;
-        if (!viewport) return;
+        const inputEl = inputRef.current;
+        if (!inputEl) return;
 
-        const handleResize = () => {
-            // Calculate keyboard height as difference between window height and viewport height
-            const keyboardH = window.innerHeight - viewport.height - (viewport.offsetTop || 0);
-            const newKeyboardHeight = keyboardH > 50 ? keyboardH : 0;
-
-            // Check if keyboard just opened (viewport got smaller)
-            const keyboardJustOpened = viewport.height < prevViewportHeightRef.current - 50 && newKeyboardHeight > 0;
-
-            setKeyboardHeight(newKeyboardHeight);
-            prevViewportHeightRef.current = viewport.height;
-
-            // Scroll to bottom when keyboard opens to keep messages visible
-            if (keyboardJustOpened) {
-                setTimeout(() => {
-                    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-                }, 100);
-            }
-        };
-
-        // Also check on input focus (for first focus case)
         const handleFocus = () => {
-            // Delay to allow keyboard to fully open on first focus
+            // Scroll to bottom after keyboard opens
             setTimeout(() => {
-                handleResize();
-                // Force scroll to bottom on focus
-                setTimeout(() => {
-                    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-                }, 150);
+                messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
             }, 300);
         };
 
-        const handleBlur = () => {
-            // Reset keyboard height when input loses focus
-            setTimeout(() => {
-                setKeyboardHeight(0);
-                prevViewportHeightRef.current = window.visualViewport?.height || window.innerHeight;
-            }, 100);
-        };
-
-        const inputEl = inputRef.current;
-        if (inputEl) {
-            inputEl.addEventListener('focus', handleFocus);
-            inputEl.addEventListener('blur', handleBlur);
-        }
-
-        viewport.addEventListener('resize', handleResize);
-
-        return () => {
-            if (inputEl) {
-                inputEl.removeEventListener('focus', handleFocus);
-                inputEl.removeEventListener('blur', handleBlur);
-            }
-            viewport.removeEventListener('resize', handleResize);
-        };
+        inputEl.addEventListener('focus', handleFocus);
+        return () => inputEl.removeEventListener('focus', handleFocus);
     }, []);
+
+    // Scroll to bottom when messages change
+    useEffect(() => {
+        if (messages.length > 0) {
+            // Use requestAnimationFrame for smoother scrolling after render
+            requestAnimationFrame(() => {
+                messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+            });
+        }
+    }, [messages]);
 
     useEffect(() => {
         const init = async () => {
@@ -228,11 +189,13 @@ const RiyaChat = () => {
             let allHistory: any[] = [];
 
             // Fetch user's own messages
-            const { data: userHistory } = await supabase
+            const { data: userHistory, error: userHistoryError } = await supabase
                 .from('riya_conversations')
                 .select('*')
                 .eq('user_id', userId)
                 .order('created_at', { ascending: true });
+
+            console.log('📜 User history loaded:', { count: userHistory?.length, error: userHistoryError });
 
             if (userHistory) {
                 allHistory = [...userHistory];
@@ -255,6 +218,7 @@ const RiyaChat = () => {
             }
 
             if (allHistory.length > 0) {
+                console.log('📜 Total messages to display:', allHistory.length);
                 const formattedMessages = allHistory.map(msg => ({
                     text: msg.content,
                     isUser: msg.role === 'user',
@@ -268,6 +232,7 @@ const RiyaChat = () => {
                         is_blurred: msg.image_data.is_blurred,
                     } : undefined,
                 }));
+                console.log('📜 Setting formatted messages:', formattedMessages.length);
                 setMessages(formattedMessages);
                 setShowQuickReplies(false);
             } else {
@@ -740,7 +705,7 @@ const RiyaChat = () => {
     };
 
     return (
-        <div className="flex flex-col h-[100dvh] bg-background">
+        <div className="mobile-chat-container">
             {/* WhatsApp-style background pattern */}
             <div
                 className="fixed inset-0 opacity-5 pointer-events-none"
@@ -749,8 +714,8 @@ const RiyaChat = () => {
                 }}
             />
 
-            {/* Fixed Header */}
-            <header className="fixed top-0 left-0 right-0 z-50 glass-card rounded-none border-x-0 border-t-0 px-4 py-3">
+            {/* Sticky Header */}
+            <header className="chat-header glass-card rounded-none border-x-0 border-t-0 px-4 py-3 safe-area-top">
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
                         <Button
@@ -852,11 +817,8 @@ const RiyaChat = () => {
                 </div>
             </header>
 
-            {/* Messages - with padding for fixed header and input */}
-            <div
-                className="flex-1 overflow-y-auto px-4 pt-20 space-y-4 relative z-10"
-                style={{ paddingBottom: keyboardHeight + 90 }} // 90px = input bar height + base padding
-            >
+            {/* Messages - scrollable area */}
+            <div className="chat-messages-area px-4 py-4 space-y-4 relative z-10">
                 <AnimatePresence>
                     {messages.map((message, index) => {
                         // Strip [Sent photo: ...] from display - it's for LLM context only
@@ -961,8 +923,7 @@ const RiyaChat = () => {
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: 10 }}
-                        className="fixed left-0 right-0 z-40 transition-[bottom] duration-100"
-                        style={{ bottom: keyboardHeight + 70 }} // 70px = input bar height + padding
+                        className="px-4 py-2 z-40"
                     >
                         <QuickReplyButtons
                             onSelect={(text) => {
@@ -988,8 +949,7 @@ const RiyaChat = () => {
                     e.preventDefault();
                     handleSend();
                 }}
-                className="fixed left-0 right-0 z-50 glass-card rounded-none border-x-0 border-b-0 px-4 py-3 safe-area-bottom transition-[bottom] duration-100"
-                style={{ bottom: keyboardHeight }}
+                className="chat-input-area glass-card rounded-none border-x-0 border-b-0 px-4 py-3"
             >
                 <div className="flex items-center gap-2">
                     {/* Camera button for photo requests */}
