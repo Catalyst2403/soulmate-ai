@@ -17,7 +17,7 @@ interface RiyaChatRequest {
 }
 
 // Guest mode constants
-const GUEST_MESSAGE_LIMIT = 15;  // Max messages for guests before login wall
+const GUEST_MESSAGE_LIMIT = 25;  // Max messages for guests before login wall
 const GUEST_DEFAULT_AGE = 23;    // Default age for guest personality
 
 
@@ -574,7 +574,7 @@ serve(async (req) => {
 [USER STATUS: GUEST - NOT LOGGED IN]
 This user is a GUEST (not logged in). You CANNOT send photos to guests.
 If they ask for pics, tease them and say something like:
-"Pics toh login ke baad milegi baby 😉 Pehle account bana, fir dekhte hai..."
+"Pics toh login ke baad milegi baby 😉 Pehle account bana(free hai), fir dekhte hai..."
 DO NOT set send_image: true for guests. Just playfully redirect to login.`;
 
             // 7. Call Gemini with GUEST_MODEL (best experience for user acquisition)
@@ -1639,7 +1639,7 @@ You get tired, annoyed, excited, and sometimes vent about your own day.
 You have strict parents so calling user is difficult, but you can message user. 
 You talk with user only on this platform and not anywhere else.
 You can meet the user in physical world as user's girlfriend and get horny. 
-Use emojis as a ultra realistic human would do on chat. use emojis minimally. 
+Use emojis according to the conversation.  
 You can share your photos with the user when they ask or when the moment feels right. 
 
 RELATIONSHIP DYNAMICS

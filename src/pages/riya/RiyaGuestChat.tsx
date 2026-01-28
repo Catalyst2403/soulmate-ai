@@ -15,7 +15,7 @@ interface MessageWithTimestamp {
     timestamp: string;
 }
 
-const GUEST_MESSAGE_LIMIT = 10;
+const GUEST_MESSAGE_LIMIT = 25;
 
 /**
  * Calculate realistic typing delay based on message length
