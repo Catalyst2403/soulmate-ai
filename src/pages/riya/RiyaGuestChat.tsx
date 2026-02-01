@@ -8,6 +8,7 @@ import { Send, Camera } from 'lucide-react';
 import GuestLoginModal from '@/components/riya/GuestLoginModal';
 import QuickReplyButtons from '@/components/riya/QuickReplyButtons';
 import { getGreetingByTime } from '@/utils/riyaGreetings';
+import { ThemeToggle } from '@/components/ThemeToggle';
 
 interface MessageWithTimestamp {
     text: string;
@@ -392,19 +393,22 @@ const RiyaGuestChat = () => {
                         </div>
                     </div>
 
-                    {/* Login Button with integrated Free badge */}
-                    <button
-                        onClick={() => {
-                            setCanCloseModal(true);
-                            setShowLoginModal(true);
-                        }}
-                        className="relative group flex items-center gap-2 px-4 py-2 rounded-full bg-gradient-to-r from-primary/20 to-green-500/20 border border-primary/40 hover:border-primary/60 transition-all duration-300 hover:shadow-[0_0_15px_rgba(0,212,170,0.3)]"
-                    >
-                        <span className="text-sm font-medium text-primary">Login</span>
-                        <span className="px-2 py-0.5 rounded-full bg-green-500/20 text-[10px] font-semibold text-green-400 border border-green-500/30">
-                            FREE
-                        </span>
-                    </button>
+                    {/* Theme Toggle + Login Button */}
+                    <div className="flex items-center gap-2">
+                        <ThemeToggle />
+                        <button
+                            onClick={() => {
+                                setCanCloseModal(true);
+                                setShowLoginModal(true);
+                            }}
+                            className="relative group flex items-center gap-2 px-4 py-2 rounded-full bg-gradient-to-r from-primary/20 to-green-500/20 border border-primary/40 hover:border-primary/60 transition-all duration-300 hover:shadow-[0_0_15px_rgba(0,212,170,0.3)]"
+                        >
+                            <span className="text-sm font-medium text-primary">Login</span>
+                            <span className="px-2 py-0.5 rounded-full bg-green-500/20 text-[10px] font-semibold text-green-400 border border-green-500/30">
+                                FREE
+                            </span>
+                        </button>
+                    </div>
                 </div>
             </header>
 

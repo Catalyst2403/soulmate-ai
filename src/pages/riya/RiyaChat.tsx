@@ -11,6 +11,7 @@ import PaywallModal from '@/components/riya/PaywallModal';
 import SoftPaywallBanner from '@/components/riya/SoftPaywallBanner';
 import QuickReplyButtons from '@/components/riya/QuickReplyButtons';
 import { getGreetingByTime } from '@/utils/riyaGreetings';
+import { ThemeToggle } from '@/components/ThemeToggle';
 import RiyaProfile from './RiyaProfile';
 import {
     AlertDialog,
@@ -796,6 +797,9 @@ const RiyaChat = () => {
                     </div>
 
                     <div className="flex items-center gap-2">
+                        {/* Theme Toggle */}
+                        <ThemeToggle />
+
                         {/* Pro upgrade button - only show for free users */}
                         {isSubscriptionLoaded && !isPro && (
                             <Button
