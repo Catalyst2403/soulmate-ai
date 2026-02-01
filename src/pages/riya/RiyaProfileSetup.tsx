@@ -84,6 +84,31 @@ const RiyaProfileSetup = () => {
 
             console.log('Riya user created:', riyaUser);
 
+            // ========================================
+            // AUTO-GRANT 14-DAY PRO TRIAL
+            // ========================================
+            const trialExpiresAt = new Date();
+            trialExpiresAt.setDate(trialExpiresAt.getDate() + 14);
+
+            // @ts-ignore - Table exists after migration
+            const { error: trialError } = await supabase
+                .from('riya_subscriptions')
+                .insert({
+                    user_id: riyaUser.id,
+                    plan_type: 'trial',
+                    status: 'active',
+                    amount_paid: 0,
+                    expires_at: trialExpiresAt.toISOString(),
+                    is_first_subscription: true,
+                });
+
+            if (trialError) {
+                console.warn('Failed to create trial subscription:', trialError);
+                // Don't throw - user can still use free tier
+            } else {
+                console.log('✅ 14-day Pro trial created, expires:', trialExpiresAt.toISOString());
+            }
+
             // Update Supabase auth metadata with username
             const { error: metadataError } = await supabase.auth.updateUser({
                 data: {
@@ -125,9 +150,10 @@ const RiyaProfileSetup = () => {
             localStorage.removeItem('riya_email');
             localStorage.removeItem('riya_full_name');
 
+            // Show welcome toast with Pro trial info
             toast({
-                title: 'Welcome!',
-                description: `Let's start chatting, ${username}!`,
+                title: '🎉 Welcome Gift!',
+                description: `14 days of Pro FREE! Unlimited messages & pics, ${username}!`,
             });
 
             navigate('/riya/chat');
