@@ -51,11 +51,139 @@
     /* Shadows */
     --shadow-neon: 0 0 20px hsla(174, 100%, 50%, 0.3), 0 0 40px hsla(174, 100%, 50%, 0.1);
     --shadow-glow: 0 0 30px hsla(320, 100%, 60%, 0.4);
+
+    /* Scrollbar colors */
+    --scrollbar-track: 240 10% 6%;
+    --scrollbar-thumb: 240 10% 20%;
+    --scrollbar-thumb-hover: 240 10% 30%;
+
+    /* Chat container background */
+    --chat-container-bg: 240 10% 4%;
+    --chat-input-bg: 240 10% 8%;
+    --safe-area-bg: 240 10% 8%;
+
+    /* Chat bubble colors - dark mode */
+    --chat-bubble-user-bg: linear-gradient(135deg, hsl(142 70% 35%) 0%, hsl(142 60% 30%) 100%);
+    --chat-bubble-bot-bg: 240 10% 15%;
+  }
+
+  .light {
+    --background: 0 0% 100%;
+    --foreground: 240 10% 10%;
+
+    --card: 0 0% 98%;
+    --card-foreground: 240 10% 10%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 10%;
+
+    --primary: 174 80% 35%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 280 70% 50%;
+    --secondary-foreground: 0 0% 100%;
+
+    --muted: 240 5% 92%;
+    --muted-foreground: 240 5% 40%;
+
+    --accent: 320 70% 50%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 84% 55%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 240 5% 85%;
+    --input: 240 5% 90%;
+    --ring: 174 80% 35%;
+
+    /* Custom tokens */
+    --neon-cyan: 174 80% 35%;
+    --neon-magenta: 320 70% 50%;
+    --neon-purple: 280 70% 50%;
+    --glass-bg: 0 0% 98%;
+    --glass-border: 240 5% 85%;
+
+    /* Gradients for light mode */
+    --gradient-glass: linear-gradient(135deg, hsla(0, 0%, 100%, 0.8) 0%, hsla(240, 5%, 98%, 0.9) 100%);
+    --gradient-dark: linear-gradient(180deg, hsl(0 0% 100%) 0%, hsl(240 5% 98%) 100%);
+
+    /* Shadows for light mode */
+    --shadow-neon: 0 0 20px hsla(174, 80%, 35%, 0.2), 0 0 40px hsla(174, 80%, 35%, 0.1);
+    --shadow-glow: 0 0 30px hsla(320, 70%, 50%, 0.25);
+
+    /* Scrollbar colors */
+    --scrollbar-track: 240 5% 96%;
+    --scrollbar-thumb: 240 5% 80%;
+    --scrollbar-thumb-hover: 240 5% 70%;
+
+    /* Chat container background - WhatsApp style beige/cream */
+    --chat-container-bg: 30 20% 96%;
+    --chat-input-bg: 0 0% 100%;
+    --safe-area-bg: 0 0% 100%;
+
+    /* Chat bubble colors - WhatsApp light mode style */
+    --chat-bubble-user-bg: linear-gradient(135deg, hsl(142 52% 80%) 0%, hsl(142 45% 75%) 100%);
+    --chat-bubble-bot-bg: 0 0% 100%;
   }
 
   .dark {
     --background: 240 10% 4%;
     --foreground: 0 0% 98%;
+
+    --card: 240 10% 6%;
+    --card-foreground: 0 0% 98%;
+
+    --popover: 240 10% 6%;
+    --popover-foreground: 0 0% 98%;
+
+    --primary: 174 100% 50%;
+    --primary-foreground: 240 10% 4%;
+
+    --secondary: 280 100% 60%;
+    --secondary-foreground: 0 0% 98%;
+
+    --muted: 240 10% 12%;
+    --muted-foreground: 240 5% 65%;
+
+    --accent: 320 100% 60%;
+    --accent-foreground: 0 0% 98%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 240 10% 15%;
+    --input: 240 10% 15%;
+    --ring: 174 100% 50%;
+
+    /* Custom tokens */
+    --neon-cyan: 174 100% 50%;
+    --neon-magenta: 320 100% 60%;
+    --neon-purple: 280 100% 60%;
+    --glass-bg: 240 10% 8%;
+    --glass-border: 240 10% 20%;
+
+    /* Gradients */
+    --gradient-neon: linear-gradient(135deg, hsl(174 100% 50%) 0%, hsl(280 100% 60%) 50%, hsl(320 100% 60%) 100%);
+    --gradient-glass: linear-gradient(135deg, hsla(240, 10%, 15%, 0.6) 0%, hsla(240, 10%, 8%, 0.8) 100%);
+    --gradient-dark: linear-gradient(180deg, hsl(240 10% 6%) 0%, hsl(240 10% 3%) 100%);
+
+    /* Shadows */
+    --shadow-neon: 0 0 20px hsla(174, 100%, 50%, 0.3), 0 0 40px hsla(174, 100%, 50%, 0.1);
+    --shadow-glow: 0 0 30px hsla(320, 100%, 60%, 0.4);
+
+    /* Scrollbar colors */
+    --scrollbar-track: 240 10% 6%;
+    --scrollbar-thumb: 240 10% 20%;
+    --scrollbar-thumb-hover: 240 10% 30%;
+
+    /* Chat container background */
+    --chat-container-bg: 240 10% 4%;
+    --chat-input-bg: 240 10% 8%;
+    --safe-area-bg: 240 10% 8%;
+
+    /* Chat bubble colors - dark mode */
+    --chat-bubble-user-bg: linear-gradient(135deg, hsl(142 70% 35%) 0%, hsl(142 60% 30%) 100%);
+    --chat-bubble-bot-bg: 240 10% 15%;
   }
 }
 
@@ -65,13 +193,13 @@
   }
 
   html {
-    background-color: hsl(240 10% 4%);
+    background-color: hsl(var(--background));
   }
 
   body {
     @apply bg-background text-foreground font-sans antialiased;
     font-family: 'Inter', sans-serif;
-    background: linear-gradient(180deg, hsl(240 10% 4%) 0%, hsl(240 10% 2%) 100%);
+    background: var(--gradient-dark);
     min-height: 100vh;
     min-height: 100dvh;
   }
@@ -89,9 +217,9 @@
 @layer components {
   .glass-card {
     @apply rounded-2xl border border-glass-border;
-    background: linear-gradient(135deg, hsla(240, 10%, 15%, 0.4) 0%, hsla(240, 10%, 8%, 0.6) 100%);
+    background: var(--gradient-glass);
     backdrop-filter: blur(20px);
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), inset 0 1px 0 hsla(0, 0%, 100%, 0.05);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15), inset 0 1px 0 hsla(0, 0%, 100%, 0.05);
   }
 
   .neon-text {
@@ -124,12 +252,13 @@
 
   .chat-bubble-user {
     @apply rounded-2xl rounded-br-md px-4 py-3;
-    background: linear-gradient(135deg, hsl(142 70% 35%) 0%, hsl(142 60% 30%) 100%);
+    background: var(--chat-bubble-user-bg);
   }
 
   .chat-bubble-bot {
     @apply rounded-2xl rounded-bl-md px-4 py-3;
-    background: hsla(240, 10%, 15%, 0.8);
+    background: hsl(var(--chat-bubble-bot-bg));
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
   }
 }
 
@@ -156,16 +285,16 @@
   }
 
   .custom-scrollbar::-webkit-scrollbar-track {
-    background: hsl(240 10% 6%);
+    background: hsl(var(--scrollbar-track));
   }
 
   .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: hsl(240 10% 20%);
+    background: hsl(var(--scrollbar-thumb));
     border-radius: 3px;
   }
 
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: hsl(240 10% 30%);
+    background: hsl(var(--scrollbar-thumb-hover));
   }
 }
 
@@ -215,16 +344,16 @@
 }
 
 ::-webkit-scrollbar-track {
-  background: hsl(240 10% 6%);
+  background: hsl(var(--scrollbar-track));
 }
 
 ::-webkit-scrollbar-thumb {
-  background: hsl(240 10% 20%);
+  background: hsl(var(--scrollbar-thumb));
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(240 10% 30%);
+  background: hsl(var(--scrollbar-thumb-hover));
 }
 
 /* Mobile viewport height fix for keyboard */
@@ -238,7 +367,7 @@
 .safe-area-bottom {
   padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
   /* Extend background through safe area to prevent white bar */
-  background-color: hsl(240 10% 8%);
+  background-color: hsl(var(--safe-area-bg));
 }
 
 .safe-area-top {
@@ -275,7 +404,7 @@
   height: 100vh;
   /* fallback for older browsers */
   overflow: hidden;
-  background-color: hsl(240 10% 4%);
+  background-color: hsl(var(--chat-container-bg));
 }
 
 /* Chat header - stays at top, doesn't scroll */
@@ -298,7 +427,7 @@
 .chat-input-area {
   flex-shrink: 0;
   z-index: 50;
-  background-color: hsl(240 10% 8%);
+  background-color: hsl(var(--chat-input-bg));
   padding-bottom: env(safe-area-inset-bottom);
 }
 

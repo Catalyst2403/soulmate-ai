@@ -1,6 +1,7 @@
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { ThemeProvider } from "@/components/ThemeProvider";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Analytics } from "@vercel/analytics/react";
@@ -39,42 +40,44 @@ const AnalyticsWrapper = ({ children }: { children: React.ReactNode }) => {
 const App = () => {
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <Toaster />
-        <Sonner />
-        <BrowserRouter>
-          <AnalyticsWrapper>
-            <Routes>
-              {/* Existing Custom Companion System */}
-              <Route path="/" element={<Index />} />
-              <Route path="/chat" element={<Chat />} />
-              <Route path="/character/:characterId" element={<CharacterOnboarding />} />
-              <Route path="/admin-dashboard" element={<AdminDashboard />} />
+      <ThemeProvider>
+        <TooltipProvider>
+          <Toaster />
+          <Sonner />
+          <BrowserRouter>
+            <AnalyticsWrapper>
+              <Routes>
+                {/* Existing Custom Companion System */}
+                <Route path="/" element={<Index />} />
+                <Route path="/chat" element={<Chat />} />
+                <Route path="/character/:characterId" element={<CharacterOnboarding />} />
+                <Route path="/admin-dashboard" element={<AdminDashboard />} />
 
-              {/* Riya Character System */}
-              <Route path="/riya" element={<RiyaGuestChat />} />  {/* Guest chat as default */}
-              <Route path="/riya/login" element={<RiyaLanding />} />  {/* Original login page */}
-              <Route path="/riya/callback" element={<RiyaCallback />} />
-              <Route path="/riya/onboarding/profile" element={<RiyaProfileSetup />} />
-              <Route path="/riya/chat" element={<RiyaChat />} />
-              <Route path="/riya/pricing" element={<RiyaPricing />} />
-              <Route path="/riya/email-login" element={<RiyaEmailLogin />} />
-              <Route path="/riya/analytics" element={<RiyaAnalytics />} />
+                {/* Riya Character System */}
+                <Route path="/riya" element={<RiyaGuestChat />} />  {/* Guest chat as default */}
+                <Route path="/riya/login" element={<RiyaLanding />} />  {/* Original login page */}
+                <Route path="/riya/callback" element={<RiyaCallback />} />
+                <Route path="/riya/onboarding/profile" element={<RiyaProfileSetup />} />
+                <Route path="/riya/chat" element={<RiyaChat />} />
+                <Route path="/riya/pricing" element={<RiyaPricing />} />
+                <Route path="/riya/email-login" element={<RiyaEmailLogin />} />
+                <Route path="/riya/analytics" element={<RiyaAnalytics />} />
 
-              {/* Riya Policy Pages */}
-              <Route path="/riya/shipping-policy" element={<ShippingPolicy />} />
-              <Route path="/riya/terms" element={<TermsAndConditions />} />
-              <Route path="/riya/cancellation-refund" element={<CancellationsRefunds />} />
-              <Route path="/riya/privacy-policy" element={<PrivacyPolicy />} />
-              <Route path="/riya/contact" element={<ContactUs />} />
+                {/* Riya Policy Pages */}
+                <Route path="/riya/shipping-policy" element={<ShippingPolicy />} />
+                <Route path="/riya/terms" element={<TermsAndConditions />} />
+                <Route path="/riya/cancellation-refund" element={<CancellationsRefunds />} />
+                <Route path="/riya/privacy-policy" element={<PrivacyPolicy />} />
+                <Route path="/riya/contact" element={<ContactUs />} />
 
-              {/* 404 */}
-              <Route path="*" element={<NotFound />} />
-            </Routes>
-          </AnalyticsWrapper>
-        </BrowserRouter>
-        <Analytics />
-      </TooltipProvider>
+                {/* 404 */}
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </AnalyticsWrapper>
+          </BrowserRouter>
+          <Analytics />
+        </TooltipProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   );
 };
