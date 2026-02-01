@@ -40,11 +40,12 @@ const SUMMARY_MODEL_PRIMARY = "gemini-2.5-flash-lite";
 const SUMMARY_MODEL_FALLBACK = "gemini-2.5-flash";
 const SUMMARY_MODEL_LAST_RESORT = "gemini-3-flash-preview";
 
-// Tiered model settings for free users
-const PRO_MODEL = "gemini-3-flash-preview";   // Best quality model for Pro users & first 20 msgs
-const FREE_MODEL = "gemini-2.5-flash-lite"; // Cost-effective model after 20 msgs
+// Tiered model settings
+const PRO_MODEL = "gemini-3-pro-preview";     // Best quality model for Pro subscribers only
+const FREE_MODEL_FIRST_20 = "gemini-3-flash-preview"; // Free users first 20 msgs
+const FREE_MODEL = "gemini-2.5-flash-lite";   // Cost-effective model after 20 msgs
 const GUEST_MODEL = "gemini-3-flash-preview"; // Best experience for guest user acquisition
-const PRO_MODEL_LIMIT = 20;                  // First 20 messages use Pro model
+const PRO_MODEL_LIMIT = 20;                   // First 20 messages use premium free model
 const DAILY_MESSAGE_LIMIT_FREE = 200;        // Soft cap: 200 msgs/day for free users (DDoS protection)
 
 // Rate limiting (per-user, per-minute)
@@ -937,8 +938,9 @@ This user is LOGGED IN. You CAN send photos when appropriate.`;
                 modelName = FREE_MODEL;
                 console.log(`📉 Free user (${currentCount} msgs) - using ${FREE_MODEL}`);
             } else {
-                // First 20 messages: use Pro model
-                console.log(`⭐ Free user (${currentCount} msgs) - using ${PRO_MODEL} (${remainingProMessages} Pro msgs left)`);
+                // First 20 messages: use flash model (not pro)
+                modelName = FREE_MODEL_FIRST_20;
+                console.log(`⭐ Free user (${currentCount} msgs) - using ${FREE_MODEL_FIRST_20} (${remainingProMessages} premium msgs left)`);
             }
         } else {
             console.log(`👑 Pro user - using ${PRO_MODEL}`);
