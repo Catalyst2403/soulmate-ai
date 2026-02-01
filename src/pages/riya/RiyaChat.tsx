@@ -269,8 +269,10 @@ const RiyaChat = () => {
                 setShowQuickReplies(true);
             }
 
-            // Check subscription status (wrapped in try-catch to handle RLS 403 errors)
+            // Check subscription status FIRST (before loading history)
+            // This ensures Pro badge shows immediately
             try {
+                console.log('🔍 Checking subscription for user_id:', userId);
                 // @ts-ignore - Table exists after migration
                 const { data: subscription, error: subError } = await supabase
                     .from('riya_subscriptions')
@@ -280,11 +282,16 @@ const RiyaChat = () => {
                     .gte('expires_at', new Date().toISOString())
                     .maybeSingle();
 
+                console.log('📊 Subscription query result:', { subscription, error: subError?.message });
+
                 if (subError) {
                     console.warn('⚠️ Subscription query error (RLS?):', subError.message);
                 } else if (subscription) {
+                    console.log('✅ User is PRO! Expires:', subscription.expires_at);
                     setIsPro(true);
                     setRemainingProMessages(-1); // Unlimited for Pro
+                } else {
+                    console.log('📭 No active subscription found');
                 }
             } catch (subErr) {
                 console.warn('⚠️ Subscription check failed:', subErr);
@@ -800,7 +807,7 @@ const RiyaChat = () => {
                         {/* Theme Toggle */}
                         <ThemeToggle />
 
-                        {/* Pro upgrade button - only show for free users */}
+                        {/* Pro upgrade button - HIDDEN for 14-day trial promotion
                         {isSubscriptionLoaded && !isPro && (
                             <Button
                                 onClick={() => navigate('/riya/pricing')}
@@ -812,6 +819,7 @@ const RiyaChat = () => {
                                 Buy Pro
                             </Button>
                         )}
+                        */}
 
                         <DropdownMenu>
                             <DropdownMenuTrigger asChild>
