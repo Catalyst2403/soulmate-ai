@@ -1,10 +1,12 @@
 -- ============================================
--- ADD INSERT POLICY FOR TRIAL SUBSCRIPTIONS
+-- FIX: RLS POLICY FOR SUBSCRIPTION INSERT
 -- Run this in Supabase SQL Editor
--- Required for auto-trial on signup to work
 -- ============================================
 
--- Allow authenticated users to insert their own subscription (for trial grant)
+-- First, drop the broken policy
+DROP POLICY IF EXISTS "Users can create their own subscription" ON public.riya_subscriptions;
+
+-- Create fixed policy using auth.email() instead of querying auth.users
 CREATE POLICY "Users can create their own subscription"
   ON public.riya_subscriptions
   FOR INSERT
@@ -12,14 +14,9 @@ CREATE POLICY "Users can create their own subscription"
     -- User can only insert a subscription for themselves
     user_id IN (
       SELECT id FROM public.riya_users 
-      WHERE email = (SELECT email FROM auth.users WHERE id = auth.uid())
+      WHERE email = auth.email()
     )
   );
 
--- Verify the policy was created
-SELECT 
-    policyname, 
-    cmd as operation,
-    permissive
-FROM pg_policies 
-WHERE tablename = 'riya_subscriptions';
+-- Verify
+SELECT policyname, cmd FROM pg_policies WHERE tablename = 'riya_subscriptions';

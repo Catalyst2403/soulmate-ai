@@ -271,14 +271,12 @@ async function selectContextualImage(
     console.log(`📷 Blur path in DB: ${selected.blur_storage_path || 'NULL'}`);
     console.log(`📷 Is premium: ${selected.is_premium}`);
 
-    // Determine if should be blurred (free user + premium image)
-    const isBlurred = !isPro && selected.is_premium;
-    console.log(`📷 Should blur (free + premium): ${isBlurred}`);
+    // PROMOTIONAL PERIOD: No blur for anyone - all images visible
+    const isBlurred = false; // Was: !isPro && selected.is_premium
+    console.log(`📷 Should blur: ${isBlurred} (DISABLED for promo)`);
 
-    // Get the appropriate storage path
-    const storagePath = isBlurred && selected.blur_storage_path
-        ? selected.blur_storage_path
-        : selected.storage_path;
+    // Always use unblurred image during promo
+    const storagePath = selected.storage_path;
     console.log(`📷 Final storage path: ${storagePath}`);
 
     // Get public URL from storage
@@ -306,30 +304,18 @@ async function selectContextualImage(
 
 /**
  * Check if user has reached their daily image limit
+ * PROMOTIONAL PERIOD: Unlimited images for everyone
  */
 async function checkImageLimit(
     supabase: any,
     userId: string,
     isPro: boolean
 ): Promise<{ allowed: boolean; remaining: number }> {
-    const limit = isPro ? PRO_IMAGE_LIMIT : FREE_IMAGE_LIMIT;
-    const today = new Date().toISOString().split('T')[0];
-
-    const { data: usage } = await supabase
-        .from('riya_image_usage')
-        .select('images_sent')
-        .eq('user_id', userId)
-        .eq('usage_date', today)
-        .single();
-
-    const currentCount = usage?.images_sent || 0;
-    const remaining = Math.max(0, limit - currentCount);
-
-    console.log(`📊 Image usage: ${currentCount}/${limit} (${remaining} remaining)`);
-
+    // PROMO: Skip limit check - allow unlimited
+    console.log(`📊 Image limit check: DISABLED for promo (unlimited)`);
     return {
-        allowed: currentCount < limit,
-        remaining
+        allowed: true,
+        remaining: 999
     };
 }
 

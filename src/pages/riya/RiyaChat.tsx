@@ -231,13 +231,16 @@ const RiyaChat = () => {
                                 isUser: msg.role === 'user',
                                 timestamp: msg.created_at || new Date().toISOString(),
                                 // Load image data from DB for reload persistence
-                                image: msg.image_data ? {
-                                    url: msg.image_data.url || '',
-                                    description: msg.image_data.description || '',
-                                    category: msg.image_data.category || 'general',
-                                    is_premium: !!msg.image_data.is_premium,
-                                    is_blurred: !!msg.image_data.is_blurred,
-                                } : undefined,
+                                image: msg.image_data ? (() => {
+                                    console.log('🖼️ Loading image from DB:', msg.image_data);
+                                    return {
+                                        url: msg.image_data.url || '',
+                                        description: msg.image_data.description || '',
+                                        category: msg.image_data.category || 'general',
+                                        is_premium: !!msg.image_data.is_premium,
+                                        is_blurred: !!msg.image_data.is_blurred,
+                                    };
+                                })() : undefined,
                             };
                         } catch (err) {
                             console.error('⚠️ Skipping malformed message:', msg, err);
