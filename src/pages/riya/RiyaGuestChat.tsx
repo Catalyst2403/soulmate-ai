@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send, Camera } from 'lucide-react';
+import { Send } from 'lucide-react';
 import GuestLoginModal from '@/components/riya/GuestLoginModal';
 import QuickReplyButtons from '@/components/riya/QuickReplyButtons';
 import { getGreetingByTime } from '@/utils/riyaGreetings';
@@ -507,32 +507,7 @@ const RiyaGuestChat = () => {
                 className="chat-input-area glass-card rounded-none border-x-0 border-b-0 px-4 py-3"
             >
                 <div className="flex items-center gap-2">
-                    {/* Camera button - shows login wall for guests */}
-                    <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="shrink-0 text-pink-400 hover:text-pink-300 hover:bg-pink-500/10"
-                        onClick={async () => {
-                            // Track click for analytics
-                            // @ts-ignore - Table exists after migration
-                            const { error } = await supabase.from('riya_image_clicks').insert({
-                                user_type: 'guest',
-                                guest_session_id: guestSessionId,
-                            });
-                            if (error) {
-                                console.error('📸 Image click tracking error:', error);
-                            } else {
-                                console.log('📸 Guest camera click tracked');
-                            }
 
-                            setCanCloseModal(true);
-                            setShowLoginModal(true);
-                        }}
-                        title="Login to unlock photos 📸"
-                    >
-                        <Camera className="w-5 h-5" />
-                    </Button>
 
                     <textarea
                         ref={inputRef}
@@ -549,8 +524,8 @@ const RiyaGuestChat = () => {
                                 handleSend();
                             }
                         }}
-                        placeholder={messageCount >= GUEST_MESSAGE_LIMIT ? "Login to continue..." : "Type a message..."}
-                        className="flex-1 bg-muted/30 border-0 focus-visible:ring-1 focus-visible:ring-ring rounded-md px-3 py-2 text-sm resize-none overflow-hidden min-h-[40px] max-h-[100px]"
+                        placeholder={messageCount >= GUEST_MESSAGE_LIMIT ? "Login to continue..." : "Chat with Riya... she can send photos too 📸"}
+                        className="flex-1 bg-muted/30 border-0 focus-visible:ring-1 focus-visible:ring-ring rounded-md px-3 py-2 text-sm placeholder:text-xs resize-none overflow-hidden min-h-[40px] max-h-[100px]"
                         disabled={messageCount >= GUEST_MESSAGE_LIMIT}
                         rows={1}
                     />

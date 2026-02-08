@@ -997,8 +997,8 @@ const RiyaChat = () => {
                                 handleSend();
                             }
                         }}
-                        placeholder="Chat with Riya... she can send photos too "
-                        className="flex-1 bg-muted/30 border-0 focus-visible:ring-1 focus-visible:ring-ring rounded-md px-3 py-2 text-sm resize-none overflow-hidden min-h-[40px] max-h-[100px]"
+                        placeholder="Chat with Riya... she can send photos too 📸"
+                        className="flex-1 bg-muted/30 border-0 focus-visible:ring-1 focus-visible:ring-ring rounded-md px-3 py-2 text-sm placeholder:text-xs resize-none overflow-hidden min-h-[40px] max-h-[100px]"
                         rows={1}
                     />
 
