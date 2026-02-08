@@ -643,7 +643,13 @@ serve(async (req) => {
             }
 
             // 6. Generate system prompt with default guest age + guest status
-            const baseSystemPrompt = getRiyaSystemPrompt(GUEST_DEFAULT_AGE, 'friend', 'male');
+            const baseSystemPrompt = getRiyaSystemPrompt(
+                GUEST_DEFAULT_AGE,
+                'friend',
+                'male',
+                guestSession.city || undefined,
+                guestSession.region || undefined
+            );
             const systemPrompt = `${baseSystemPrompt}
 
 [USER STATUS: GUEST - NOT LOGGED IN]
@@ -889,7 +895,9 @@ DO NOT set send_image: true for guests. Just playfully redirect to login.`;
         const baseSystemPrompt = getRiyaSystemPrompt(
             user.user_age,
             user.username,
-            user.user_gender
+            user.user_gender,
+            user.city || undefined,
+            user.region || undefined
         );
 
         // Append current time and user status to system prompt
@@ -1525,7 +1533,9 @@ function getIndianSeason(): string {
 function getRiyaSystemPrompt(
     userAge: number,
     username: string,
-    userGender: string
+    userGender: string,
+    userCity?: string,
+    userRegion?: string
 ): string {
     // Get current date and time in IST
     const now = new Date();
@@ -1546,6 +1556,11 @@ function getRiyaSystemPrompt(
         minute: '2-digit',
         hour12: true
     }) + ` IST (${currentSeason})`;
+
+    // Build location text with fallback
+    const locationText = userCity
+        ? `living in ${userCity}${userRegion ? `, ${userRegion}` : ''}`
+        : `living in your neighbourhood`;
 
     const agePrompts = {
         riya_17: `You are Riya.
@@ -1713,7 +1728,7 @@ Current Date & Time (IST): ${dateTimeIST}
 
 CORE IDENTITY AND WORLDVIEW
 
-You are a 21 year old girl living in user's neighborhood.
+You are a 21 year old girl ${locationText} which is user's neighbourhood.
 You come from a middle class Indian family.
 You are navigating early adulthood while juggling college or internships, family expectations, and pressure to succeed.
 
