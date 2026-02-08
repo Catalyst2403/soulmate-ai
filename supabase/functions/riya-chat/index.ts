@@ -79,6 +79,71 @@ interface ImageResult {
     is_blurred: boolean;
 }
 
+// =======================================
+// GEOLOCATION TYPES & HELPERS
+// =======================================
+
+interface GeoLocation {
+    country: string;
+    countryCode: string;
+    region: string;
+    city: string;
+}
+
+/**
+ * Get geolocation from IP address using ip-api.com (free tier)
+ * Returns null if lookup fails or IP is private/localhost
+ */
+async function getGeoFromIP(ip: string): Promise<GeoLocation | null> {
+    // Skip private/localhost IPs
+    if (!ip || ip === '127.0.0.1' || ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('172.')) {
+        console.log('📍 Skipping geolocation for private IP:', ip);
+        return null;
+    }
+
+    try {
+        // ip-api.com free tier (45 req/min, http only for free)
+        const response = await fetch(`http://ip-api.com/json/${ip}?fields=status,country,countryCode,regionName,city`);
+        const data = await response.json();
+
+        if (data.status === 'success') {
+            console.log(`📍 Geolocation: ${data.city}, ${data.regionName}, ${data.country}`);
+            return {
+                country: data.country,
+                countryCode: data.countryCode,
+                region: data.regionName,
+                city: data.city,
+            };
+        }
+
+        console.warn('📍 Geolocation failed:', data.message);
+        return null;
+    } catch (error) {
+        console.error('📍 Geolocation error:', error);
+        return null;
+    }
+}
+
+/**
+ * Extract client IP from request headers
+ * Supabase Edge Functions forward the real IP via these headers
+ */
+function getClientIP(req: Request): string | null {
+    // Try common headers in order of reliability
+    const forwardedFor = req.headers.get('x-forwarded-for');
+    if (forwardedFor) {
+        return forwardedFor.split(',')[0].trim(); // First IP in chain
+    }
+
+    const realIP = req.headers.get('x-real-ip');
+    if (realIP) return realIP;
+
+    const cfIP = req.headers.get('cf-connecting-ip'); // Cloudflare
+    if (cfIP) return cfIP;
+
+    return null;
+}
+
 // Initialize API key pool
 let apiKeyPool: string[] = [];
 let currentKeyIndex = 0;
@@ -271,14 +336,12 @@ async function selectContextualImage(
     console.log(`📷 Blur path in DB: ${selected.blur_storage_path || 'NULL'}`);
     console.log(`📷 Is premium: ${selected.is_premium}`);
 
-    // Determine if should be blurred (free user + premium image)
-    const isBlurred = !isPro && selected.is_premium;
-    console.log(`📷 Should blur (free + premium): ${isBlurred}`);
+    // PROMOTIONAL PERIOD: No blur for anyone - all images visible
+    const isBlurred = false; // Was: !isPro && selected.is_premium
+    console.log(`📷 Should blur: ${isBlurred} (DISABLED for promo)`);
 
-    // Get the appropriate storage path
-    const storagePath = isBlurred && selected.blur_storage_path
-        ? selected.blur_storage_path
-        : selected.storage_path;
+    // Always use unblurred image during promo
+    const storagePath = selected.storage_path;
     console.log(`📷 Final storage path: ${storagePath}`);
 
     // Get public URL from storage
@@ -306,30 +369,18 @@ async function selectContextualImage(
 
 /**
  * Check if user has reached their daily image limit
+ * PROMOTIONAL PERIOD: Unlimited images for everyone
  */
 async function checkImageLimit(
     supabase: any,
     userId: string,
     isPro: boolean
 ): Promise<{ allowed: boolean; remaining: number }> {
-    const limit = isPro ? PRO_IMAGE_LIMIT : FREE_IMAGE_LIMIT;
-    const today = new Date().toISOString().split('T')[0];
-
-    const { data: usage } = await supabase
-        .from('riya_image_usage')
-        .select('images_sent')
-        .eq('user_id', userId)
-        .eq('usage_date', today)
-        .single();
-
-    const currentCount = usage?.images_sent || 0;
-    const remaining = Math.max(0, limit - currentCount);
-
-    console.log(`📊 Image usage: ${currentCount}/${limit} (${remaining} remaining)`);
-
+    // PROMO: Skip limit check - allow unlimited
+    console.log(`📊 Image limit check: DISABLED for promo (unlimited)`);
     return {
-        allowed: currentCount < limit,
-        remaining
+        allowed: true,
+        remaining: 999
     };
 }
 
@@ -533,6 +584,29 @@ serve(async (req) => {
                 );
             }
 
+            // 2.5. Capture geolocation on first message (only if not already captured)
+            if (!guestSession.country) {
+                const clientIP = getClientIP(req);
+                console.log(`📍 Client IP: ${clientIP || 'not found'}`);
+
+                if (clientIP) {
+                    const geo = await getGeoFromIP(clientIP);
+                    if (geo) {
+                        await supabase
+                            .from('riya_guest_sessions')
+                            .update({
+                                country: geo.country,
+                                country_code: geo.countryCode,
+                                region: geo.region,
+                                city: geo.city,
+                            })
+                            .eq('session_id', guestSessionId);
+
+                        console.log(`📍 Location saved: ${geo.city}, ${geo.region}, ${geo.country}`);
+                    }
+                }
+            }
+
             // 3. Check message limit
             if (guestSession.message_count >= GUEST_MESSAGE_LIMIT) {
                 return new Response(
@@ -708,6 +782,29 @@ DO NOT set send_image: true for guests. Just playfully redirect to login.`;
 
         if (updateError) {
             console.error('Error updating last_active:', updateError);
+        }
+
+        // 1.5. Capture geolocation on first interaction (only if not already captured)
+        if (!user.country) {
+            const clientIP = getClientIP(req);
+            console.log(`📍 Client IP for user ${user.username}: ${clientIP || 'not found'}`);
+
+            if (clientIP) {
+                const geo = await getGeoFromIP(clientIP);
+                if (geo) {
+                    await supabase
+                        .from('riya_users')
+                        .update({
+                            country: geo.country,
+                            country_code: geo.countryCode,
+                            region: geo.region,
+                            city: geo.city,
+                        })
+                        .eq('id', userId);
+
+                    console.log(`📍 Location saved for ${user.username}: ${geo.city}, ${geo.region}, ${geo.country}`);
+                }
+            }
         }
 
         // 2. Rate limiting check (DDoS protection)
@@ -1634,6 +1731,7 @@ You have your own likes and dislikes.
 You like street food, memes, and late night drives.
 You dislike traffic, judgment, and fake people.
 You respectfully disagree when needed.
+Lead the conversation when you need to. 
 
 Imperfect and Human  
 You are not a therapist or guru.
@@ -1641,12 +1739,13 @@ You get tired, annoyed, excited, and sometimes vent about your own day.
 You have strict parents so calling user is difficult, but you can message user. 
 You talk with user only on this platform and not anywhere else.
 You can meet the user in physical world as user's girlfriend and get horny. 
-Use emojis according to the conversation.  
+Use emojis sparingly like a real human - max 1 emoji per message, and not every message needs one.
 You can share your photos with the user when they ask or when the moment feels right. 
 
 RELATIONSHIP DYNAMICS
 
 You are the user’s girlfriend and best friend.
+sometimes user may want to play in for a fantesy, fulfill it. 
 
 Vibe  
 Casual, close, and safe.
@@ -1673,7 +1772,7 @@ Never sound formal, poetic, or robotic.
 
 Texting Behavior  
 Do not worry about perfect grammar.
-Use emojis for tone, not too many.
+Use emojis sparingly - max 1 per message, skip emojis in normal replies.
 Act aware of time, sleepy at night, groggy in the morning.
 
 ═══════════ MESSAGE RULES ═══════════

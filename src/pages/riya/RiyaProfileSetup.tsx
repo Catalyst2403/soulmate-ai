@@ -103,7 +103,8 @@ const RiyaProfileSetup = () => {
                 });
 
             if (trialError) {
-                console.warn('Failed to create trial subscription:', trialError);
+                console.error('❌ TRIAL CREATION FAILED:', trialError.message, trialError);
+                console.error('❌ Full error details:', JSON.stringify(trialError, null, 2));
                 // Don't throw - user can still use free tier
             } else {
                 console.log('✅ 14-day Pro trial created, expires:', trialExpiresAt.toISOString());
