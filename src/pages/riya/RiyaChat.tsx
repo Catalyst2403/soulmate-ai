@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Slider } from '@/components/ui/slider';
 import { toast } from '@/hooks/use-toast';
-import { Send, ArrowLeft, MoreVertical, Settings, LogOut, Crown, Zap, Camera, Lock, X } from 'lucide-react';
+import { Send, ArrowLeft, MoreVertical, Settings, LogOut, Crown, Zap, Lock, X } from 'lucide-react';
 import PaywallModal from '@/components/riya/PaywallModal';
 import SoftPaywallBanner from '@/components/riya/SoftPaywallBanner';
 import QuickReplyButtons from '@/components/riya/QuickReplyButtons';
@@ -778,8 +778,7 @@ const RiyaChat = () => {
                                 <h2 className="font-display font-semibold text-foreground text-base leading-tight flex items-center gap-2">
                                     Riya
                                     {isSubscriptionLoaded && isPro && (
-                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gradient-to-r from-yellow-500 to-orange-500 text-[10px] font-bold text-white">
-                                            <Crown className="w-3 h-3" />
+                                        <span className="text-[10px] font-medium text-muted-foreground">
                                             PRO
                                         </span>
                                     )}
@@ -793,9 +792,7 @@ const RiyaChat = () => {
                                 <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
                                     <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
                                     {isTyping ? 'typing...' : 'online'}
-                                    {isSubscriptionLoaded && isPro && !isTyping && (
-                                        <span className="text-yellow-400 ml-1">• ∞ Unlimited</span>
-                                    )}
+
                                     {/* Commented out: Pro messages remaining count
                                     {isSubscriptionLoaded && !isPro && !isTyping && remainingProMessages > 0 && (
                                         <span className="text-muted-foreground ml-1">• {remainingProMessages} Pro left</span>
@@ -985,32 +982,6 @@ const RiyaChat = () => {
             >
                 <div className="flex items-center gap-2">
                     {/* Camera button for photo requests */}
-                    <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="shrink-0 text-pink-400 hover:text-pink-300 hover:bg-pink-500/10"
-                        onClick={() => {
-                            // Track click for analytics
-                            const userId = localStorage.getItem('riya_user_id');
-                            // @ts-ignore - Table exists after migration
-                            supabase.from('riya_image_clicks').insert({
-                                user_type: isPro ? 'pro' : 'free',
-                                user_id: userId,
-                            }).then(() => { }); // Fire and forget
-
-                            setInputMessage("send a pic 📸");
-                            setTimeout(() => {
-                                const form = document.querySelector('form');
-                                if (form) {
-                                    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-                                }
-                            }, 50);
-                        }}
-                    >
-                        <Camera className="w-5 h-5" />
-                    </Button>
-
                     <textarea
                         ref={inputRef}
                         value={inputMessage}
@@ -1026,7 +997,7 @@ const RiyaChat = () => {
                                 handleSend();
                             }
                         }}
-                        placeholder="Type a message..."
+                        placeholder="Chat with Riya... she can send photos too "
                         className="flex-1 bg-muted/30 border-0 focus-visible:ring-1 focus-visible:ring-ring rounded-md px-3 py-2 text-sm resize-none overflow-hidden min-h-[40px] max-h-[100px]"
                         rows={1}
                     />

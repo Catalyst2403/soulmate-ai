@@ -425,7 +425,7 @@ const RiyaGuestChat = () => {
                     </div>
                     <h3 className="text-base font-semibold text-foreground mb-1">Riya</h3>
                     <p className="text-xs text-muted-foreground text-center max-w-xs leading-relaxed">
-                        Your early twenties friend navigating college chaos and career confusion. Self-aware, sarcastic, and emotionally supportive. ✨
+                        Cute. Clingy. Yours. The girlfriend experience you actually deserve. 💕
                     </p>
                 </div>
 
