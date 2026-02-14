@@ -503,10 +503,44 @@ serve(async (req) => {
             return new Response("OK", { status: 200 });
         }
 
-        // ECHO PREVENTION: Ignore messages sent BY Riya's account
-        // When we send a reply, Instagram may fire a webhook for it too
+        // ECHO HANDLING: Save messages sent BY Riya's account for context
+        // but don't generate a response (covers both bot replies and manual DMs)
         if (messaging.message?.is_echo) {
-            console.log("⏭️ Skipping echo message (sent by us)");
+            console.log("⏭️ Echo message (sent by us) - saving for context");
+
+            // Save to DB so manual messages appear in conversation history
+            if (messaging.message?.text) {
+                const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+                const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+                const echoSupabase = createClient(supabaseUrl, supabaseKey);
+                const recipientId = messaging.recipient?.id;
+
+                // Deduplicate: check if this exact message was already saved (bot replies save their own)
+                const { data: existing } = await echoSupabase
+                    .from('riya_conversations')
+                    .select('id')
+                    .eq('source', 'instagram')
+                    .eq('role', 'assistant')
+                    .eq('content', messaging.message.text)
+                    .eq('instagram_user_id', recipientId)
+                    .gte('created_at', new Date(Date.now() - 60000).toISOString())
+                    .single();
+
+                if (!existing && recipientId) {
+                    await echoSupabase.from('riya_conversations').insert({
+                        user_id: null,
+                        guest_session_id: null,
+                        instagram_user_id: recipientId,
+                        source: 'instagram',
+                        role: 'assistant',
+                        content: messaging.message.text,
+                        model_used: 'manual',
+                        created_at: new Date().toISOString(),
+                    });
+                    console.log(`💬 Manual message saved for context (to ${recipientId})`);
+                }
+            }
+
             return new Response("OK", { status: 200 });
         }
 
@@ -516,10 +550,14 @@ serve(async (req) => {
         }
 
         const senderId = messaging.sender.id;
-        const messageText = messaging.message.text;
+        let messageText = messaging.message.text;
         const messageId = messaging.message.mid;
+        const replyToMid = messaging.message?.reply_to?.mid;
 
         console.log(`📬 Instagram message from ${senderId}: ${messageText.substring(0, 50)}...`);
+        if (replyToMid) {
+            console.log(`↩️ Reply to message: ${replyToMid}`);
+        }
 
         // Initialize Supabase
         const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -700,6 +738,27 @@ serve(async (req) => {
                 temperature: 0.9,
             },
         });
+
+        // Handle reply-to context: if user replied to a specific message, prepend it
+        if (replyToMid) {
+            try {
+                const accessTokenForReply = Deno.env.get("INSTAGRAM_ACCESS_TOKEN")!;
+                const replyRes = await fetch(
+                    `https://graph.instagram.com/${replyToMid}?fields=message&access_token=${accessTokenForReply}`
+                );
+                if (replyRes.ok) {
+                    const replyData = await replyRes.json();
+                    if (replyData.message) {
+                        messageText = `[Replying to: "${replyData.message}"] ${messageText}`;
+                        console.log(`↩️ Added reply context: "${replyData.message.substring(0, 50)}..."`);
+                    }
+                } else {
+                    console.warn(`⚠️ Could not fetch replied-to message: ${replyRes.status}`);
+                }
+            } catch (replyError) {
+                console.warn("⚠️ Reply context fetch failed:", replyError);
+            }
+        }
 
         const result = await chat.sendMessage(messageText);
         const reply = result.response.text();
