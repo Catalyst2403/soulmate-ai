@@ -76,87 +76,29 @@ serve(async (req) => {
         // ============================================
         // 3. DAILY ACTIVITY (Active Users + User Messages)
         // ============================================
+        // Uses server-side RPC to aggregate data in SQL
+        // This avoids PostgREST max-rows limit (default 1000) which was
+        // silently truncating results and causing days to show 0
 
-        // Direct manual query (RPC function doesn't exist)
-        const thirtyDaysAgo = new Date();
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        console.log('🔍 Fetching daily activity via RPC...');
 
-        console.log('🔍 Fetching user messages from:', thirtyDaysAgo.toISOString());
+        const { data: dailyActivityRpc, error: dailyError } = await supabase
+            .rpc('get_daily_activity', { p_days: 30 });
 
-        const { data: userMessages, error: convError } = await supabase
-            .from('riya_conversations')
-            .select('created_at, user_id, role')
-            .gte('created_at', thirtyDaysAgo.toISOString())
-            .eq('role', 'user')
-            .order('created_at', { ascending: false }) // Newest first to avoid old data truncation
-            .limit(50000); // Override default 1000 row limit
-
-        if (convError) {
-            console.error('Error fetching user messages for daily activity:', convError);
+        if (dailyError) {
+            console.error('Error fetching daily activity via RPC:', dailyError);
         }
 
-        console.log(`📊 Total user messages fetched: ${userMessages?.length || 0}`);
+        console.log(`📊 Daily activity rows returned: ${dailyActivityRpc?.length || 0}`);
 
-        // Debug: Log first few records
-        if (userMessages && userMessages.length > 0) {
-            console.log('First 5 records:', userMessages.slice(0, 5));
-        }
+        const dailyActivityData = (dailyActivityRpc || []).map((d: any) => ({
+            date: d.activity_date,
+            active_users: Number(d.active_users) || 0,
+            user_messages: Number(d.user_messages) || 0,
+            guest_sessions: Number(d.guest_sessions) || 0
+        })).sort((a: any, b: any) => b.date.localeCompare(a.date));
 
-        const activityMap = new Map();
-
-        userMessages?.forEach(msg => {
-            const date = new Date(msg.created_at).toISOString().split('T')[0];
-            if (!activityMap.has(date)) {
-                activityMap.set(date, { date, users: new Set(), user_messages: 0, guest_sessions: 0 });
-            }
-            activityMap.get(date).users.add(msg.user_id);
-            activityMap.get(date).user_messages++;
-        });
-
-        // Fetch guest sessions for last 30 days (only those with messages)
-        console.log('👤 Fetching guest sessions from:', thirtyDaysAgo.toISOString());
-        const { data: guestSessions, error: guestError } = await supabase
-            .from('riya_guest_sessions')
-            .select('created_at')
-            .gte('created_at', thirtyDaysAgo.toISOString())
-            .gt('message_count', 0);
-
-        if (guestError) {
-            console.error('Error fetching guest sessions:', guestError);
-        }
-
-        console.log(`👤 Total guest sessions fetched: ${guestSessions?.length || 0}`);
-
-        // Add guest sessions to activity map
-        guestSessions?.forEach(session => {
-            const date = new Date(session.created_at).toISOString().split('T')[0];
-            if (!activityMap.has(date)) {
-                activityMap.set(date, { date, users: new Set(), user_messages: 0, guest_sessions: 0 });
-            }
-            activityMap.get(date).guest_sessions++;
-        });
-
-        console.log('📅 Daily activity map size:', activityMap.size);
-
-        // Debug: Log today's data specifically
-        const today = new Date().toISOString().split('T')[0];
-        const todayData = activityMap.get(today);
-        if (todayData) {
-            console.log(`📌 Today (${today}):`, {
-                users: Array.from(todayData.users),
-                uniqueUsers: todayData.users.size,
-                user_messages: todayData.user_messages
-            });
-        }
-
-        const dailyActivityData = Array.from(activityMap.values()).map(d => ({
-            date: d.date,
-            active_users: d.users.size,
-            user_messages: d.user_messages,
-            guest_sessions: d.guest_sessions
-        })).sort((a, b) => b.date.localeCompare(a.date));
-
-        console.log('✅ Daily activity data prepared:', dailyActivityData.slice(0, 3));
+        console.log('✅ Daily activity data prepared:', dailyActivityData.slice(0, 5));
 
         // ============================================
         // 4. ENGAGEMENT METRICS
@@ -171,25 +113,24 @@ serve(async (req) => {
             : '0';
 
         // ============================================
-        // 5. COST METRICS
+        // 5. COST METRICS (via server-side RPC to avoid row limits)
         // ============================================
-        console.log('💰 Fetching cost data from riya_conversations...');
+        console.log('💰 Fetching cost data via RPC...');
 
-        const { data: costData } = await supabase
-            .from('riya_conversations')
-            .select('cost_inr, input_tokens, output_tokens, user_id')
-            .order('created_at', { ascending: false })
-            .limit(50000); // Override default 1000 row limit
+        const { data: costSummary, error: costError } = await supabase
+            .rpc('get_cost_summary');
 
-        console.log(`💵 Total cost records fetched: ${costData?.length || 0}`);
+        if (costError) {
+            console.error('Error fetching cost summary via RPC:', costError);
+        }
 
-        const totalCostINR = costData?.reduce((sum, c) => sum + (parseFloat(c.cost_inr) || 0), 0) || 0;
-        const totalTokens = costData?.reduce((sum, c) => sum + (c.input_tokens || 0) + (c.output_tokens || 0), 0) || 0;
-
-        const uniqueUsers = new Set(costData?.map(c => c.user_id) || []).size;
+        const costRow = costSummary?.[0] || {};
+        const totalCostINR = Number(costRow.total_cost_inr) || 0;
+        const totalTokens = (Number(costRow.total_input_tokens) || 0) + (Number(costRow.total_output_tokens) || 0);
+        const uniqueUsers = Number(costRow.unique_users) || 0;
         const costPerUser = uniqueUsers > 0 ? (totalCostINR / uniqueUsers).toFixed(4) : '0';
 
-        console.log(`💰 Total cost calculated: ₹${totalCostINR.toFixed(2)} from ${costData?.length || 0} records`);
+        console.log(`💰 Total cost calculated: ₹${totalCostINR.toFixed(2)} (via RPC, no row truncation)`);
 
         // ============================================
         // 6. REVENUE METRICS
