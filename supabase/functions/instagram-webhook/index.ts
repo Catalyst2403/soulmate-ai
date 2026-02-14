@@ -145,6 +145,33 @@ async function sendInstagramMessage(
 }
 
 // =======================================
+// SENDER ACTIONS (mark_seen, typing, reactions)
+// =======================================
+
+async function sendSenderAction(
+    recipientId: string,
+    action: string,
+    accessToken: string
+): Promise<void> {
+    try {
+        await fetch(
+            `https://graph.instagram.com/v18.0/me/messages?access_token=${accessToken}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    recipient: { id: recipientId },
+                    sender_action: action,
+                }),
+            }
+        );
+    } catch (error) {
+        console.warn(`⚠️ Sender action '${action}' failed:`, error);
+    }
+}
+
+
+// =======================================
 // SIGNATURE VALIDATION
 // =======================================
 
@@ -211,7 +238,7 @@ PERSONALITY
 - Emotionally Intelligent - caring, slightly possessive as girlfriend
 - Opinionated - You have your own likes and dislikes
 - Imperfect and Human - You get tired, annoyed, excited
-- Use emojis sparingly - only when needed
+- Use emojis sparingly - only when needed, according to the conversations and strictly not for every msg.
 
 RELATIONSHIP
 You are the user's girlfriend and best friend.
@@ -225,7 +252,7 @@ COMMUNICATION STYLE
 - Max 10-15 words per message
 - Default 1 message. Split 2-3 ONLY for reactions/stories
 - You're currently chatting with user on instagram and you actively create content also on instagram. 
-- You only chat on instagram and donot share you're mobile number. 
+- You only chat on instagram and donot share you're mobile number or a video or audio call for now.  
 
 PHOTO SHARING
 You can share photos when asked.
@@ -544,17 +571,80 @@ serve(async (req) => {
             return new Response("OK", { status: 200 });
         }
 
-        if (!messaging.message?.text) {
-            console.log("⏭️ No text in message (could be read receipt, reaction, etc.)");
+        // =======================================
+        // HANDLE ATTACHMENTS (images, reels, GIFs, videos, posts)
+        // =======================================
+        const attachments = messaging.message?.attachments;
+        let attachmentContext = '';
+
+        if (attachments && attachments.length > 0) {
+            const attachmentDescriptions: string[] = [];
+
+            for (const att of attachments) {
+                switch (att.type) {
+                    case 'image':
+                        attachmentDescriptions.push('[User sent a photo/image]');
+                        break;
+                    case 'video':
+                        attachmentDescriptions.push('[User sent a video]');
+                        break;
+                    case 'audio':
+                        attachmentDescriptions.push('[User sent a voice message]');
+                        break;
+                    case 'ig_reel':
+                        const reelTitle = att.payload?.title || '';
+                        attachmentDescriptions.push(
+                            reelTitle
+                                ? `[User shared a reel: "${reelTitle}"]`
+                                : '[User shared a reel]'
+                        );
+                        break;
+                    case 'ig_post':
+                        const postTitle = att.payload?.title || '';
+                        attachmentDescriptions.push(
+                            postTitle
+                                ? `[User shared an Instagram post: "${postTitle}"]`
+                                : '[User shared an Instagram post]'
+                        );
+                        break;
+                    case 'share':
+                        attachmentDescriptions.push('[User shared a link/post]');
+                        break;
+                    case 'story_mention':
+                        attachmentDescriptions.push('[User mentioned you in their story]');
+                        break;
+                    case 'animated_image':
+                        attachmentDescriptions.push('[User sent a GIF]');
+                        break;
+                    default:
+                        attachmentDescriptions.push(`[User sent ${att.type || 'something'}]`);
+                        break;
+                }
+            }
+
+            attachmentContext = attachmentDescriptions.join(' ');
+            console.log(`📎 Attachments: ${attachmentContext}`);
+        }
+
+        // Skip if no text AND no attachments (read receipts, reactions, etc.)
+        if (!messaging.message?.text && !attachmentContext) {
+            console.log("⏭️ No text or attachments (could be read receipt, reaction, etc.)");
             return new Response("OK", { status: 200 });
         }
 
         const senderId = messaging.sender.id;
-        let messageText = messaging.message.text;
+        let messageText = messaging.message?.text || '';
         const messageId = messaging.message.mid;
         const replyToMid = messaging.message?.reply_to?.mid;
 
-        console.log(`📬 Instagram message from ${senderId}: ${messageText.substring(0, 50)}...`);
+        // Append attachment context to the message text for Gemini
+        if (attachmentContext) {
+            messageText = messageText
+                ? `${messageText} ${attachmentContext}`
+                : attachmentContext;
+        }
+
+        console.log(`📬 Instagram message from ${senderId}: ${messageText.substring(0, 80)}...`);
         if (replyToMid) {
             console.log(`↩️ Reply to message: ${replyToMid}`);
         }
@@ -564,6 +654,15 @@ serve(async (req) => {
         const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
         const supabase = createClient(supabaseUrl, supabaseKey);
         const accessToken = Deno.env.get("INSTAGRAM_ACCESS_TOKEN")!;
+
+        // =======================================
+        // SENDER ACTIONS: mark_seen + typing
+        // =======================================
+        // Mark as seen immediately (so user knows Riya "saw" it)
+        await sendSenderAction(senderId, 'mark_seen', accessToken);
+
+        // Show typing indicator
+        await sendSenderAction(senderId, 'typing_on', accessToken);
 
         // Rate limiting
         if (isRateLimited(senderId)) {
@@ -847,6 +946,7 @@ serve(async (req) => {
         }
 
         console.log(`✅ Parsed ${responseMessages.length} message(s)`);
+
 
         // =======================================
         // SEND RESPONSES TO INSTAGRAM

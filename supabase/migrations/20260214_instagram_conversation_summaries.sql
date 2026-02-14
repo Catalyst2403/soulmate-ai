@@ -1,5 +1,6 @@
 -- Migration: Add Instagram support to conversation summaries
 -- Created: 2026-02-14
+-- Fixed: Use proper UNIQUE constraint (not partial index) for ON CONFLICT support
 
 -- Add instagram_user_id column to existing summaries table
 DO $$
@@ -12,7 +13,9 @@ BEGIN
     END IF;
 END $$;
 
--- Add unique index for Instagram users (one summary per IG user)
-CREATE UNIQUE INDEX IF NOT EXISTS idx_conv_summaries_ig_user 
-  ON riya_conversation_summaries(instagram_user_id) 
-  WHERE instagram_user_id IS NOT NULL;
+-- Drop partial index if it was already created (doesn't work with ON CONFLICT)
+DROP INDEX IF EXISTS idx_conv_summaries_ig_user;
+
+-- Add proper unique constraint for Instagram users (supports ON CONFLICT)
+ALTER TABLE riya_conversation_summaries 
+  ADD CONSTRAINT unique_ig_user_summary UNIQUE (instagram_user_id);
