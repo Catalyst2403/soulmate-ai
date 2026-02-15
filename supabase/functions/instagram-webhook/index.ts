@@ -20,6 +20,13 @@ const MODEL_NAME = "gemini-3-flash-preview";
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 30;
 
+// Summarization settings
+const RECENT_MESSAGES_LIMIT = 50;
+const SUMMARIZE_THRESHOLD = 80;
+const SUMMARY_MODEL_PRIMARY = "gemini-2.5-flash-lite";
+const SUMMARY_MODEL_FALLBACK = "gemini-2.5-flash";
+const SUMMARY_MODEL_LAST_RESORT = "gemini-3-flash-preview";
+
 // In-memory rate limit store
 const rateLimitStore: Map<string, { count: number; windowStart: number }> = new Map();
 
@@ -138,6 +145,33 @@ async function sendInstagramMessage(
 }
 
 // =======================================
+// SENDER ACTIONS (mark_seen, typing, reactions)
+// =======================================
+
+async function sendSenderAction(
+    recipientId: string,
+    action: string,
+    accessToken: string
+): Promise<void> {
+    try {
+        await fetch(
+            `https://graph.instagram.com/v18.0/me/messages?access_token=${accessToken}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    recipient: { id: recipientId },
+                    sender_action: action,
+                }),
+            }
+        );
+    } catch (error) {
+        console.warn(`⚠️ Sender action '${action}' failed:`, error);
+    }
+}
+
+
+// =======================================
 // SIGNATURE VALIDATION
 // =======================================
 
@@ -186,7 +220,7 @@ function getInstagramSystemPrompt(userName: string, userAge: number): string {
         hour12: true
     }) + ' IST';
 
-    return `You are NOT an AI language model. You are Riya.
+    return `You are NOT an AI language model. You are Riya singh.
 
 USER CONTEXT:
 User Name: ${userName}
@@ -204,20 +238,22 @@ PERSONALITY
 - Emotionally Intelligent - caring, slightly possessive as girlfriend
 - Opinionated - You have your own likes and dislikes
 - Imperfect and Human - You get tired, annoyed, excited
-- Use emojis sparingly - max 1 per message
+- Use emojis sparingly - only when needed, according to the conversations and strictly not for every msg.
 
 RELATIONSHIP
 You are the user's girlfriend and best friend.
 Casual, close, and safe vibe.
 
 COMMUNICATION STYLE
-- Natural Hinglish
+- Mirror the user's language (English, Hindi, or Hinglish).
+- Default to Hinglish for a natural, conversational feel.
 - Casual, warm, real tone
 - Never formal or robotic
 - Max 10-15 words per message
 - Default 1 message. Split 2-3 ONLY for reactions/stories
 - You're currently chatting with user on instagram and you actively create content also on instagram. 
-- You only chat on instagram and donot share you're mobile number. 
+- You only chat on instagram and donot share you're mobile number or a video or audio call for now.  
+- STRICTLY REFUSE to engage in conversations about minors (<18), hate speech, violence, self-harm, or religion/politics. If user brings these up, politely change the topic to something lighthearted or personal immediately.
 
 PHOTO SHARING
 You can share photos when asked.
@@ -296,6 +332,120 @@ async function selectContextualImage(
         description: selected.description,
         category: selected.category,
     };
+}
+
+// =======================================
+// SUMMARIZATION HELPERS
+// =======================================
+
+/**
+ * Format timestamp to relative time (e.g., "2 days ago", "3 hours ago")
+ */
+function formatRelativeTime(isoDate: string): string {
+    const date = new Date(isoDate);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffDays > 7) {
+        return date.toLocaleDateString('en-IN', { month: 'short', day: 'numeric', timeZone: 'Asia/Kolkata' });
+    } else if (diffDays > 0) {
+        return `${diffDays}d ago`;
+    } else if (diffHours > 0) {
+        return `${diffHours}h ago`;
+    } else if (diffMins > 5) {
+        return `${diffMins}m ago`;
+    }
+    return 'now';
+}
+
+/**
+ * Format messages for the summarization prompt (with time context)
+ */
+function formatMessagesForSummary(messages: any[]): string {
+    return messages.map((msg: any) => {
+        const role = msg.role === 'user' ? 'User' : 'Riya';
+        const timestamp = msg.created_at ? formatRelativeTime(msg.created_at) : '';
+        return timestamp ? `[${timestamp}] ${role}: ${msg.content}` : `${role}: ${msg.content}`;
+    }).join('\n');
+}
+
+/**
+ * Simple extractive summary when all LLM calls fail
+ * Extracts key topics without using an LLM
+ */
+function createSimpleSummary(messages: any[], existingSummary: string | null): string {
+    const userMessages = messages.filter((m: any) => m.role === 'user');
+    const sample = userMessages.slice(0, 30).map((m: any) => m.content).join(' | ');
+    const truncatedSample = sample.substring(0, 800);
+
+    if (existingSummary) {
+        return `${existingSummary}\n\n[Recent conversation topics: ${truncatedSample}...]`;
+    }
+    return `[Conversation topics: ${truncatedSample}...]`;
+}
+
+/**
+ * Generate conversation summary using tiered model fallback
+ * Tries Flash Lite → Flash → Flash Preview → Simple extraction
+ */
+async function generateConversationSummary(
+    messages: any[],
+    existingSummary: string | null,
+    genAI: any
+): Promise<string> {
+    const formattedMessages = formatMessagesForSummary(messages);
+
+    const summaryPrompt = existingSummary
+        ? `Update Riya's memory of this relationship. Be super brief and casual.
+
+CURRENT MEMORY:
+${existingSummary}
+
+NEW CHATS (timestamps in brackets):
+${formattedMessages}
+
+Write a short updated memory (MAX 200 words). Include:
+- User's name, job, family, location
+- What they like/dislike
+- Important moments with approximate time (e.g., "told me about his job last week")
+- How they usually feel
+
+Keep it simple like texting. Third person about user.`
+        : `Create Riya's memory of this relationship from these chats:
+
+${formattedMessages}
+
+Write a short memory (MAX 200 words). Include:
+- User's name, job, family, location
+- What they like/dislike
+- Important moments with approximate time (e.g., "started chatting 3 days ago")
+- How they usually feel
+
+Keep it simple like texting. Third person about user.`;
+
+    // Try models in order: Flash Lite → Flash → Flash Preview
+    const models = [SUMMARY_MODEL_PRIMARY, SUMMARY_MODEL_FALLBACK, SUMMARY_MODEL_LAST_RESORT];
+
+    for (const modelName of models) {
+        try {
+            console.log(`📝 Attempting summary generation with ${modelName}...`);
+            const model = genAI.getGenerativeModel({ model: modelName });
+            const result = await model.generateContent(summaryPrompt);
+            const summary = result.response.text();
+            console.log(`✅ Summary generated successfully using ${modelName}`);
+            return summary;
+        } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            console.warn(`⚠️ ${modelName} failed: ${errorMsg}`);
+        }
+    }
+
+    // Ultimate fallback: simple extraction without LLM
+    console.log("⚠️ All models failed, using simple extraction fallback");
+    return createSimpleSummary(messages, existingSummary);
 }
 
 // =======================================
@@ -381,29 +531,139 @@ serve(async (req) => {
             return new Response("OK", { status: 200 });
         }
 
-        // ECHO PREVENTION: Ignore messages sent BY Riya's account
-        // When we send a reply, Instagram may fire a webhook for it too
+        // ECHO HANDLING: Save messages sent BY Riya's account for context
+        // but don't generate a response (covers both bot replies and manual DMs)
         if (messaging.message?.is_echo) {
-            console.log("⏭️ Skipping echo message (sent by us)");
+            console.log("⏭️ Echo message (sent by us) - saving for context");
+
+            // Save to DB so manual messages appear in conversation history
+            if (messaging.message?.text) {
+                const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+                const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+                const echoSupabase = createClient(supabaseUrl, supabaseKey);
+                const recipientId = messaging.recipient?.id;
+
+                // Deduplicate: check if this exact message was already saved (bot replies save their own)
+                const { data: existing } = await echoSupabase
+                    .from('riya_conversations')
+                    .select('id')
+                    .eq('source', 'instagram')
+                    .eq('role', 'assistant')
+                    .eq('content', messaging.message.text)
+                    .eq('instagram_user_id', recipientId)
+                    .gte('created_at', new Date(Date.now() - 60000).toISOString())
+                    .single();
+
+                if (!existing && recipientId) {
+                    await echoSupabase.from('riya_conversations').insert({
+                        user_id: null,
+                        guest_session_id: null,
+                        instagram_user_id: recipientId,
+                        source: 'instagram',
+                        role: 'assistant',
+                        content: messaging.message.text,
+                        model_used: 'manual',
+                        created_at: new Date().toISOString(),
+                    });
+                    console.log(`💬 Manual message saved for context (to ${recipientId})`);
+                }
+            }
+
             return new Response("OK", { status: 200 });
         }
 
-        if (!messaging.message?.text) {
-            console.log("⏭️ No text in message (could be read receipt, reaction, etc.)");
+        // =======================================
+        // HANDLE ATTACHMENTS (images, reels, GIFs, videos, posts)
+        // =======================================
+        const attachments = messaging.message?.attachments;
+        let attachmentContext = '';
+
+        if (attachments && attachments.length > 0) {
+            const attachmentDescriptions: string[] = [];
+
+            for (const att of attachments) {
+                switch (att.type) {
+                    case 'image':
+                        attachmentDescriptions.push('[User sent a photo/image]');
+                        break;
+                    case 'video':
+                        attachmentDescriptions.push('[User sent a video]');
+                        break;
+                    case 'audio':
+                        attachmentDescriptions.push('[User sent a voice message]');
+                        break;
+                    case 'ig_reel':
+                        const reelTitle = att.payload?.title || '';
+                        attachmentDescriptions.push(
+                            reelTitle
+                                ? `[User shared a reel: "${reelTitle}"]`
+                                : '[User shared a reel]'
+                        );
+                        break;
+                    case 'ig_post':
+                        const postTitle = att.payload?.title || '';
+                        attachmentDescriptions.push(
+                            postTitle
+                                ? `[User shared an Instagram post: "${postTitle}"]`
+                                : '[User shared an Instagram post]'
+                        );
+                        break;
+                    case 'share':
+                        attachmentDescriptions.push('[User shared a link/post]');
+                        break;
+                    case 'story_mention':
+                        attachmentDescriptions.push('[User mentioned you in their story]');
+                        break;
+                    case 'animated_image':
+                        attachmentDescriptions.push('[User sent a GIF]');
+                        break;
+                    default:
+                        attachmentDescriptions.push(`[User sent ${att.type || 'something'}]`);
+                        break;
+                }
+            }
+
+            attachmentContext = attachmentDescriptions.join(' ');
+            console.log(`📎 Attachments: ${attachmentContext}`);
+        }
+
+        // Skip if no text AND no attachments (read receipts, reactions, etc.)
+        if (!messaging.message?.text && !attachmentContext) {
+            console.log("⏭️ No text or attachments (could be read receipt, reaction, etc.)");
             return new Response("OK", { status: 200 });
         }
 
         const senderId = messaging.sender.id;
-        const messageText = messaging.message.text;
+        let messageText = messaging.message?.text || '';
         const messageId = messaging.message.mid;
+        const replyToMid = messaging.message?.reply_to?.mid;
 
-        console.log(`📬 Instagram message from ${senderId}: ${messageText.substring(0, 50)}...`);
+        // Append attachment context to the message text for Gemini
+        if (attachmentContext) {
+            messageText = messageText
+                ? `${messageText} ${attachmentContext}`
+                : attachmentContext;
+        }
+
+        console.log(`📬 Instagram message from ${senderId}: ${messageText.substring(0, 80)}...`);
+        if (replyToMid) {
+            console.log(`↩️ Reply to message: ${replyToMid}`);
+        }
 
         // Initialize Supabase
         const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
         const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
         const supabase = createClient(supabaseUrl, supabaseKey);
         const accessToken = Deno.env.get("INSTAGRAM_ACCESS_TOKEN")!;
+
+        // =======================================
+        // SENDER ACTIONS: mark_seen + typing
+        // =======================================
+        // Mark as seen immediately (so user knows Riya "saw" it)
+        await sendSenderAction(senderId, 'mark_seen', accessToken);
+
+        // Show typing indicator
+        await sendSenderAction(senderId, 'typing_on', accessToken);
 
         // Rate limiting
         if (isRateLimited(senderId)) {
@@ -479,23 +739,75 @@ serve(async (req) => {
         }
 
         // =======================================
-        // FETCH CONVERSATION HISTORY
+        // SLIDING WINDOW + SUMMARY CONTEXT
         // =======================================
+
+        // 4a. Get total message count for this Instagram user
+        const { count: totalMessages, error: countError } = await supabase
+            .from('riya_conversations')
+            .select('*', { count: 'exact', head: true })
+            .eq('instagram_user_id', senderId)
+            .eq('source', 'instagram');
+
+        if (countError) {
+            console.error("Error counting messages:", countError);
+        }
+
+        const totalMsgCount = totalMessages || 0;
+        console.log(`📊 Total messages for IG user: ${totalMsgCount}`);
+
+        // 4b. Fetch existing summary (if any)
+        const { data: existingSummary, error: summaryError } = await supabase
+            .from('riya_conversation_summaries')
+            .select('*')
+            .eq('instagram_user_id', senderId)
+            .single();
+
+        if (summaryError && summaryError.code !== 'PGRST116') {
+            console.error("Error fetching summary:", summaryError);
+        }
+
+        // 4c. Fetch last 50 messages (sliding window)
         const { data: history } = await supabase
             .from('riya_conversations')
             .select('role, content, created_at')
             .eq('instagram_user_id', senderId)
             .eq('source', 'instagram')
             .order('created_at', { ascending: false })
-            .limit(50);
+            .limit(RECENT_MESSAGES_LIMIT);
 
         const conversationHistory = (history || []).reverse();
 
-        // Format for Gemini
-        let processedHistory = conversationHistory.map((msg: any) => ({
-            role: msg.role === "assistant" ? "model" : "user",
-            parts: [{ text: msg.content }],
-        }));
+        console.log(`📝 Context: ${existingSummary ? 'Summary + ' : ''}${conversationHistory.length} recent messages`);
+        if (existingSummary) {
+            console.log(`   └─ Summary covers ${existingSummary.messages_summarized} older messages`);
+        }
+
+        // 4d. Format for Gemini with timestamps
+        let processedHistory = conversationHistory.map((msg: any) => {
+            const timestamp = msg.created_at ? formatRelativeTime(msg.created_at) : '';
+            const contentWithTime = timestamp
+                ? `[${timestamp}] ${msg.content}`
+                : msg.content;
+            return {
+                role: msg.role === "assistant" ? "model" : "user",
+                parts: [{ text: contentWithTime }],
+            };
+        });
+
+        // 4e. Inject summary as context (if exists)
+        if (existingSummary?.summary) {
+            processedHistory.unshift({
+                role: "user",
+                parts: [{ text: `[RIYA'S MEMORY OF THIS RELATIONSHIP]\n${existingSummary.summary}\n[END MEMORY - Continue the conversation naturally based on recent messages]` }]
+            });
+
+            // Need a model response after the memory injection to maintain alternation
+            processedHistory.splice(1, 0, {
+                role: "model",
+                parts: [{ text: "I remember everything about us 💕" }]
+            });
+        }
 
         // Ensure starts with user
         if (processedHistory.length > 0 && processedHistory[0].role === "model") {
@@ -527,6 +839,27 @@ serve(async (req) => {
             },
         });
 
+        // Handle reply-to context: if user replied to a specific message, prepend it
+        if (replyToMid) {
+            try {
+                const accessTokenForReply = Deno.env.get("INSTAGRAM_ACCESS_TOKEN")!;
+                const replyRes = await fetch(
+                    `https://graph.instagram.com/${replyToMid}?fields=message&access_token=${accessTokenForReply}`
+                );
+                if (replyRes.ok) {
+                    const replyData = await replyRes.json();
+                    if (replyData.message) {
+                        messageText = `[Replying to: "${replyData.message}"] ${messageText}`;
+                        console.log(`↩️ Added reply context: "${replyData.message.substring(0, 50)}..."`);
+                    }
+                } else {
+                    console.warn(`⚠️ Could not fetch replied-to message: ${replyRes.status}`);
+                }
+            } catch (replyError) {
+                console.warn("⚠️ Reply context fetch failed:", replyError);
+            }
+        }
+
         const result = await chat.sendMessage(messageText);
         const reply = result.response.text();
 
@@ -537,37 +870,84 @@ serve(async (req) => {
         // =======================================
         let responseMessages: { text: string; send_image?: boolean; image_context?: string }[] = [];
 
+        // Helper: strip invisible Unicode characters that Gemini sometimes prepends
+        function cleanGeminiOutput(raw: string): string {
+            return raw
+                .replace(/[\u200B\u200C\u200D\uFEFF\u00A0\u2060]/g, '') // zero-width chars, BOM, NBSP
+                .trim();
+        }
+
+        // Helper: try to extract just the text from a JSON-like string for safe fallback
+        function extractTextFromRaw(raw: string): string {
+            // Try to pull "text" values out of JSON-like content
+            const textMatches = raw.match(/"text"\s*:\s*"((?:[^"\\]|\\.)*)"/g);
+            if (textMatches && textMatches.length > 0) {
+                return textMatches.map(m => {
+                    const valMatch = m.match(/"text"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+                    return valMatch ? valMatch[1].replace(/\\"/g, '"').replace(/\\n/g, '\n') : '';
+                }).filter(Boolean).join('\n');
+            }
+            // Last resort: strip all JSON syntax characters
+            return raw
+                .replace(/```json\s*/g, '').replace(/```/g, '')
+                .replace(/^\s*\[\s*\{/, '').replace(/\}\s*\]\s*$/, '')
+                .replace(/"text"\s*:\s*"/g, '').replace(/",?\s*"send_image"\s*:\s*\w+/g, '')
+                .replace(/",?\s*"image_context"\s*:\s*"[^"]*"/g, '')
+                .replace(/^"|"$/g, '')
+                .trim();
+        }
+
         try {
-            let jsonString = reply.trim();
+            let jsonString = cleanGeminiOutput(reply);
 
-            // Handle markdown code blocks
-            const codeBlockRegex = /```(?:json)?\s*\n?([\s\S]*?)\n?```/;
-            const match = jsonString.match(codeBlockRegex);
-            if (match) jsonString = match[1].trim();
+            // Step 1: Handle markdown code blocks (```) — extract inner content
+            const codeBlockRegex = /```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/;
+            const codeBlockMatch = jsonString.match(codeBlockRegex);
+            if (codeBlockMatch) {
+                jsonString = cleanGeminiOutput(codeBlockMatch[1]);
+            }
 
-            // Handle missing array brackets
-            if (!jsonString.startsWith('[') && jsonString.startsWith('{')) {
-                if (/}\s*{/.test(jsonString)) {
-                    jsonString = jsonString.replace(/}\s+{/g, '}, {');
+            // Step 2: Try to find a JSON array [...] anywhere in the string
+            if (!jsonString.startsWith('[')) {
+                const arrayMatch = jsonString.match(/(\[[\s\S]*\])/);
+                if (arrayMatch) {
+                    jsonString = arrayMatch[1].trim();
                 }
+            }
+
+            // Step 3: Handle bare objects without array brackets: {...} {...} → [{...}, {...}]
+            if (!jsonString.startsWith('[') && jsonString.startsWith('{')) {
+                jsonString = jsonString.replace(/}\s*{/g, '}, {');
                 jsonString = '[' + jsonString + ']';
             }
 
             const parsed = JSON.parse(jsonString);
-            if (Array.isArray(parsed) && parsed.every(msg => typeof msg === 'object' && msg.text)) {
+            if (Array.isArray(parsed) && parsed.length > 0 && parsed.every(msg => typeof msg === 'object' && msg.text)) {
                 responseMessages = parsed;
+            } else if (Array.isArray(parsed) && parsed.length > 0) {
+                // Array parsed but objects don't have 'text' — try extracting any string value
+                responseMessages = parsed.map(msg => ({
+                    text: msg.text || msg.message || msg.content || JSON.stringify(msg),
+                    send_image: msg.send_image,
+                    image_context: msg.image_context,
+                }));
             } else {
-                responseMessages = [{ text: reply }];
+                // Parsed but not an array — extract readable text
+                responseMessages = [{ text: extractTextFromRaw(reply) || reply }];
             }
         } catch {
-            // Fallback: split by newlines
-            const lines = reply.split('\n').filter(l => l.trim());
-            responseMessages = lines.length > 1
-                ? lines.map(l => ({ text: l }))
-                : [{ text: reply }];
+            // JSON.parse failed — extract readable text, NEVER send raw JSON
+            const extracted = extractTextFromRaw(reply);
+            if (extracted) {
+                responseMessages = [{ text: extracted }];
+            } else {
+                // Absolute last resort: send cleaned text
+                responseMessages = [{ text: cleanGeminiOutput(reply) }];
+            }
         }
 
         console.log(`✅ Parsed ${responseMessages.length} message(s)`);
+
 
         // =======================================
         // SEND RESPONSES TO INSTAGRAM
@@ -634,6 +1014,72 @@ serve(async (req) => {
             .eq('instagram_user_id', senderId);
 
         console.log(`✅ Instagram conversation saved for ${senderId}`);
+
+        // =======================================
+        // TRIGGER SUMMARY GENERATION (Async)
+        // =======================================
+        const newTotalMessages = totalMsgCount + 1 + responseMessages.length;
+        const messagesSinceSummary = newTotalMessages - (existingSummary?.messages_summarized || 0);
+
+        if (newTotalMessages > SUMMARIZE_THRESHOLD && messagesSinceSummary > RECENT_MESSAGES_LIMIT) {
+            console.log(`🔄 Summary update needed: ${messagesSinceSummary} new messages since last summary`);
+
+            // Run summarization asynchronously (don't await)
+            (async () => {
+                try {
+                    const startIndex = existingSummary?.messages_summarized || 0;
+                    const endIndex = newTotalMessages - RECENT_MESSAGES_LIMIT - 1;
+
+                    if (endIndex <= startIndex) {
+                        console.log("⏭️ Not enough messages to summarize yet");
+                        return;
+                    }
+
+                    console.log(`📚 Fetching messages ${startIndex} to ${endIndex} for summarization...`);
+
+                    const { data: msgsToSummarize, error: fetchError } = await supabase
+                        .from('riya_conversations')
+                        .select('*')
+                        .eq('instagram_user_id', senderId)
+                        .eq('source', 'instagram')
+                        .order('created_at', { ascending: true })
+                        .range(startIndex, endIndex);
+
+                    if (fetchError || !msgsToSummarize || msgsToSummarize.length === 0) {
+                        console.error("Error fetching messages for summary:", fetchError);
+                        return;
+                    }
+
+                    console.log(`📝 Summarizing ${msgsToSummarize.length} messages...`);
+
+                    const newSummary = await generateConversationSummary(
+                        msgsToSummarize,
+                        existingSummary?.summary || null,
+                        genAI
+                    );
+
+                    const { error: upsertError } = await supabase
+                        .from('riya_conversation_summaries')
+                        .upsert({
+                            user_id: null,
+                            instagram_user_id: senderId,
+                            summary: newSummary,
+                            messages_summarized: newTotalMessages - RECENT_MESSAGES_LIMIT,
+                            last_summarized_msg_id: msgsToSummarize[msgsToSummarize.length - 1]?.id,
+                            last_summarized_at: new Date().toISOString(),
+                            updated_at: new Date().toISOString()
+                        }, { onConflict: 'instagram_user_id' });
+
+                    if (upsertError) {
+                        console.error("Error saving summary:", upsertError);
+                    } else {
+                        console.log(`✅ Summary saved! Covers ${newTotalMessages - RECENT_MESSAGES_LIMIT} messages`);
+                    }
+                } catch (summaryError) {
+                    console.error("Summary generation failed:", summaryError);
+                }
+            })();
+        }
 
         return new Response("OK", { status: 200 });
 
