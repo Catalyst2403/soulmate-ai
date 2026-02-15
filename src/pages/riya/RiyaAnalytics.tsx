@@ -982,6 +982,48 @@ const RiyaAnalytics = () => {
                         Back to Home
                     </Button>
                 </div>
+
+                {/* User List Dialog */}
+                <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+                    <DialogContent className="sm:max-w-[500px] max-h-[80vh] flex flex-col">
+                        <DialogHeader>
+                            <DialogTitle>Users: {selectedTier}</DialogTitle>
+                            <DialogDescription>
+                                Reviewing top 100 users in this category
+                            </DialogDescription>
+                        </DialogHeader>
+
+                        <div className="flex-1 overflow-y-auto pr-2 mt-4">
+                            {isLoadingUsers ? (
+                                <div className="flex justify-center py-8">
+                                    <RefreshCw className="w-8 h-8 text-primary animate-spin" />
+                                </div>
+                            ) : tierUsers.length === 0 ? (
+                                <p className="text-center text-muted-foreground py-8">No users found in this range.</p>
+                            ) : (
+                                <div className="space-y-2">
+                                    {tierUsers.map((user, idx) => (
+                                        <div key={idx} className="flex justify-between items-center p-3 rounded-lg bg-muted/50">
+                                            <div>
+                                                <p className="font-medium text-foreground">
+                                                    {user.instagram_name || 'Instagram User'}
+                                                </p>
+                                                <p className="text-sm text-muted-foreground">
+                                                    @{user.instagram_username || 'unknown'}
+                                                </p>
+                                            </div>
+                                            <div className="text-right">
+                                                <span className="inline-block px-2 py-1 rounded bg-primary/10 text-primary text-xs font-bold">
+                                                    {user.message_count} msgs
+                                                </span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </DialogContent>
+                </Dialog>
             </div>
         </div>
     );
