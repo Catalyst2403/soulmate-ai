@@ -6,6 +6,8 @@ import { Users, MessageSquare, TrendingUp, Lock, DollarSign, Activity, RefreshCw
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { createClient } from '@supabase/supabase-js';
 
 interface AnalyticsData {
     userMetrics: {
@@ -84,6 +86,24 @@ interface AnalyticsData {
     } | null;
 }
 
+// Lazy initialization singleton to avoid multiple instances and render crashes
+let supabaseClient: any = null;
+
+const getSupabase = () => {
+    if (supabaseClient) return supabaseClient;
+
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+        console.error('Supabase keys are missing!');
+        return null;
+    }
+
+    supabaseClient = createClient(supabaseUrl, supabaseAnonKey);
+    return supabaseClient;
+};
+
 const RiyaAnalytics = () => {
     const navigate = useNavigate();
     const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -91,7 +111,58 @@ const RiyaAnalytics = () => {
     const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [activeUsersInterval, setActiveUsersInterval] = useState('7 days');
-    const [analyticsView, setAnalyticsView] = useState<'combined' | 'web' | 'instagram'>('combined');
+    const [analyticsView, setAnalyticsView] = useState<'combined' | 'web' | 'instagram'>('instagram');
+
+    // Drill-down state
+    const [selectedTier, setSelectedTier] = useState<string | null>(null);
+    const [tierUsers, setTierUsers] = useState<Array<{ instagram_username: string; instagram_name: string; message_count: number }>>([]);
+    const [isLoadingUsers, setIsLoadingUsers] = useState(false);
+    const [isDialogOpen, setIsDialogOpen] = useState(false);
+
+    const handleTierClick = async (tier: string) => {
+        setSelectedTier(tier);
+        setIsLoadingUsers(true);
+        setIsDialogOpen(true);
+        setTierUsers([]);
+
+        try {
+            let min = 0;
+            let max = 1000000;
+
+            if (tier.includes('+')) {
+                min = parseInt(tier.replace(/\D/g, ''));
+            } else {
+                const parts = tier.split('-');
+                if (parts.length === 2) {
+                    min = parseInt(parts[0].replace(/\D/g, ''));
+                    max = parseInt(parts[1].replace(/\D/g, ''));
+                }
+            }
+
+            console.log(`Fetching users for tier: ${tier} (Min: ${min}, Max: ${max})`);
+
+            const supabase = getSupabase();
+            if (!supabase) {
+                alert('Supabase configuration missing');
+                return;
+            }
+
+            const { data, error } = await supabase
+                .from('riya_instagram_users')
+                .select('instagram_username, instagram_name, message_count')
+                .gte('message_count', min)
+                .lte('message_count', max)
+                .order('message_count', { ascending: false })
+                .limit(100);
+
+            if (error) throw error;
+            setTierUsers(data || []);
+        } catch (error) {
+            console.error('Error fetching tier users:', error);
+        } finally {
+            setIsLoadingUsers(false);
+        }
+    };
 
     const handlePinSubmit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -723,9 +794,13 @@ const RiyaAnalytics = () => {
                                 </h3>
                                 <div className="space-y-2">
                                     {analytics.instagramMetrics.classification.map((item, i) => (
-                                        <div key={i} className="flex justify-between items-center p-3 rounded-lg bg-pink-500/5">
-                                            <span className="text-muted-foreground">{item.tier}</span>
-                                            <span className="font-bold text-foreground">{item.count}</span>
+                                        <div
+                                            key={i}
+                                            onClick={() => handleTierClick(item.tier)}
+                                            className="flex justify-between items-center p-3 rounded-lg bg-pink-500/5 hover:bg-pink-500/10 cursor-pointer transition-colors group"
+                                        >
+                                            <span className="text-muted-foreground group-hover:text-pink-400 transition-colors">{item.tier}</span>
+                                            <span className="font-bold text-foreground group-hover:text-pink-400 transition-colors">{item.count}</span>
                                         </div>
                                     ))}
                                 </div>
