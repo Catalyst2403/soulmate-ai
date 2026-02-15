@@ -199,7 +199,156 @@ serve(async (req) => {
         const d30Retention = calculateRetention(30);
 
         // ============================================
-        // 8. EXTERNAL INTEGRATIONS (Optional)
+        // 8. INSTAGRAM METRICS
+        // ============================================
+        console.log('📸 Fetching Instagram metrics...');
+
+
+
+        const { data: igUsers } = await supabase
+            .from('riya_instagram_users')
+            .select('id, instagram_user_id, message_count, last_message_at, created_at, trial_ends_at');
+
+        const totalIgUsers = igUsers?.length || 0;
+
+        const now = new Date();
+
+
+
+        // IG DAU (always last 24h)
+        const oneDayAgoIg = new Date();
+        oneDayAgoIg.setDate(oneDayAgoIg.getDate() - 1);
+        const igDau = igUsers?.filter((u: any) => {
+            if (!u.last_message_at) return false;
+            return new Date(u.last_message_at) >= oneDayAgoIg;
+        }).length || 0;
+
+        const totalIgMessages = igUsers?.reduce((sum: number, u: any) => sum + (u.message_count || 0), 0) || 0;
+        const avgIgMsgsPerUser = totalIgUsers > 0
+            ? (totalIgMessages / totalIgUsers).toFixed(2)
+            : '0';
+
+        const igInTrial = igUsers?.filter((u: any) =>
+            u.trial_ends_at && new Date(u.trial_ends_at) > now
+        ).length || 0;
+
+        const igTrialExpired = igUsers?.filter((u: any) =>
+            u.trial_ends_at && new Date(u.trial_ends_at) <= now
+        ).length || 0;
+
+        // IG MAU (active is last 30 days)
+        const thirtyDaysAgoIg = new Date();
+        thirtyDaysAgoIg.setDate(thirtyDaysAgoIg.getDate() - 30);
+        const igMau = igUsers?.filter((u: any) => {
+            if (!u.last_message_at) return false;
+            return new Date(u.last_message_at) >= thirtyDaysAgoIg;
+        }).length || 0;
+
+        const igDauMauRatio = igMau > 0 ? ((igDau / igMau) * 100).toFixed(1) : '0';
+
+        // IG User Classification by message count
+        const igTiers = { '0-10': 0, '11-50': 0, '51-100': 0, '101-200': 0, '201-500': 0, '500+': 0 };
+        igUsers?.forEach((u: any) => {
+            const count = u.message_count || 0;
+            if (count <= 10) igTiers['0-10']++;
+            else if (count <= 50) igTiers['11-50']++;
+            else if (count <= 100) igTiers['51-100']++;
+            else if (count <= 200) igTiers['101-200']++;
+            else if (count <= 500) igTiers['201-500']++;
+            else igTiers['500+']++;
+        });
+
+        // IG Retention (D1, D3, D7, D30)
+        const calculateIgRetention = (days: number) => {
+            const eligible = igUsers?.filter((u: any) => {
+                const created = new Date(u.created_at);
+                const cutoff = new Date();
+                cutoff.setDate(cutoff.getDate() - days);
+                return created <= cutoff;
+            }) || [];
+
+            if (eligible.length === 0) return '0';
+
+            const retained = eligible.filter((u: any) => {
+                if (!u.last_message_at) return false;
+                const created = new Date(u.created_at);
+                const lastMsg = new Date(u.last_message_at);
+                const targetDate = new Date(created);
+                targetDate.setDate(targetDate.getDate() + days);
+                return lastMsg >= targetDate;
+            }).length;
+
+            return ((retained / eligible.length) * 100).toFixed(2);
+        };
+
+        const igD1 = calculateIgRetention(1);
+        const igD3 = calculateIgRetention(3);
+        const igD7 = calculateIgRetention(7);
+        const igD30 = calculateIgRetention(30);
+
+        // IG Approx Cost (messages × ₹0.08)
+        const igApproxCostINR = (totalIgMessages * 0.08).toFixed(2);
+
+        // New IG Users Per Day (last 30 days)
+        const igNewUsersPerDay: Record<string, number> = {};
+        igUsers?.forEach((u: any) => {
+            const date = new Date(u.created_at).toISOString().split('T')[0];
+            igNewUsersPerDay[date] = (igNewUsersPerDay[date] || 0) + 1;
+        });
+
+        const igNewUsersTrend = Object.entries(igNewUsersPerDay)
+            .map(([date, count]) => ({ date, new_users: count }))
+            .sort((a, b) => b.date.localeCompare(a.date));
+
+        // Daily IG Activity (active users + USER messages per day from riya_conversations)
+        // Daily IG Activity (active users + USER messages per day from riya_conversations)
+        // Uses RPC to avoid 1000-row limit that was hiding recent data
+        const { data: igDailyActivityRpc, error: igDailyError } = await supabase
+            .rpc('get_instagram_daily_activity', { days_lookback: 30 });
+
+        if (igDailyError) {
+            console.error('Error fetching IG daily activity:', igDailyError);
+        }
+
+        const igDailyActivity = (igDailyActivityRpc || []).map((d: any) => ({
+            date: d.activity_date,
+            active_users: Number(d.active_users) || 0,
+            messages: Number(d.message_count) || 0,
+            approx_cost: parseFloat((Number(d.message_count) * 0.06).toFixed(2))
+        }));
+
+        console.log(`📸 IG: ${totalIgUsers} users, ${igDau} DAU, ${totalIgMessages} msgs, cost≈₹${igApproxCostINR}`);
+
+        // ============================================
+        // 9. PMF SCORECARD (Combined Web + IG)
+        // ============================================
+        const totalAllUsers = totalUsers + totalIgUsers;
+        const totalAllDau = dau + igDau;
+        const dauPercentage = totalAllUsers > 0
+            ? ((totalAllDau / totalAllUsers) * 100).toFixed(2)
+            : '0';
+
+        // Weighted combined D7 retention
+        const webD7Num = parseFloat(d7Retention as string) || 0;
+        const igD7Num = parseFloat(igD7) || 0;
+        const combinedD7 = totalAllUsers > 0
+            ? ((webD7Num * totalUsers + igD7Num * totalIgUsers) / totalAllUsers).toFixed(2)
+            : '0';
+
+        // PMF verdict
+        const dauPct = parseFloat(dauPercentage);
+        const d7Pct = parseFloat(combinedD7);
+        let pmfVerdict: 'pre-pmf' | 'approaching' | 'pmf' = 'pre-pmf';
+        if (d7Pct > 20 && dauPct > 15) {
+            pmfVerdict = 'pmf';
+        } else if (d7Pct > 10 || dauPct > 10) {
+            pmfVerdict = 'approaching';
+        }
+
+        console.log(`🎯 PMF: ${totalAllUsers} total, ${dauPercentage}% DAU, D7=${combinedD7}%, verdict=${pmfVerdict}`);
+
+        // ============================================
+        // 10. EXTERNAL INTEGRATIONS (Optional)
         // ============================================
         let googleCloudBilling = null;
         let vercelAnalytics = null;
@@ -293,6 +442,41 @@ serve(async (req) => {
                 d1: d1Retention,
                 d7: d7Retention,
                 d30: d30Retention
+            },
+            instagramMetrics: {
+                total: totalIgUsers,
+
+                dau: igDau,
+                mau: igMau,
+                dauMauRatio: igDauMauRatio,
+                totalMessages: totalIgMessages,
+                avgMsgsPerUser: avgIgMsgsPerUser,
+                inTrial: igInTrial,
+                trialExpired: igTrialExpired,
+                approxCostINR: igApproxCostINR,
+                classification: [
+                    { tier: '0-10 msgs', count: igTiers['0-10'] },
+                    { tier: '11-50 msgs', count: igTiers['11-50'] },
+                    { tier: '51-100 msgs', count: igTiers['51-100'] },
+                    { tier: '101-200 msgs', count: igTiers['101-200'] },
+                    { tier: '201-500 msgs', count: igTiers['201-500'] },
+                    { tier: '500+ msgs', count: igTiers['500+'] }
+                ],
+                retention: {
+                    d1: igD1,
+                    d3: igD3,
+                    d7: igD7,
+                    d30: igD30
+                },
+                newUsersTrend: igNewUsersTrend,
+                dailyActivity: igDailyActivity
+            },
+            pmfScore: {
+                totalAllUsers: totalAllUsers,
+                totalAllDau: totalAllDau,
+                dauPercentage,
+                combinedD7Retention: combinedD7,
+                verdict: pmfVerdict
             },
             vercelAnalytics
         };
