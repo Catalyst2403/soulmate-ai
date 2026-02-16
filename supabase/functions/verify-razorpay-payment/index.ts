@@ -17,11 +17,13 @@ const PLAN_DURATIONS: Record<string, number> = {
     trial: 30,
     monthly: 30,
     quarterly: 90,
-    half_yearly: 180
+    half_yearly: 180,
+    instagram_monthly: 30
 };
 
 interface VerifyPaymentRequest {
-    userId: string;
+    userId?: string;
+    instagramUserId?: string;
     orderId: string;
     paymentId: string;
     signature: string;
@@ -46,7 +48,14 @@ serve(async (req) => {
     }
 
     try {
-        const { userId, orderId, paymentId, signature, planType }: VerifyPaymentRequest = await req.json();
+        const { userId, instagramUserId, orderId, paymentId, signature, planType }: VerifyPaymentRequest = await req.json();
+
+        if (!userId && !instagramUserId) {
+            return new Response(
+                JSON.stringify({ error: "User ID is required" }),
+                { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+        }
 
         console.log(`🔐 Verifying payment: order=${orderId}, payment=${paymentId}`);
 
@@ -129,11 +138,23 @@ serve(async (req) => {
         const expiresAt = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000);
 
         // Check for existing subscription
-        const { data: existingSub } = await supabase
-            .from('riya_subscriptions')
-            .select('*')
-            .eq('user_id', userId)
-            .single();
+        let existingSub: any = null;
+
+        if (userId) {
+            const { data } = await supabase
+                .from('riya_subscriptions')
+                .select('*')
+                .eq('user_id', userId)
+                .single();
+            existingSub = data;
+        } else if (instagramUserId) {
+            const { data } = await supabase
+                .from('riya_subscriptions')
+                .select('*')
+                .eq('instagram_user_id', instagramUserId)
+                .single();
+            existingSub = data;
+        }
 
         let subscriptionId: string;
 
@@ -173,7 +194,8 @@ serve(async (req) => {
             const { data: newSub, error: createError } = await supabase
                 .from('riya_subscriptions')
                 .insert({
-                    user_id: userId,
+                    user_id: userId || null,
+                    instagram_user_id: instagramUserId || null,
                     plan_type: planType,
                     status: 'active',
                     amount_paid: paymentRecord.amount,
@@ -207,7 +229,24 @@ serve(async (req) => {
             })
             .eq('razorpay_order_id', orderId);
 
-        console.log(`✅ Payment ${paymentId} verified and subscription activated for user ${userId}`);
+        // If Instagram user, update the riya_instagram_users table flags
+        if (instagramUserId) {
+            await supabase
+                .from('riya_instagram_users')
+                .update({
+                    is_pro: true,
+                    subscription_end_date: existingSub
+                        ? (new Date(new Date(existingSub.expires_at) > now
+                            ? new Date(existingSub.expires_at).getTime() + durationDays * 24 * 60 * 60 * 1000
+                            : expiresAt.getTime()).toISOString())
+                        : expiresAt.toISOString()
+                })
+                .eq('instagram_user_id', instagramUserId);
+
+            console.log(`✅ Updated Instagram user ${instagramUserId} status to PRO`);
+        }
+
+        console.log(`✅ Payment ${paymentId} verified and subscription activated for user ${userId || instagramUserId}`);
 
         return new Response(
             JSON.stringify({
