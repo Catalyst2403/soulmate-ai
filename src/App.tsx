@@ -18,6 +18,7 @@ import RiyaCallback from "./pages/riya/RiyaCallback";
 import RiyaProfileSetup from "./pages/riya/RiyaProfileSetup";
 import RiyaChat from "./pages/riya/RiyaChat";
 import RiyaPricing from "./pages/riya/RiyaPricing";
+import InstagramPayment from "./pages/riya/InstagramPayment";
 import RiyaEmailLogin from "./pages/riya/RiyaEmailLogin";
 import RiyaAnalytics from "./pages/riya/RiyaAnalytics";
 
@@ -60,6 +61,7 @@ const App = () => {
                 <Route path="/riya/onboarding/profile" element={<RiyaProfileSetup />} />
                 <Route path="/riya/chat" element={<RiyaChat />} />
                 <Route path="/riya/pricing" element={<RiyaPricing />} />
+                <Route path="/riya/pay/instagram" element={<InstagramPayment />} />
                 <Route path="/riya/email-login" element={<RiyaEmailLogin />} />
                 <Route path="/riya/analytics" element={<RiyaAnalytics />} />
 

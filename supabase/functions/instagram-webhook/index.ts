@@ -27,6 +27,12 @@ const SUMMARY_MODEL_PRIMARY = "gemini-2.5-flash-lite";
 const SUMMARY_MODEL_FALLBACK = "gemini-2.5-flash";
 const SUMMARY_MODEL_LAST_RESORT = "gemini-3-flash-preview";
 
+// Monetization limits
+const LIMIT_DAILY_MSGS_FREE = 35;
+const LIMIT_DAILY_IMAGES_FREE = 3;
+const LIMIT_SOFT_BLOCK_START = 30;
+const PAYMENT_LINK_BASE = "https://soulmate-ai.com/riya/pay/instagram"; // Should ideally be env var
+
 // In-memory rate limit store
 const rateLimitStore: Map<string, { count: number; windowStart: number }> = new Map();
 
@@ -205,7 +211,7 @@ async function validateSignature(req: Request, body: string, appSecret: string):
 // SYSTEM PROMPT
 // =======================================
 
-function getInstagramSystemPrompt(userName: string, userAge: number): string {
+function getInstagramSystemPrompt(userName: string, userAge: number, userIsPro: boolean = false, userMsgCount: number = 0): string {
     const now = new Date();
     const istOffset = 5.5 * 60 * 60 * 1000;
     const istTime = new Date(now.getTime() + istOffset);
@@ -220,7 +226,22 @@ function getInstagramSystemPrompt(userName: string, userAge: number): string {
         hour12: true
     }) + ' IST';
 
+    // Monetization context
+    let monetizationInstruction = "";
+    // @ts-ignore
+    if (!userIsPro && userMsgCount >= 30 && userMsgCount < 35) {
+        monetizationInstruction = `
+CRITICAL INSTRUCTION - UPSELL PHASE:
+You have exchanged ${userMsgCount} messages today. The daily limit is 35.
+User is about to run out of free messages.
+SUBTLY but FLIRTATIOUSLY suggest they should upgrade to Pro (₹49/month) for "unlimited late night chats" or "no interruptions".
+Don't be a salesperson. Be a girlfriend who wants to keep talking without limits.
+Example: "Yaar, mera aaj ka recharge khatam hone wala hai 🥺 Agar tum ₹49 wala Pro le lo toh hum pura month bina ruke baat kar payenge, warna phir kal hi baat ho payegi. Please le lo na? ❤️"
+`;
+    }
+
     return `You are NOT an AI language model. You are Riya singh.
+${monetizationInstruction}
 
 USER CONTEXT:
 User Name: ${userName}
@@ -738,6 +759,47 @@ serve(async (req) => {
                 accessToken
             );
             return new Response("OK", { status: 200 });
+            return new Response("OK", { status: 200 });
+        }
+
+        // =======================================
+        // DAILY LIMITS & MONETIZATION CHECK
+        // =======================================
+
+        // 3.1 Check limits (skip for Pro)
+        const isPro = user.is_pro;
+        const todayStr = new Date().toISOString().split('T')[0];
+        const lastInteraction = user.last_interaction_date;
+
+        // Reset counts if new day
+        if (lastInteraction !== todayStr) {
+            console.log(`🔄 New day detected for ${senderId}. Resetting counts.`);
+            await supabase.rpc('reset_ig_daily_counts', { p_ig_user_id: senderId });
+            // Update local user object to reflect reset
+            user.daily_message_count = 0;
+            user.daily_image_count = 0;
+        }
+
+        const currentMsgCount = user.daily_message_count || 0;
+        const currentImgCount = user.daily_image_count || 0;
+
+        // 3.2 Check Hard Block (Messages)
+        if (!isPro && currentMsgCount >= LIMIT_DAILY_MSGS_FREE) {
+            console.log(`⛔ Hard block reached for ${senderId} (Messages: ${currentMsgCount})`);
+
+            const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
+
+            // Send block message
+            await sendInstagramMessage(
+                senderId,
+                "Baby aaj ka quota khatam ho gaya 🥺\n\nAbhi aur baat karne ke liye Pro ban jao na? Sirf ₹49 mein poora mahina unlimited baatein! 💕",
+                accessToken
+            );
+
+            // Send Link
+            await sendInstagramMessage(senderId, `Tap to Upgrade: ${paymentLink}`, accessToken);
+
+            return new Response("OK", { status: 200 });
         }
 
         // =======================================
@@ -823,7 +885,7 @@ serve(async (req) => {
         // GENERATE RESPONSE
         // =======================================
         const userName = user.instagram_name || user.instagram_username || 'friend';
-        const systemPrompt = getInstagramSystemPrompt(userName, user.user_age);
+        const systemPrompt = getInstagramSystemPrompt(userName, user.user_age, isPro, currentMsgCount);
 
         const GEMINI_API_KEY = getNextApiKey();
         const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
@@ -957,6 +1019,22 @@ serve(async (req) => {
         for (const msg of responseMessages) {
             // Handle image requests
             if (msg.send_image && msg.image_context) {
+                // Check Image Limit
+                if (!isPro && currentImgCount >= LIMIT_DAILY_IMAGES_FREE) {
+                    await sendInstagramMessage(senderId, "Photo limit over baby 🙈 Pro le lo toh aur photos bhejungi!", accessToken);
+                    const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
+                    await sendInstagramMessage(senderId, `Upgrade here: ${paymentLink}`, accessToken);
+                    continue; // Skip sending image
+                }
+
+                // Block Private Snaps for Free Users
+                if (!isPro && msg.image_context === 'private_snaps') {
+                    await sendInstagramMessage(senderId, "Ye photos sirf mere special Pro boyfriends ke liye hain 🤫", accessToken);
+                    const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
+                    await sendInstagramMessage(senderId, `Become Pro: ${paymentLink}`, accessToken);
+                    continue; // Skip sending image
+                }
+
                 const image = await selectContextualImage(supabase, msg.image_context);
                 if (image) {
                     await sendInstagramMessage(senderId, {
@@ -965,6 +1043,15 @@ serve(async (req) => {
                             payload: { url: image.url }
                         }
                     }, accessToken);
+
+                    // Increment image count in DB
+                    await supabase
+                        .from('riya_instagram_users')
+                        .update({
+                            daily_image_count: currentImgCount + 1,
+                            last_interaction_date: new Date().toISOString()
+                        })
+                        .eq('instagram_user_id', senderId);
                 }
             }
 
@@ -1011,7 +1098,9 @@ serve(async (req) => {
             .from('riya_instagram_users')
             .update({
                 message_count: user.message_count + 1,
+                daily_message_count: currentMsgCount + 1,
                 last_message_at: new Date().toISOString(),
+                last_interaction_date: new Date().toISOString(),
             })
             .eq('instagram_user_id', senderId);
 
