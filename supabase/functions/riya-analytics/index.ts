@@ -207,7 +207,7 @@ serve(async (req) => {
 
         const { data: igUsers } = await supabase
             .from('riya_instagram_users')
-            .select('id, instagram_user_id, message_count, last_message_at, created_at, trial_ends_at');
+            .select('id, instagram_user_id, instagram_username, instagram_name, message_count, last_message_at, created_at, trial_ends_at, is_pro, subscription_end_date, subscription_start_date');
 
         const totalIgUsers = igUsers?.length || 0;
 
@@ -228,6 +228,7 @@ serve(async (req) => {
             ? (totalIgMessages / totalIgUsers).toFixed(2)
             : '0';
 
+
         const igInTrial = igUsers?.filter((u: any) =>
             u.trial_ends_at && new Date(u.trial_ends_at) > now
         ).length || 0;
@@ -235,6 +236,16 @@ serve(async (req) => {
         const igTrialExpired = igUsers?.filter((u: any) =>
             u.trial_ends_at && new Date(u.trial_ends_at) <= now
         ).length || 0;
+
+        // Pro Users List
+        const proUsers = igUsers?.filter((u: any) => u.is_pro)
+            .map((u: any) => ({
+                username: u.instagram_username || 'Unknown',
+                name: u.instagram_name || 'Unknown',
+                messageCount: u.message_count || 0,
+                expiry: u.subscription_end_date
+            }))
+            .sort((a: any, b: any) => b.messageCount - a.messageCount) || [];
 
         // IG MAU (active is last 30 days)
         const thirtyDaysAgoIg = new Date();
@@ -316,6 +327,46 @@ serve(async (req) => {
             messages: Number(d.message_count) || 0,
             approx_cost: parseFloat((Number(d.message_count) * 0.06).toFixed(2))
         }));
+
+        // IG Revenue & MRR Logic
+        // Calculate Daily Revenue from riya_instagram_users (₹49 per purchase)
+        const revenueByDate: Record<string, number> = {};
+        igUsers?.forEach((u: any) => {
+            if (u.subscription_start_date && u.is_pro && new Date(u.subscription_start_date) <= now) {
+                const date = new Date(u.subscription_start_date).toISOString().split('T')[0];
+                revenueByDate[date] = (revenueByDate[date] || 0) + 49;
+            }
+        });
+
+        // MRR Calculation: Active IG Subs * ₹49
+        const activeIgSubs = igUsers?.filter((u: any) =>
+            u.is_pro &&
+            u.subscription_end_date &&
+            new Date(u.subscription_end_date) > now
+        ).length || 0;
+
+        const mrr = activeIgSubs * 49;
+
+        // Merge Revenue into Daily Activity
+        const igDailyActivityWithRevenue = igDailyActivity.map((day: any) => ({
+            ...day,
+            daily_revenue: revenueByDate[day.date] || 0
+        }));
+
+        // Add days that have revenue but no activity (edge case, but good to handle)
+        Object.keys(revenueByDate).forEach(date => {
+            if (!igDailyActivityWithRevenue.find((d: any) => d.date === date)) {
+                igDailyActivityWithRevenue.push({
+                    date,
+                    active_users: 0,
+                    messages: 0,
+                    approx_cost: 0,
+                    daily_revenue: revenueByDate[date]
+                });
+            }
+        });
+
+        igDailyActivityWithRevenue.sort((a: any, b: any) => b.date.localeCompare(a.date));
 
         console.log(`📸 IG: ${totalIgUsers} users, ${igDau} DAU, ${totalIgMessages} msgs, cost≈₹${igApproxCostINR}`);
 
@@ -469,7 +520,10 @@ serve(async (req) => {
                     d30: igD30
                 },
                 newUsersTrend: igNewUsersTrend,
-                dailyActivity: igDailyActivity
+                newUsersTrend: igNewUsersTrend,
+                dailyActivity: igDailyActivityWithRevenue,
+                proUsers: proUsers,
+                mrr: mrr.toFixed(2)
             },
             pmfScore: {
                 totalAllUsers: totalAllUsers,
@@ -515,7 +569,15 @@ function parseInterval(interval: string): number {
     }
 }
 
-async function fetchGoogleCloudBilling() {
+interface BillingData {
+    monthlyBill: number;
+    monthlyBillINR: number;
+    currency: string;
+    period: string;
+    lastUpdated: string;
+}
+
+async function fetchGoogleCloudBilling(): Promise<BillingData | null> {
     try {
         // Check if credentials are configured
         const serviceAccountBase64 = Deno.env.get('GOOGLE_CLOUD_SERVICE_ACCOUNT');
