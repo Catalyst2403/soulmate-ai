@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { Users, MessageSquare, TrendingUp, Lock, DollarSign, Activity, RefreshCw, Instagram, Target } from 'lucide-react';
+import { Users, MessageSquare, TrendingUp, Lock, DollarSign, Activity, RefreshCw, Instagram, Target, Crown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -65,7 +65,9 @@ interface AnalyticsData {
         classification: Array<{ tier: string; count: number }>;
         retention: { d1: string; d3: string; d7: string; d30: string };
         newUsersTrend: Array<{ date: string; new_users: number }>;
-        dailyActivity: Array<{ date: string; active_users: number; messages: number; approx_cost: number }>;
+        dailyActivity: Array<{ date: string; active_users: number; messages: number; approx_cost: number; daily_revenue: number }>;
+        proUsers: Array<{ username: string; name: string; messageCount: number; expiry: string }>;
+        mrr: string;
     } | null;
     pmfScore: {
         totalAllUsers: number;
@@ -226,7 +228,7 @@ const RiyaAnalytics = () => {
                 >
                     <Lock className="w-12 h-12 text-primary mx-auto mb-4" />
                     <h1 className="font-display text-2xl font-bold text-foreground mb-6">
-                        Riya Analytics
+                        Analytics
                     </h1>
 
                     <form onSubmit={handlePinSubmit} className="space-y-4">
@@ -282,7 +284,7 @@ const RiyaAnalytics = () => {
                 >
                     <div>
                         <h1 className="font-display text-3xl font-bold neon-text">
-                            Riya Analytics Dashboard
+                            Analytics Dashboard
                         </h1>
                         <p className="text-muted-foreground">Real-time insights and metrics</p>
                     </div>
@@ -718,6 +720,12 @@ const RiyaAnalytics = () => {
                                 </p>
                                 <p className="text-xs text-muted-foreground mt-0.5">msgs × ₹0.08</p>
                             </div>
+                            <div className="p-4 rounded-xl bg-pink-500/10">
+                                <p className="text-muted-foreground text-sm">MRR</p>
+                                <p className="font-display text-2xl font-bold text-foreground">
+                                    ₹{analytics.instagramMetrics.mrr}
+                                </p>
+                            </div>
                         </div>
 
                         {/* IG Combined Daily Chart (from Feb 12) */}
@@ -726,20 +734,21 @@ const RiyaAnalytics = () => {
                             const newUsersData = analytics.instagramMetrics?.newUsersTrend || [];
 
                             // Merge both datasets by date
-                            const dateMap: Record<string, { messages: number; approx_cost: number; active_users: number }> = {};
+                            const dateMap: Record<string, { messages: number; approx_cost: number; active_users: number; daily_revenue: number }> = {};
 
                             dailyData.forEach(d => {
                                 dateMap[d.date] = {
                                     messages: d.messages,
                                     approx_cost: d.approx_cost || parseFloat((d.messages * 0.06).toFixed(2)),
                                     active_users: d.active_users || 0,
+                                    daily_revenue: d.daily_revenue || 0,
                                 };
                             });
 
                             // Ensure today is included
                             const today = new Date().toISOString().split('T')[0];
                             if (!dateMap[today]) {
-                                dateMap[today] = { messages: 0, approx_cost: 0, active_users: 0 };
+                                dateMap[today] = { messages: 0, approx_cost: 0, active_users: 0, daily_revenue: 0 };
                             }
 
                             const combined = Object.entries(dateMap)
@@ -777,6 +786,7 @@ const RiyaAnalytics = () => {
                                                 <Legend />
                                                 <Bar dataKey="messages" fill="hsl(280, 80%, 60%)" name="Messages" radius={[4, 4, 0, 0]} />
                                                 <Bar dataKey="approx_cost" fill="hsl(45, 90%, 55%)" name="Approx Cost (₹)" radius={[4, 4, 0, 0]} />
+                                                <Bar dataKey="daily_revenue" fill="hsl(150, 100%, 40%)" name="Revenue (₹)" radius={[4, 4, 0, 0]} />
                                                 <Bar dataKey="active_users" fill="hsl(174, 100%, 50%)" name="Active Users" radius={[4, 4, 0, 0]} />
                                             </BarChart>
                                         </ResponsiveContainer>
@@ -785,8 +795,8 @@ const RiyaAnalytics = () => {
                             );
                         })()}
 
-                        {/* IG Classification + Retention side by side */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        {/* IG Classification + Retention + Pro Users side by side */}
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                             {/* IG User Classification */}
                             <div>
                                 <h3 className="font-display text-lg font-semibold text-foreground mb-3">
@@ -803,6 +813,44 @@ const RiyaAnalytics = () => {
                                             <span className="font-bold text-foreground group-hover:text-pink-400 transition-colors">{item.count}</span>
                                         </div>
                                     ))}
+                                </div>
+                            </div>
+
+                            {/* Pro Users List */}
+                            <div className="bg-pink-500/5 rounded-xl p-4 overflow-hidden flex flex-col h-full">
+                                <h3 className="font-display text-lg font-semibold text-foreground mb-3 flex items-center gap-2">
+                                    <Crown className="w-5 h-5 text-yellow-500" />
+                                    Pro Users ({analytics.instagramMetrics.proUsers.length})
+                                </h3>
+                                <div className="space-y-3 overflow-y-auto max-h-[300px] pr-2 custom-scrollbar">
+                                    {analytics.instagramMetrics.proUsers.length > 0 ? (
+                                        analytics.instagramMetrics.proUsers.map((user, i) => (
+                                            <div key={i} className="flex justify-between items-center p-3 rounded-lg bg-background/50 border border-pink-500/20">
+                                                <div className="min-w-0">
+                                                    <p className="text-sm font-medium text-foreground truncate">
+                                                        @{user.username}
+                                                    </p>
+                                                    <p className="text-xs text-muted-foreground truncate">
+                                                        {user.name}
+                                                    </p>
+                                                </div>
+                                                <div className="text-right">
+                                                    <p className="text-sm font-bold text-foreground">
+                                                        {user.messageCount} msgs
+                                                    </p>
+                                                    {user.expiry && (
+                                                        <p className="text-[10px] text-muted-foreground">
+                                                            Exp: {new Date(user.expiry).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                                                        </p>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        ))
+                                    ) : (
+                                        <div className="text-center py-8 text-muted-foreground">
+                                            <p>No active pro users found</p>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
 

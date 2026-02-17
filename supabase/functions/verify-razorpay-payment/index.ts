@@ -277,7 +277,8 @@ Deno.serve(async (req) => {
                         ? (new Date(new Date(existingSub.expires_at) > now
                             ? new Date(existingSub.expires_at).getTime() + durationDays * 24 * 60 * 60 * 1000
                             : expiresAt.getTime()).toISOString())
-                        : expiresAt.toISOString()
+                        : expiresAt.toISOString(),
+                    subscription_start_date: existingSub ? existingSub.starts_at : now.toISOString()
                 })
                 .eq('instagram_user_id', instagramUserId);
 

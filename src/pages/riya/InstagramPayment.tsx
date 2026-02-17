@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/hooks/use-toast';
-import { Heart, Sparkles, Zap, Check, Lock } from 'lucide-react';
+import { Heart, Sparkles, Zap, Check, Lock, X } from 'lucide-react';
 
-// Razorpay types
+// ... (existing helper types)
 declare global {
     interface Window {
         Razorpay: new (options: RazorpayOptions) => RazorpayInstance;
@@ -51,7 +51,9 @@ const InstagramPayment = () => {
     const [isLoading, setIsLoading] = useState(false);
     const [isSuccess, setIsSuccess] = useState(false);
     const [language, setLanguage] = useState<'en' | 'hi'>('en'); // Default to English
+    const [showFullImage, setShowFullImage] = useState(false);
 
+    // ... (rest of the component logic remains the same until the return statement)
     const content = {
         en: {
             header: "Upgrade Riya",
@@ -281,7 +283,10 @@ const InstagramPayment = () => {
 
                 {/* Header */}
                 <div className="pt-8 pb-6 text-center space-y-2">
-                    <div className="mx-auto w-24 h-24 rounded-full p-1 bg-gradient-to-tr from-yellow-400 via-red-500 to-purple-600">
+                    <div
+                        className="mx-auto w-24 h-24 rounded-full p-1 bg-gradient-to-tr from-yellow-400 via-red-500 to-purple-600 cursor-pointer hover:scale-105 transition-transform"
+                        onClick={() => setShowFullImage(true)}
+                    >
                         <div className="w-full h-full rounded-full bg-black flex items-center justify-center overflow-hidden border-4 border-black">
                             <img src="/riya-payment-dp.jpg" alt="Riya" className="w-full h-full object-cover" />
                         </div>
@@ -299,7 +304,7 @@ const InstagramPayment = () => {
                     <div className="space-y-4">
                         <div className="flex items-center justify-between">
                             <h2 className="text-xl font-bold">{t.planName}</h2>
-                            <span className="bg-white/10 px-3 py-1 rounded-full text-xs font-medium">
+                            <span className="bg-gradient-to-r from-pink-500/20 to-purple-500/20 border border-pink-500/30 text-pink-200 px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap shrink-0">
                                 {t.badge}
                             </span>
                         </div>
@@ -391,8 +396,45 @@ const InstagramPayment = () => {
                         </div>
                     </div>
                 </motion.div >
-            </div >
-        </div >
+            </div>
+
+            {/* Full Screen Image Modal */}
+            <AnimatePresence>
+                {showFullImage && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-[100] bg-black/95 flex items-center justify-center p-4 backdrop-blur-sm"
+                        onClick={() => setShowFullImage(false)}
+                    >
+                        <motion.button
+                            onClick={() => setShowFullImage(false)}
+                            className="absolute top-4 right-4 p-2 text-white/50 hover:text-white hover:bg-white/10 rounded-full transition-all"
+                            whileHover={{ scale: 1.1 }}
+                            whileTap={{ scale: 0.9 }}
+                        >
+                            <X className="w-8 h-8" />
+                        </motion.button>
+
+                        <motion.div
+                            initial={{ scale: 0.9, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            exit={{ scale: 0.9, opacity: 0 }}
+                            transition={{ type: "spring", damping: 25, stiffness: 300 }}
+                            className="relative max-w-full max-h-screen flex items-center justify-center pointer-events-none"
+                        >
+                            <img
+                                src="/riya-payment-dp.jpg"
+                                alt="Riya Full Screen"
+                                className="max-w-[90vw] max-h-[80vh] object-contain rounded-2xl shadow-2xl border border-white/10 pointer-events-auto"
+                                onClick={(e) => e.stopPropagation()}
+                            />
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+        </div>
     );
 };
 
