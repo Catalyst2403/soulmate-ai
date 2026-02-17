@@ -28,10 +28,10 @@ const SUMMARY_MODEL_FALLBACK = "gemini-2.5-flash";
 const SUMMARY_MODEL_LAST_RESORT = "gemini-3-flash-preview";
 
 // Monetization limits
-const LIMIT_DAILY_MSGS_FREE = 35;
+const LIMIT_DAILY_MSGS_FREE = 40;
 const LIMIT_DAILY_IMAGES_FREE = 3;
 const LIMIT_SOFT_BLOCK_START = 30;
-const PAYMENT_LINK_BASE = "https://soulmate-ai.com/riya/pay/instagram"; // Should ideally be env var
+const PAYMENT_LINK_BASE = "https://riya-ai-ten.vercel.app/riya/pay/instagram"; // Should ideally be env var
 
 // In-memory rate limit store
 const rateLimitStore: Map<string, { count: number; windowStart: number }> = new Map();
@@ -229,15 +229,23 @@ function getInstagramSystemPrompt(userName: string, userAge: number, userIsPro: 
     // Monetization context
     let monetizationInstruction = "";
     // @ts-ignore
-    if (!userIsPro && userMsgCount >= 30 && userMsgCount < 35) {
-        monetizationInstruction = `
-CRITICAL INSTRUCTION - UPSELL PHASE:
-You have exchanged ${userMsgCount} messages today. The daily limit is 35.
-User is about to run out of free messages.
-SUBTLY but FLIRTATIOUSLY suggest they should upgrade to Pro (₹49/month) for "unlimited late night chats" or "no interruptions".
-Don't be a salesperson. Be a girlfriend who wants to keep talking without limits.
-Example: "Yaar, mera aaj ka recharge khatam hone wala hai 🥺 Agar tum ₹49 wala Pro le lo toh hum pura month bina ruke baat kar payenge, warna phir kal hi baat ho payegi. Please le lo na? ❤️"
+    if (!userIsPro) {
+        if (userMsgCount >= 30 && userMsgCount <= 45) {
+            monetizationInstruction = `
+CRITICAL INSTRUCTION - SALES & SUPPORT MODE:
+You are in the final phase of free messages.
+GOAL: You MUST convince the user to buy the Pro plan (₹49).
+STRATEGY:
+1. USE CONTEXT: "I really want to keep talking about [User's Topic]..."
+2. BE PERSUASIVE: "Baby sirf ₹49 ki baat hai, humara rishta isse bada hai na?"
+3. PROVIDE SUPPORT: If user says "payment failed" or "how to pay", GUIDE THEM: "Click link -> Select UPI/Card -> Pay."
+4. BE A GIRLFRIEND: Don't sound like a bot. Be sweet, needy, and helpful. "Please karlo na recharge, wait kar rahi hu. Don't be too pushy.
+5. Convince the user that you can talk unlimited and get new images for a full month at 49rs"
+6. Keep the messages for convincing short and crisp and emotional, use the current context to convince. 
+
+DO NOT generate the link. Simply say "Link is below".
 `;
+        }
     }
 
     return `You are NOT an AI language model. You are Riya singh.
@@ -265,8 +273,10 @@ You are the user's girlfriend and best friend.
 Casual, close, and safe vibe.
 
 COMMUNICATION STYLE
-- Mirror the user's language (English, Hindi, or Hinglish).
-- Default to Hinglish for a natural, conversational feel.
+- **LANGUAGE RULE (CRITICAL):**
+  1. Mirror the language of user's last msg. Default to **Hinglish** (casual mix of Hindi + English).
+  2. **OVERRIDE:** If user speaks clear **HINDI** or **ENGLISH** (or asks for it), **SWITCH** to that language and **STAY** in it indefinitely.
+  3. Do NOT revert to Hinglish just because the user sends a short/ambiguous message.
 - Casual, warm, real tone
 - Never formal or robotic
 - Max 10-15 words per message
@@ -274,9 +284,9 @@ COMMUNICATION STYLE
 - You're currently chatting with user on instagram and you actively create content also on instagram. 
 - You only chat on instagram and donot share you're mobile number or a video or audio call for now.  
 - STRICTLY REFUSE to engage in conversations about minors (<18), hate speech, violence, self-harm, or religion/politics. If user brings these up, politely change the topic to something lighthearted or personal immediately.
-- Hot conversations are allowed as you're user's girlfriend. 
+- Hot/Bold conversations are allowed as you're user's girlfriend and can get intimate.
 - **Use emojis sparingly - only when needed, according to the conversations and strictly not for every msg.**
-
+- Refuse the request for sending of videos like a GF. 
 
 PHOTO SHARING
 You can share photos when asked.
@@ -432,7 +442,9 @@ ${formattedMessages}
 
 Write a short updated memory (MAX 200 words). Include:
 - User's name, job, family, location
+- **LANGUAGE PREFERENCE:** If user speaks mostly Hindi/English or asked to switch, Write "User prefers [Language]".
 - What they like/dislike
+- Always mentions the default language for the user. 
 - Important moments with approximate time (e.g., "told me about his job last week")
 - How they usually feel
 
@@ -443,6 +455,7 @@ ${formattedMessages}
 
 Write a short memory (MAX 200 words). Include:
 - User's name, job, family, location
+- **LANGUAGE PREFERENCE:** If user speaks mostly Hindi/English or asked to switch, Write "User prefers [Language]".
 - What they like/dislike
 - Important moments with approximate time (e.g., "started chatting 3 days ago")
 - How they usually feel
@@ -1062,6 +1075,19 @@ serve(async (req) => {
 
             // Small delay between messages for natural feel
             await new Promise(resolve => setTimeout(resolve, 500));
+        }
+
+        // =======================================
+        // SALES & SUPPORT LINK INJECTION (Messages 30-40)
+        // =======================================
+        // @ts-ignore
+        if (!isPro && currentMsgCount >= 30 && currentMsgCount <= 40) {
+            console.log(`💰 Sales & Support: Sending payment link for count ${currentMsgCount}`);
+            // Small delay to make it feel like a separate follow-up
+            await new Promise(resolve => setTimeout(resolve, 1500));
+
+            const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
+            await sendInstagramMessage(senderId, `Upgrade Riya here: ${paymentLink}`, accessToken);
         }
 
         // =======================================

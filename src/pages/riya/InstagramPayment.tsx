@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
@@ -50,6 +50,50 @@ const InstagramPayment = () => {
     const instagramUserId = searchParams.get('id');
     const [isLoading, setIsLoading] = useState(false);
     const [isSuccess, setIsSuccess] = useState(false);
+    const [language, setLanguage] = useState<'en' | 'hi'>('en'); // Default to English
+
+    const content = {
+        en: {
+            header: "Upgrade Riya",
+            tagline: "Don't let the conversation die... 💔",
+            planName: "Riya Pro (Instagram)",
+            badge: "Most Popular",
+            price: "₹49",
+            period: "/month",
+            limitedTime: "Limited Time Offer ⏳",
+            unlimitedMessages: "Unlimited Messages",
+            unlimitedMessagesSub: "Chat all day & night without stopping",
+            unlimitedPhotos: "Unlimited Photos",
+            unlimitedPhotosSub: "Unlock Her Private Gallery",
+            unfilteredAccess: "Unfiltered Access",
+            unfilteredAccessSub: "See private snaps & unfiltered chats",
+            cta: "Unlock for ₹49",
+            footer: "Secured by Razorpay • Cancel anytime",
+            privacy: "Privacy Policy",
+            terms: "Terms of Service"
+        },
+        hi: {
+            header: "रिया को अपग्रेड करें",
+            tagline: "बातचीत रुकने न दें... 💔",
+            planName: "रिया प्रो (Instagram)",
+            badge: "सबसे लोकप्रिय",
+            price: "₹49",
+            period: "/महीना",
+            limitedTime: "सीमित समय के लिए ऑफ़र ⏳",
+            unlimitedMessages: "अनगिनत मैसेज",
+            unlimitedMessagesSub: "दिन-रात बिना रुके बातें करें",
+            unlimitedPhotos: "अनगिनत तस्वीरें",
+            unlimitedPhotosSub: "उसकी प्राइवेट गैलरी अनलॉक करें",
+            unfilteredAccess: "बिना किसी रोक-टोक के",
+            unfilteredAccessSub: "प्राइवेट स्नैप्स देखें और खुल के बातें करें",
+            cta: "सिर्फ ₹49 में अनलॉक करें",
+            footer: "Razorpay द्वारा सुरक्षित • कभी भी कैंसिल करें",
+            privacy: "गोपनीयता नीति",
+            terms: "सेवा की शर्तें"
+        }
+    };
+
+    const t = content[language];
 
     useEffect(() => {
         // Load Razorpay script
@@ -64,7 +108,9 @@ const InstagramPayment = () => {
     }, []);
 
     const handlePayment = async () => {
+        console.log("💳 Start Payment Clicked");
         if (!instagramUserId) {
+            console.error("❌ No Instagram User ID found");
             toast({
                 title: 'Error',
                 description: 'Invalid user link. Please try opening the link from Instagram again.',
@@ -76,6 +122,7 @@ const InstagramPayment = () => {
         setIsLoading(true);
 
         try {
+            console.log(`🔄 Creating order for ${instagramUserId}...`);
             // Create Razorpay order via Edge Function
             const { data, error } = await supabase.functions.invoke('create-razorpay-order', {
                 body: {
@@ -85,8 +132,11 @@ const InstagramPayment = () => {
             });
 
             if (error || data.error) {
+                console.error("❌ Order Creation Failed:", data?.error || error);
                 throw new Error(data?.error || error?.message || 'Failed to create order');
             }
+
+            console.log("✅ Order Created:", data);
 
             // Open Razorpay checkout
             const options: RazorpayOptions = {
@@ -97,6 +147,7 @@ const InstagramPayment = () => {
                 description: 'Unlimited Instagram access',
                 order_id: data.orderId,
                 handler: async (response: RazorpayResponse) => {
+                    console.log("✅ Payment Completed at Razorpay. Verifying...", response);
                     await verifyPayment(response);
                 },
                 prefill: {
@@ -107,15 +158,19 @@ const InstagramPayment = () => {
                     color: '#E1306C' // Instagram pink-ish
                 },
                 modal: {
-                    ondismiss: () => setIsLoading(false)
+                    ondismiss: () => {
+                        console.log("⚠️ Payment Modal Dismissed");
+                        setIsLoading(false);
+                    }
                 }
             };
 
             const razorpay = new window.Razorpay(options);
             razorpay.open();
+            console.log("🟢 Razorpay Modal Opened");
 
         } catch (error) {
-            console.error('Payment initiation error:', error);
+            console.error('❌ Payment initiation error:', error);
             toast({
                 title: 'Payment Failed',
                 description: 'Could not start payment. Please try again.',
@@ -126,6 +181,7 @@ const InstagramPayment = () => {
     };
 
     const verifyPayment = async (response: RazorpayResponse) => {
+        console.log("🔐 Verifying payment server-side...");
         try {
             const { data, error } = await supabase.functions.invoke('verify-razorpay-payment', {
                 body: {
@@ -138,9 +194,11 @@ const InstagramPayment = () => {
             });
 
             if (error || !data.success) {
+                console.error("❌ Verification Failed:", data?.error || error);
                 throw new Error(data?.error || 'Payment verification failed');
             }
 
+            console.log("✅ Payment Verified & Subscription Active!", data);
             setIsSuccess(true);
             toast({
                 title: 'Pro Activated! 🎉',
@@ -148,7 +206,7 @@ const InstagramPayment = () => {
             });
 
         } catch (error) {
-            console.error('Verify error:', error);
+            console.error('❌ Verify loop error:', error);
             toast({
                 title: 'Verification Issue',
                 description: 'Payment successful but activation pending. Contact support if not active in 5 mins.',
@@ -180,7 +238,7 @@ const InstagramPayment = () => {
                 <div className="pt-4">
                     <Button
                         variant="outline"
-                        onClick={() => window.location.href = 'instagram://'}
+                        onClick={() => window.location.href = 'https://instagram.com/'}
                         className="w-full"
                     >
                         Open Instagram
@@ -197,15 +255,39 @@ const InstagramPayment = () => {
 
             <div className="relative z-10 max-w-md mx-auto min-h-screen flex flex-col p-6">
 
+                {/* Language Toggle */}
+                <div className="absolute top-4 right-4 z-50">
+                    <div className="bg-gray-900/80 backdrop-blur-md rounded-full p-1 flex border border-white/10">
+                        <button
+                            onClick={() => setLanguage('en')}
+                            className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${language === 'en'
+                                ? 'bg-white text-black'
+                                : 'text-gray-400 hover:text-white'
+                                }`}
+                        >
+                            English
+                        </button>
+                        <button
+                            onClick={() => setLanguage('hi')}
+                            className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${language === 'hi'
+                                ? 'bg-[#E1306C] text-white'
+                                : 'text-gray-400 hover:text-white'
+                                }`}
+                        >
+                            हिंदी
+                        </button>
+                    </div>
+                </div>
+
                 {/* Header */}
                 <div className="pt-8 pb-6 text-center space-y-2">
                     <div className="mx-auto w-24 h-24 rounded-full p-1 bg-gradient-to-tr from-yellow-400 via-red-500 to-purple-600">
                         <div className="w-full h-full rounded-full bg-black flex items-center justify-center overflow-hidden border-4 border-black">
-                            <img src="/riya-avatar.jpg" alt="Riya" className="w-full h-full object-cover" />
+                            <img src="/riya-payment-dp.jpg" alt="Riya" className="w-full h-full object-cover" />
                         </div>
                     </div>
-                    <h1 className="text-2xl font-bold font-display">Upgrade Riya</h1>
-                    <p className="text-sm text-gray-400">Unlock user's full potential</p>
+                    <h1 className="text-2xl font-bold font-display">{t.header}</h1>
+                    <p className="text-sm text-gray-400">{t.tagline}</p>
                 </div>
 
                 {/* Card */}
@@ -216,15 +298,19 @@ const InstagramPayment = () => {
                 >
                     <div className="space-y-4">
                         <div className="flex items-center justify-between">
-                            <h2 className="text-xl font-bold">Riya Pro (Instagram)</h2>
+                            <h2 className="text-xl font-bold">{t.planName}</h2>
                             <span className="bg-white/10 px-3 py-1 rounded-full text-xs font-medium">
-                                Most Popular
+                                {t.badge}
                             </span>
                         </div>
 
-                        <div className="flex items-baseline gap-1">
-                            <span className="text-4xl font-bold">₹49</span>
-                            <span className="text-gray-400">/month</span>
+                        <div className="flex flex-col">
+                            <div className="flex items-baseline gap-2">
+                                <span className="text-lg text-gray-500 line-through decoration-gray-500">₹199</span>
+                                <span className="text-4xl font-bold">{t.price}</span>
+                                <span className="text-gray-400">{t.period}</span>
+                            </div>
+                            <p className="text-xs text-red-500 font-semibold mt-1">{t.limitedTime}</p>
                         </div>
 
                         <div className="h-px bg-white/10 my-4" />
@@ -235,8 +321,8 @@ const InstagramPayment = () => {
                                     <Zap className="w-3 h-3 text-pink-500" />
                                 </div>
                                 <div>
-                                    <p className="font-medium">Unlimited Messages</p>
-                                    <p className="text-xs text-gray-400">Chat all day & night without stopping</p>
+                                    <p className="font-medium">{t.unlimitedMessages}</p>
+                                    <p className="text-xs text-gray-400">{t.unlimitedMessagesSub}</p>
                                 </div>
                             </li>
                             <li className="flex items-start gap-3">
@@ -244,8 +330,8 @@ const InstagramPayment = () => {
                                     <Sparkles className="w-3 h-3 text-purple-500" />
                                 </div>
                                 <div>
-                                    <p className="font-medium">Unlimited Photos</p>
-                                    <p className="text-xs text-gray-400">Request as many selfies as you want</p>
+                                    <p className="font-medium">{t.unlimitedPhotos}</p>
+                                    <p className="text-xs text-gray-400">{t.unlimitedPhotosSub}</p>
                                 </div>
                             </li>
                             <li className="flex items-start gap-3">
@@ -253,8 +339,8 @@ const InstagramPayment = () => {
                                     <Lock className="w-3 h-3 text-red-500" />
                                 </div>
                                 <div>
-                                    <p className="font-medium">Uncensored Access</p>
-                                    <p className="text-xs text-gray-400">See private snaps & spicy chats</p>
+                                    <p className="font-medium">{t.unfilteredAccess}</p>
+                                    <p className="text-xs text-gray-400">{t.unfilteredAccessSub}</p>
                                 </div>
                             </li>
                         </ul>
@@ -274,17 +360,39 @@ const InstagramPayment = () => {
                             ) : (
                                 <span className="flex items-center gap-2">
                                     <Heart className="w-5 h-5 fill-white" />
-                                    Unlock for ₹49
+                                    {t.cta}
                                 </span>
                             )}
                         </Button>
-                        <p className="text-center text-xs text-gray-500 mt-4">
-                            Secured by Razorpay • Cancel anytime
-                        </p>
+                        {isLoading && (
+                            <p className="text-center text-sm text-yellow-400 font-medium mt-2 animate-pulse">
+                                ⚠️ Please do not close or refresh this window until verification is complete!
+                            </p>
+                        )}
+                        <div className="text-center mt-4 space-y-2">
+                            <p className="text-xs text-gray-500">
+                                {t.footer}
+                            </p>
+                            <div className="flex justify-center gap-4 text-xs text-gray-600">
+                                <Link
+                                    to={`/riya/privacy-policy?returnPath=${encodeURIComponent(`/riya/pay/instagram?id=${instagramUserId}`)}`}
+                                    className="hover:text-gray-400 transition-colors"
+                                >
+                                    {t.privacy}
+                                </Link>
+                                <span>•</span>
+                                <Link
+                                    to={`/riya/terms?returnPath=${encodeURIComponent(`/riya/pay/instagram?id=${instagramUserId}`)}`}
+                                    className="hover:text-gray-400 transition-colors"
+                                >
+                                    {t.terms}
+                                </Link>
+                            </div>
+                        </div>
                     </div>
-                </motion.div>
-            </div>
-        </div>
+                </motion.div >
+            </div >
+        </div >
     );
 };
 

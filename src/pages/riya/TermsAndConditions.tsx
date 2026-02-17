@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
@@ -7,12 +7,15 @@ import { Button } from '@/components/ui/button';
  * Content sourced from Razorpay policy generator
  */
 const TermsAndConditions = () => {
+    const [searchParams] = useSearchParams();
+    const returnPath = searchParams.get('returnPath') || '/riya';
+
     return (
         <div className="min-h-screen bg-background">
             {/* Header */}
             <header className="sticky top-0 z-50 bg-background/80 backdrop-blur-md border-b border-border/50">
                 <div className="max-w-3xl mx-auto px-4 py-4 flex items-center gap-4">
-                    <Link to="/riya">
+                    <Link to={returnPath}>
                         <Button variant="ghost" size="icon" className="shrink-0">
                             <ArrowLeft className="h-5 w-5" />
                         </Button>

@@ -42,13 +42,52 @@ function bytesToHex(bytes: Uint8Array): string {
         .join('');
 }
 
-serve(async (req) => {
+// HMAC SHA256 function
+async function hmacSha256(data: string, secret: string): Promise<string> {
+    const key = await crypto.subtle.importKey(
+        "raw",
+        stringToBytes(secret),
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["sign"]
+    );
+
+    const signatureBytes = await crypto.subtle.sign(
+        "HMAC",
+        key,
+        stringToBytes(data)
+    );
+
+    return bytesToHex(new Uint8Array(signatureBytes));
+}
+
+Deno.serve(async (req) => {
+    console.log("🚀 Function invoked: verify-razorpay-payment");
+
     if (req.method === "OPTIONS") {
-        return new Response(null, { headers: corsHeaders });
+        return new Response("ok", { headers: corsHeaders });
     }
 
     try {
-        const { userId, instagramUserId, orderId, paymentId, signature, planType }: VerifyPaymentRequest = await req.json();
+        const bodyText = await req.text();
+        console.log("📦 Raw request body:", bodyText);
+
+        let body;
+        try {
+            body = JSON.parse(bodyText);
+        } catch (e) {
+            console.error("❌ Failed to parse JSON body");
+            throw new Error("Invalid JSON body");
+        }
+
+        const { userId, instagramUserId, orderId, paymentId, signature, planType }: VerifyPaymentRequest = body;
+
+        console.log(`🔐 Verifying payment: User=${userId || 'IG:' + instagramUserId}, Order=${orderId}, Payment=${paymentId}, Plan=${planType}`);
+
+        if (!orderId || !paymentId || !signature || !planType) {
+            console.error("❌ Missing required payment details");
+            throw new Error("Missing required payment details");
+        }
 
         if (!userId && !instagramUserId) {
             return new Response(
@@ -57,9 +96,8 @@ serve(async (req) => {
             );
         }
 
-        console.log(`🔐 Verifying payment: order=${orderId}, payment=${paymentId}`);
-
         // Initialize Supabase client
+        console.log("🔌 Initializing Supabase client...");
         const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
         const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
         const supabase = createClient(supabaseUrl, supabaseKey);
@@ -76,7 +114,7 @@ serve(async (req) => {
 
         // Verify signature using HMAC SHA256
         // Razorpay signature = HMAC_SHA256(order_id + "|" + payment_id, secret)
-        const body = `${orderId}|${paymentId}`;
+        const messageBody = `${orderId}|${paymentId}`;
 
         const key = await crypto.subtle.importKey(
             "raw",
@@ -89,7 +127,7 @@ serve(async (req) => {
         const signatureBytes = await crypto.subtle.sign(
             "HMAC",
             key,
-            stringToBytes(body)
+            stringToBytes(messageBody)
         );
 
         const expectedSignature = bytesToHex(new Uint8Array(signatureBytes));
@@ -244,6 +282,26 @@ serve(async (req) => {
                 .eq('instagram_user_id', instagramUserId);
 
             console.log(`✅ Updated Instagram user ${instagramUserId} status to PRO`);
+
+            // Inject SYSTEM message into conversation history so Riya knows immediately
+            console.log(`📝 Injecting 'User Upgraded' system message for ${instagramUserId}`);
+            const { error: msgError } = await supabase
+                .from('riya_conversations')
+                .insert({
+                    user_id: userId || null,
+                    instagram_user_id: instagramUserId,
+                    source: 'instagram',
+                    role: 'system', // Changed from 'sender'
+                    content: JSON.stringify([{ text: "[SYSTEM EVENT: User has successfully upgraded to PRO plan. React excitedly and thank them for supporting you! You can now send unlimited images and messages.]" }]), // Changed from 'message'
+                    model_used: 'system',
+                    metadata: { type: 'system_event', event: 'upgrade_success' }
+                });
+
+            if (msgError) {
+                console.error("⚠️ Failed to inject system message:", msgError);
+            } else {
+                console.log("✅ System message injected successfully");
+            }
         }
 
         console.log(`✅ Payment ${paymentId} verified and subscription activated for user ${userId || instagramUserId}`);
