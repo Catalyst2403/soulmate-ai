@@ -1,6 +1,4 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
-import { createHmac } from "https://deno.land/std@0.168.0/crypto/mod.ts";
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -54,16 +52,33 @@ interface CreateOrderRequest {
     planType: PlanType;
 }
 
-serve(async (req) => {
+
+Deno.serve(async (req) => {
+    console.log("🚀 Function invoked: create-razorpay-order");
+
     if (req.method === "OPTIONS") {
-        return new Response(null, { headers: corsHeaders });
+        console.log("OPTIONS request handled");
+        return new Response("ok", { headers: corsHeaders });
     }
 
     try {
-        const { userId, instagramUserId, planType }: CreateOrderRequest = await req.json();
+        const bodyText = await req.text();
+        console.log("📦 Raw request body:", bodyText);
+
+        let body;
+        try {
+            body = JSON.parse(bodyText);
+        } catch (e) {
+            console.error("❌ Failed to parse JSON body");
+            throw new Error("Invalid JSON body");
+        }
+
+        const { userId, instagramUserId, planType } = body;
+        console.log(`👤 Request for: User=${userId}, IG=${instagramUserId}, Plan=${planType}`);
 
         // Validate plan type
         if (!PLANS[planType]) {
+            console.error("❌ Invalid plan type:", planType);
             return new Response(
                 JSON.stringify({ error: "Invalid plan type" }),
                 { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -71,6 +86,7 @@ serve(async (req) => {
         }
 
         if (!userId && !instagramUserId) {
+            console.error("❌ Missing User ID");
             return new Response(
                 JSON.stringify({ error: "User ID is required" }),
                 { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -78,6 +94,7 @@ serve(async (req) => {
         }
 
         // Initialize Supabase client
+        console.log("🔌 Initializing Supabase client...");
         const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
         const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
         const supabase = createClient(supabaseUrl, supabaseKey);
