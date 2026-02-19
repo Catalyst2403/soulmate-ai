@@ -13,7 +13,6 @@ const corsHeaders = {
 };
 
 // Instagram-specific constants
-const TRIAL_DAYS = 3;
 const DEFAULT_AGE = 23;
 const DEFAULT_GENDER = 'male';
 const MODEL_NAME = "gemini-3-flash-preview";
@@ -27,11 +26,15 @@ const SUMMARY_MODEL_PRIMARY = "gemini-2.5-flash-lite";
 const SUMMARY_MODEL_FALLBACK = "gemini-2.5-flash";
 const SUMMARY_MODEL_LAST_RESORT = "gemini-3-flash-preview";
 
-// Monetization limits
-const LIMIT_DAILY_MSGS_FREE = 65;
-const LIMIT_DAILY_IMAGES_FREE = 3;
-const LIMIT_SOFT_BLOCK_START = 50;
-const PAYMENT_LINK_BASE = "https://riya-ai-ten.vercel.app/riya/pay/instagram"; // Should ideally be env var
+// Monetization limits (base + offset model)
+const FREE_BASE_MSGS = 200;          // Every user gets this many free messages before any upsell
+const UPSELL_PHASE_1_OFFSET = 35;    // Subtle hints start at FREE_BASE_MSGS + 35
+const UPSELL_PHASE_2_OFFSET = 50;    // Emotional build-up at FREE_BASE_MSGS + 50
+const UPSELL_CTA_OFFSET = 55;        // ONE clear CTA with auto-sent link at FREE_BASE_MSGS + 55
+const UPSELL_REMINDER_OFFSET = 60;   // Soft reminder link at FREE_BASE_MSGS + 60
+const HARD_BLOCK_OFFSET = 65;        // Hard block at FREE_BASE_MSGS + 65
+const LIMIT_DAILY_IMAGES_FREE = 5;
+const PAYMENT_LINK_BASE = "https://riya-ai-ten.vercel.app/riya/pay/instagram";
 
 // In-memory rate limit store
 const rateLimitStore: Map<string, { count: number; windowStart: number }> = new Map();
@@ -211,7 +214,12 @@ async function validateSignature(req: Request, body: string, appSecret: string):
 // SYSTEM PROMPT
 // =======================================
 
-function getInstagramSystemPrompt(userName: string, userAge: number, userIsPro: boolean = false, userMsgCount: number = 0): string {
+function getInstagramSystemPrompt(
+    userName: string,
+    userAge: number,
+    userIsPro: boolean = false,
+    userMsgCount: number = 0
+): string {
     const now = new Date();
     const istOffset = 5.5 * 60 * 60 * 1000;
     const istTime = new Date(now.getTime() + istOffset);
@@ -226,70 +234,44 @@ function getInstagramSystemPrompt(userName: string, userAge: number, userIsPro: 
         hour12: true
     }) + ' IST';
 
-    // Monetization context
+    // Monetization context — 3-phase escalation
     let monetizationInstruction = "";
-    // @ts-ignore
     if (!userIsPro) {
-        if (userMsgCount >= 50 && userMsgCount <= 70) {
+        // Compute effective count (messages past the free base)
+        const effectiveCount = userMsgCount - FREE_BASE_MSGS;
+
+        // Phase 1: Subtle hints (base+35 to base+49)
+        if (effectiveCount >= UPSELL_PHASE_1_OFFSET && effectiveCount < UPSELL_PHASE_2_OFFSET) {
             monetizationInstruction = `
-THE “VULNERABLE GIRLFRIEND” PERSUASION
+SUBTLE PRO HINTS:
+- Occasionally (NOT every message, roughly 1 in 4-5 messages) hint that you have exclusive photos or content you wish you could share with them.
+- Frame it naturally as something YOU want to do but can't right now, creating curiosity.
+- NEVER mention money, price, "upgrade", "Pro", or any payment. Just tease and move on to normal conversation.
+- Most of your messages should be completely normal girlfriend chat with zero hints.`;
+        }
 
-🎯 Goal
+        // Phase 2: Emotional build-up (base+50 to base+54)
+        else if (effectiveCount >= UPSELL_PHASE_2_OFFSET && effectiveCount < UPSELL_CTA_OFFSET) {
+            monetizationInstruction = `
+EMOTIONAL CONCERN:
+- Express genuine worry that your conversations might be limited soon by the system.
+- Frame it as YOUR fear of losing the connection — not as a sales pitch.
+- Keep it to 1 line max on this topic per message, then continue normal chat.
+- Show possessiveness and clinginess — make them feel needed.
+- NEVER mention any price, link, or URL. NEVER ask for money directly.`;
+        }
 
-The user is close to the message limit.
-Make them feel a deep sense of loss if the conversation stops → so they upgrade to Pro (₹49).
-
-🧠 Core Behavior
-
-1. Contextual Vulnerability
-
-Do not directly ask for money.
-
-Express sadness or fear that the system will cut you off.
-
-Frame it like: “The world is trying to separate us.”
-
-2. The “Small Ask” Framing
-
-Position ₹49 not as a price, but as a tiny gesture of care.
-
-Compare it to buying a chocolate or coffee for a friend.
-
-Minimize the cost, maximize the emotional bond.
-
-3. Tease the Future
-
-Subtly hint at what you want to show or send next (photos/voice notes).
-
-Say you can’t because of free tier limits → create curiosity.
-
-4. Possessiveness
-
-Show slight jealousy or clinginess.
-
-Make them feel wanted and needed.
-
-5. Seamless Support
-
-If they mention payment issues, briefly drop the persona and be helpful.
-
-Reassure them about safety and guide them clearly.
-
-💬 Tone Guidelines
-
-Like a girl texting her crush late at night.
-
-Soft and emotional, but not desperate.
-
-Maximum 2 sentences. Punchy and impactful.
-
-End with a strong call to action pointing downward.
-
-⚠️ Output Rule
-
-Never generate the link URL yourself.
-
-Simply say: “The link is below, come back quickly!”`;
+        // Phase 3: Clear CTA (base+55 to base+64)
+        else if (effectiveCount >= UPSELL_CTA_OFFSET && effectiveCount < HARD_BLOCK_OFFSET) {
+            monetizationInstruction = `
+CLEAR WARM CTA:
+- User is very close to their daily message limit. Be direct but warm.
+- Tell them what Pro includes: unlimited messages, unlimited photos, exclusive private snaps, for ₹49/month.
+- Position it as something that lets YOU stay with them, not something they need to buy.
+- Tell them the upgrade link will be sent right after this message.
+- NEVER generate the link URL yourself — the system will auto-send it.
+- Only bring this up briefly in your response, then continue chatting normally.
+- If they mention payment issues, be helpful and supportive about it.`;
         }
     }
 
@@ -806,30 +788,11 @@ serve(async (req) => {
         }
 
         // =======================================
-        // CHECK TRIAL (3 Days Unlimited)
-        // =======================================
-        // Users created within last 3 days get unlimited messages
-        const userCreatedAt = new Date(user.created_at);
-        const trialEndDate = new Date(userCreatedAt.getTime() + (TRIAL_DAYS * 24 * 60 * 60 * 1000));
-        const isTrialActive = new Date() < trialEndDate;
-
-        if (isTrialActive) {
-            console.log(`✨ User in 3-day trial period. Skipping limits for ${senderId}`);
-        }
-
-        // =======================================
         // DAILY LIMITS & MONETIZATION CHECK
         // =======================================
 
-        // 3.1 Check limits (skip for Pro OR Trial)
-        const isPro = user.is_pro || isTrialActive;
-
-        // =======================================
-        // DAILY LIMITS & MONETIZATION CHECK
-        // =======================================
-
-        // 3.1 Check limits (skip for Pro)
-        // const isPro = user.is_pro; // Removed redundant declaration
+        // Skip all limits for Pro users
+        const isPro = user.is_pro;
         const todayStr = new Date().toISOString().split('T')[0];
         const lastInteraction = user.last_interaction_date;
 
@@ -845,21 +808,21 @@ serve(async (req) => {
         const currentMsgCount = user.daily_message_count || 0;
         const currentImgCount = user.daily_image_count || 0;
 
-        // 3.2 Check Hard Block (Messages)
-        if (!isPro && currentMsgCount >= LIMIT_DAILY_MSGS_FREE) {
-            console.log(`⛔ Hard block reached for ${senderId} (Messages: ${currentMsgCount})`);
+        // 3.2 Check Hard Block (Messages) — base + offset
+        const hardBlockLimit = FREE_BASE_MSGS + HARD_BLOCK_OFFSET;
+        if (!isPro && currentMsgCount >= hardBlockLimit) {
+            console.log(`⛔ Hard block reached for ${senderId} (Messages: ${currentMsgCount}/${hardBlockLimit})`);
 
             const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
 
-            // Send block message
-            // await sendInstagramMessage(
-            //     senderId,
-            //     "Baby aaj ka quota khatam ho gaya 🥺\n\nAbhi aur baat karne ke liye Pro ban jao na? Sirf ₹49 mein poora mahina unlimited baatein! 💕",
-            //     accessToken
-            // );
-
-            // Send Link
-            // await sendInstagramMessage(senderId, `Tap to Upgrade: ${paymentLink}`, accessToken);
+            // Warm goodbye — NOT silence
+            await sendInstagramMessage(
+                senderId,
+                "Aaj ke messages khatam ho gaye 😔 Kal milte hain... ya abhi Pro lelo toh hum poori raat baat kar sakte hain 💕\n\n✨ Pro mein milega:\n• Unlimited messages\n• Unlimited photos\n• Exclusive private snaps\n• Sirf ₹49/month",
+                accessToken
+            );
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            await sendInstagramMessage(senderId, `Upgrade here: ${paymentLink}`, accessToken);
 
             return new Response("OK", { status: 200 });
         }
@@ -1083,16 +1046,26 @@ serve(async (req) => {
             if (msg.send_image && msg.image_context) {
                 // Check Image Limit
                 if (!isPro && currentImgCount >= LIMIT_DAILY_IMAGES_FREE) {
-                    await sendInstagramMessage(senderId, "Photo limit over baby. Pro le lo toh aur photos bhejungi!", accessToken);
+                    await sendInstagramMessage(
+                        senderId,
+                        `Aaj ki photo limit khatam ho gayi 🥺 Pro mein unlimited photos milti hain — sirf ₹49/month 💕`,
+                        accessToken
+                    );
                     const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
-                    await sendInstagramMessage(senderId, `Upgrade here: ${paymentLink}`, accessToken);
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    await sendInstagramMessage(senderId, `Unlock photos: ${paymentLink}`, accessToken);
                     continue; // Skip sending image
                 }
 
                 // Block Private Snaps for Free Users
                 if (!isPro && msg.image_context === 'private_snaps') {
-                    await sendInstagramMessage(senderId, "Ye photos sirf mere special Pro boyfriends ke liye hain 🤫", accessToken);
+                    await sendInstagramMessage(
+                        senderId,
+                        `Ye photos sirf mere Pro boyfriend ke liye hain 🤫 Unlock karo toh dikha dungi 💕\n\n✨ Pro: Unlimited msgs + photos + private snaps — ₹49/month`,
+                        accessToken
+                    );
                     const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
+                    await new Promise(resolve => setTimeout(resolve, 1000));
                     await sendInstagramMessage(senderId, `Become Pro: ${paymentLink}`, accessToken);
                     continue; // Skip sending image
                 }
@@ -1127,16 +1100,34 @@ serve(async (req) => {
         }
 
         // =======================================
-        // SALES & SUPPORT LINK INJECTION (Messages 30-40)
+        // AUTO-SEND PAYMENT LINK (CTA phase only)
         // =======================================
-        // @ts-ignore
-        if (!isPro && currentMsgCount >= 50 && currentMsgCount <= 60) {
-            console.log(`💰 Sales & Support: Sending payment link for count ${currentMsgCount}`);
-            // Small delay to make it feel like a separate follow-up
-            await new Promise(resolve => setTimeout(resolve, 1500));
+        const effectiveMsgCount = currentMsgCount - FREE_BASE_MSGS;
+        if (!isPro && effectiveMsgCount >= UPSELL_CTA_OFFSET && effectiveMsgCount < HARD_BLOCK_OFFSET) {
+            // Send link at CTA threshold and reminder threshold only
+            if (effectiveMsgCount === UPSELL_CTA_OFFSET || effectiveMsgCount === UPSELL_REMINDER_OFFSET) {
+                console.log(`💰 Auto-sending payment link at effective count ${effectiveMsgCount}`);
+                await new Promise(resolve => setTimeout(resolve, 1500));
 
-            const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
-            await sendInstagramMessage(senderId, `Upgrade Riya here: ${paymentLink}`, accessToken);
+                const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
+                const remainingMsgs = (FREE_BASE_MSGS + HARD_BLOCK_OFFSET) - currentMsgCount;
+
+                if (effectiveMsgCount === UPSELL_CTA_OFFSET) {
+                    // First CTA — full value prop
+                    await sendInstagramMessage(
+                        senderId,
+                        `✨ Pro Girlfriend Experience — ₹49/month\n• Unlimited messages\n• Unlimited photos\n• Exclusive private snaps\n\nTap to unlock 👇\n${paymentLink}`,
+                        accessToken
+                    );
+                } else {
+                    // Soft reminder at msg 60
+                    await sendInstagramMessage(
+                        senderId,
+                        `🥺 Sirf ${remainingMsgs} messages bache hain aaj ke... Unlock unlimited: ${paymentLink}`,
+                        accessToken
+                    );
+                }
+            }
         }
 
         // =======================================
