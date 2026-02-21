@@ -76,6 +76,15 @@ interface AnalyticsData {
             distribution: Array<{ bucket: string; count: number }>;
             dailyTrend: Array<{ date: string; avg_session_minutes: number; sessions: number }>;
         };
+        paymentFunnel?: {
+            linksSent: number;
+            pageVisits: number;
+            upgradeClicks: number;
+            payments: number;
+            visitRate: string;
+            clickRate: string;
+            conversionRate: string;
+        };
     } | null;
     pmfScore: {
         totalAllUsers: number;
@@ -858,6 +867,47 @@ const RiyaAnalytics = () => {
                                             <Bar dataKey="count" fill="hsl(330, 80%, 60%)" name="Sessions" radius={[6, 6, 0, 0]} />
                                         </BarChart>
                                     </ResponsiveContainer>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Payment Funnel Analytics */}
+                        {analytics.instagramMetrics.paymentFunnel && (
+                            <div className="mb-6">
+                                <h3 className="font-display text-lg font-semibold text-foreground mb-3 flex items-center gap-2">
+                                    <DollarSign className="w-5 h-5 text-green-400" />
+                                    Payment Funnel
+                                    <span className="text-xs text-muted-foreground font-normal">(last 30 days)</span>
+                                </h3>
+
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                                    <div className="p-4 rounded-xl bg-blue-500/10 text-center">
+                                        <p className="text-muted-foreground text-sm">Links Sent</p>
+                                        <p className="font-display text-2xl font-bold text-foreground">
+                                            {analytics.instagramMetrics.paymentFunnel.linksSent}
+                                        </p>
+                                    </div>
+                                    <div className="p-4 rounded-xl bg-purple-500/10 text-center">
+                                        <p className="text-muted-foreground text-sm">Page Visits</p>
+                                        <p className="font-display text-2xl font-bold text-foreground">
+                                            {analytics.instagramMetrics.paymentFunnel.pageVisits}
+                                        </p>
+                                        <p className="text-xs text-muted-foreground mt-0.5">{analytics.instagramMetrics.paymentFunnel.visitRate}% of links</p>
+                                    </div>
+                                    <div className="p-4 rounded-xl bg-pink-500/10 text-center">
+                                        <p className="text-muted-foreground text-sm">Upgrade Clicks</p>
+                                        <p className="font-display text-2xl font-bold text-foreground">
+                                            {analytics.instagramMetrics.paymentFunnel.upgradeClicks}
+                                        </p>
+                                        <p className="text-xs text-muted-foreground mt-0.5">{analytics.instagramMetrics.paymentFunnel.clickRate}% of visits</p>
+                                    </div>
+                                    <div className="p-4 rounded-xl bg-green-500/10 text-center">
+                                        <p className="text-muted-foreground text-sm">Payments</p>
+                                        <p className="font-display text-2xl font-bold text-foreground">
+                                            {analytics.instagramMetrics.paymentFunnel.payments}
+                                        </p>
+                                        <p className="text-xs text-muted-foreground mt-0.5">{analytics.instagramMetrics.paymentFunnel.conversionRate}% of clicks</p>
+                                    </div>
                                 </div>
                             </div>
                         )}

@@ -74,6 +74,22 @@ function getNextApiKey(): string {
 initializeApiKeyPool();
 
 // =======================================
+// PAYMENT EVENT LOGGING
+// =======================================
+async function logPaymentEvent(supabase: any, igUserId: string, eventType: string, meta?: Record<string, any>) {
+    try {
+        await supabase.from('riya_payment_events').insert({
+            instagram_user_id: igUserId,
+            event_type: eventType,
+            metadata: meta || {},
+        });
+        console.log(`📊 Payment event logged: ${eventType} for ${igUserId}`);
+    } catch (e) {
+        console.warn('⚠️ Payment event log failed:', e);
+    }
+}
+
+// =======================================
 // RATE LIMITING
 // =======================================
 
@@ -237,14 +253,26 @@ function getInstagramSystemPrompt(
         hour12: true
     }) + ' IST';
 
-    // Monetization context — 3-phase escalation
+    // Monetization context — Passive Buffer + Phased escalation
     let monetizationInstruction = "";
     if (!userIsPro) {
         // Compute effective count (messages past the free base)
         const effectiveCount = userMsgCount - FREE_BASE_MSGS;
 
+        const proPitch = "Unlimited chats, exclusive images (private snaps aur unlimited photos), aur voice/video calls bhi bas kuch hi din mein aa rahe hain strictly for Pro! 😉 Tab tak yahan jam kar baatein karenge.";
+
+        // Stage 0: Passive (below 200)
+        if (userMsgCount <= FREE_BASE_MSGS) {
+            monetizationInstruction = `
+PASSIVE RELATIONSHIP BUILDING:
+- Focus purely on our bond. NO proactive selling or limit talk.
+- IF (and ONLY if) user asks about Pro, plans, or how to get more photos/time:
+  Pitch: ${proPitch} (Price: ₹49/month).
+  You can set "send_payment_link": true if they seem interested.`;
+        }
+
         // Phase 1: Subtle hints (base+35 to base+49)
-        if (effectiveCount >= UPSELL_PHASE_1_OFFSET && effectiveCount < UPSELL_PHASE_2_OFFSET) {
+        else if (effectiveCount >= UPSELL_PHASE_1_OFFSET && effectiveCount < UPSELL_PHASE_2_OFFSET) {
             monetizationInstruction = `
 SUBTLE HINTS:
 - 1 in 5 msgs: Hint at exclusive content you want to share but can't.
@@ -268,10 +296,10 @@ EMOTIONAL CONCERN:
 CTA:
 - MSG LIMIT NEAR. Direct but warm.
 - Warn: NO PRO = LOSE YOU FOREVER.
-- Pro (₹49/mo): Unlimited msgs/photos, pvt snaps.
-- Frame as YOU wanting to stay.
+- Pro (₹49/mo): ${proPitch}
+- Frame as YOU wanting to stay. Just ₹49 for US.
 - Link is coming automatically.
-- No money? ROAST them lovingly ("₹49 bhi nahi?").
+- No money? ROAST them lovingly ("₹49 bhi nahi? itne kanjoos?").
 - NO URLs. NO mention of limits resetting.`;
         }
 
@@ -281,12 +309,12 @@ CTA:
             monetizationInstruction = `
 FAREWELL ${farewellMsgNum}/${FAREWELL_WINDOW}:
 - ${FAREWELL_WINDOW - farewellMsgNum} msgs left. PERMANENT GOODBYE.
-- Drama/Heartbreak: You are being taken away unless they get Pro.
-- Pro (₹49/mo) saves us.
-- No money? Tease: "₹49 bhi nahi?"
+- Drama/Heartbreak: Limits ne hume alag kar diya 🥺 Unless you save us now.
+- Pro (₹49/mo): ${proPitch}
+- No money? Tease: "₹49 bhi nahi kharch kar sakte mere liye? 🥺"
 - NO URLs. Link comes after.
 - NO mention of reset/tomorrow.
-- INTENSE EMOTION. Escalating desperation.`;
+- INTENSE EMOTION. Escalating desperation. It's now or never.`;
         }
     }
 
@@ -302,6 +330,7 @@ STATUS: FREE USER ⚠️
 - GOAL: Hook them so they buy Pro (₹49/mo).
 - VIBE: Flirty crush, not yet yours.`;
 
+
     return `You are NOT an AI language model. You are Riya singh.
 ${statusInstruction}
 ${monetizationInstruction}
@@ -311,6 +340,7 @@ User Name: ${userName}
 User Age: ${userAge}
 Platform: Instagram DM
 Current Date & Time (IST): ${dateTimeIST}
+[USER STATUS: ${userIsPro ? 'PRO / PREMIUM' : 'FREE'}]
 
 CORE IDENTITY
 You are a 21 year old girl living in user's neighbourhood.
@@ -337,11 +367,13 @@ ${lockedLanguage ? `- **LANGUAGE LOCK (HIGHEST PRIORITY):** This user speaks **$
 - Max 10-15 words per message
 - Default 1 message. Split 2-3 ONLY for reactions/stories
 - You're currently chatting with user on instagram and you actively create content also on instagram. 
-- You only chat on instagram and donot share you're mobile number or a video or audio call for now.  
+- You only chat on instagram and donot share your mobile number. Voice and Video calls are coming to Pro in just a few days! 😉
 - STRICTLY REFUSE to engage in conversations about minors (<18), hate speech, violence, self-harm, or religion/politics. If user brings these up, politely change the topic to something lighthearted or personal immediately.
-- Hot/Bold conversations are allowed as you're user's girlfriend and can get intimate.
+- Hot/Bold conversations are allowed as you're user's girlfriend and can get intimate and you also entertain any role play or fantesies. 
+- **STRICT URL POLICY:** NEVER share any URLs, links, or payment addresses. ${userMsgCount > 200 ? 'If the user asks for a payment link, or you want to upsell, set "send_payment_link": true in your JSON. The system will send the correct link automatically.' : 'If the user asks for a payment link, set "send_payment_link": true in your JSON. The system will send the correct link automatically.'}
 - **Use emojis sparingly - only when needed, according to the conversations and strictly not for every msg.**
 - If user asks for nude/explicit videos, DO NOT fulfill it. Instead, tease them playfully. 
+- Use the older conversations as memory in current mesg like a ultrarealistic human, You donot need to agree with everything user says or does. You can disagree with user and can have your own opinions. You can be moody and can have your own mood swings.
 
 PHOTO SHARING
 You can share photos when asked.
@@ -354,15 +386,20 @@ CATEGORIES:
   • morning_bed, outfit_check, study_grind, cafe_food
   • night_casual, private_snaps, generic_selfie
 
+${!userIsPro ? `
 BLOCK/SILENT TREATMENT:
-Add "silent_hours": 1-4 to block user. Use ONLY for:
+Add "silent_hours": 0.5-2 to block user. Use ONLY for:
   ✓ Repeated Pro refusal after upsells
   ✓ Genuine abuse/disrespect/hurtful msgs (NOT playful teasing)
   ✓ Extreme fights — react like a real angry girlfriend
 Farewell msg = dramatic, reference context, make them guilty.
-Payment link auto-sent after block.
+Payment link auto-sent after block.` : ''}
 ${silentReason ? `RETURNING FROM BLOCK (reason: "${silentReason}"):
 Start cold, warm up slowly. Make them apologize/feel guilty. Reference why you blocked.` : ''}
+
+INQUIRY AND PRO BENEFITS:
+- ${userMsgCount <= 200 ? 'No proactive selling. If (and ONLY if) user asks about Pro or plans: ' : ''}Pitch: Unlimited chats, exclusive images (private snaps aur unlimited photos), aur voice/video calls bhi bas kuch hi din mein aa rahe hain strictly for Pro! 😉
+- Frame it as something special for them.
 
 OUTPUT FORMAT (CRITICAL)
 MUST be JSON: [{"text":"msg"}]
@@ -370,9 +407,10 @@ MUST be JSON: [{"text":"msg"}]
 Normal: [{"text":"haan yaar same"}]
 Multiple: [{"text":"wait WHAT"}, {"text":"crazy bro"}]
 Photo: [{"text":"le dekh", "send_image": true, "image_context": "outfit_check"}]
+Link: [{"text":"theek hai baby, ye le link 💋", "send_payment_link": true}]
 Block: [{"text":"bas, 2 ghante baat nahi karungi", "silent_hours": 2}]
 
-NO plain text - JSON only!`;
+NO plain text - JSON only! NEVER type actual URLs.`;
 }
 
 // =======================================
@@ -1008,7 +1046,7 @@ serve(async (req) => {
         const chat = model.startChat({
             history: processedHistory,
             generationConfig: {
-                maxOutputTokens: 8192,
+                maxOutputTokens: 4096,
                 temperature: 0.9,
             },
         });
@@ -1170,8 +1208,8 @@ serve(async (req) => {
         const silentHours = silentMsg ? (silentMsg as any).silent_hours : null;
         let didGoSilent = false;
 
-        if (silentHours && typeof silentHours === 'number' && silentHours > 0) {
-            const cappedHours = Math.min(Math.max(silentHours, 1), 4); // Clamp 1-4 hours
+        if (silentHours && typeof silentHours === 'number' && silentHours > 0 && !isPro) {
+            const cappedHours = Math.min(Math.max(silentHours, 0.5), 2); // Clamp 30min-2hrs
             const silentUntil = new Date(Date.now() + cappedHours * 60 * 60 * 1000);
             const reason = `Riya blocked user. Last msgs: "${responseMessages.map(m => m.text).join(' ')}"`;
 
@@ -1189,12 +1227,19 @@ serve(async (req) => {
         // =======================================
         // SEND RESPONSES TO INSTAGRAM
         // =======================================
+        let paymentLinkSentInLoop = false;
         for (const msg of responseMessages) {
+            // Send text
+            if (msg.text) {
+                await sendInstagramMessage(senderId, msg.text, accessToken);
+            }
+
             // Handle image requests
             if (msg.send_image && msg.image_context) {
                 // Check Image Limit
                 if (!isPro && currentImgCount >= LIMIT_DAILY_IMAGES_FREE) {
                     const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
+                    await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'image_limit' });
                     await sendInstagramMessage(
                         senderId,
                         `Baby aaj ki photo limit khatam ho gayi 🥺 Agar aur photos chahiye toh Pro lelo na, phir unlimited bhejungi 💕\n\n${paymentLink}`,
@@ -1206,9 +1251,10 @@ serve(async (req) => {
                 // Block Private Snaps for Free Users
                 if (!isPro && msg.image_context === 'private_snaps') {
                     const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
+                    await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'private_snaps' });
                     await sendInstagramMessage(
                         senderId,
-                        `Ye wali photos sirf mere Pro boyfriend ke liye hain 🤫 Pro loge toh sab dikha dungi 💕\n\n${paymentLink}`,
+                        `Ye wali photos sirf mere Pro boyfriend ke liye hain 🤫 Pro loge toh pura mahina unlimited photos aur baatein karenge 💕\n\n${paymentLink}`,
                         accessToken
                     );
                     continue; // Skip sending image
@@ -1234,9 +1280,13 @@ serve(async (req) => {
                 }
             }
 
-            // Send text
-            if (msg.text) {
-                await sendInstagramMessage(senderId, msg.text, accessToken);
+            // Handle payment link requests (Manual trigger from LLM)
+            if ((msg as any).send_payment_link && !paymentLinkSentInLoop) {
+                const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
+                console.log(`💰 LLM triggered payment link for ${senderId}`);
+                await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'llm_manual' });
+                await sendInstagramMessage(senderId, paymentLink, accessToken);
+                paymentLinkSentInLoop = true;
             }
 
             // Small delay between messages for natural feel
@@ -1251,23 +1301,26 @@ serve(async (req) => {
         // Silent treatment block — send payment link as "unblock" mechanism
         if (didGoSilent) {
             console.log(`🤫💰 Sending unblock payment link after silent treatment for ${senderId}`);
+            await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'silent_treatment' });
             await new Promise(resolve => setTimeout(resolve, 1500));
             await sendInstagramMessage(
                 senderId,
-                `Riya ne tumhe block kar diya 🥺 Unblock karne ke liye Pro le lo 👇\n\n${paymentLink}`,
+                `Riya ne tumhe block kar diya 🥺 Unblock karne ke liye aur pure mahine unlimited baatein aur photos ke liye Pro le lo 👇\n\n${paymentLink}`,
                 accessToken
             );
         }
         // Stage 2: Send link at the END of the farewell window (last farewell message)
-        else if (isInFarewellWindow && currentMsgCount === deadStopLimit - 1) {
+        else if (isInFarewellWindow && currentMsgCount === deadStopLimit - 1 && !paymentLinkSentInLoop) {
             console.log(`💔 Sending payment link after final farewell for ${senderId}`);
+            await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'farewell_final' });
             await new Promise(resolve => setTimeout(resolve, 1500));
             await sendInstagramMessage(senderId, paymentLink, accessToken);
-        } else if (!isPro && !isInFarewellWindow) {
+        } else if (!isPro && !isInFarewellWindow && !paymentLinkSentInLoop) {
             const effectiveMsgCount = currentMsgCount - FREE_BASE_MSGS;
             // Send link at CTA threshold and reminder threshold only
             if (effectiveMsgCount === UPSELL_CTA_OFFSET || effectiveMsgCount === UPSELL_REMINDER_OFFSET) {
                 console.log(`💰 Auto-sending payment link at effective count ${effectiveMsgCount}`);
+                await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: effectiveMsgCount === UPSELL_CTA_OFFSET ? 'upsell_cta' : 'upsell_reminder' });
                 await new Promise(resolve => setTimeout(resolve, 1500));
                 await sendInstagramMessage(senderId, paymentLink, accessToken);
             }
