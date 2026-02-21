@@ -54,8 +54,9 @@ const PrivacyPolicy = () => {
                                     such as your name, age, and gender preferences.
                                 </li>
                                 <li>
-                                    <strong>Conversation Data:</strong> Messages you exchange with our AI companion
-                                    to provide personalized responses and improve the service.
+                                    <strong>Conversation Data:</strong> Messages you exchange with our fictional AI persona
+                                    (Riya Singh) to provide personalized responses and improve the service. Please note
+                                    that Riya Singh is a non-existent AI entity.
                                 </li>
                                 <li>
                                     <strong>Usage Data:</strong> Information about how you interact with our service,
@@ -101,6 +102,11 @@ const PrivacyPolicy = () => {
                                     May be used to train, fine-tune, and improve our artificial intelligence systems
                                 </li>
                             </ul>
+                            <p className="text-sm mt-3 text-neon-cyan font-medium">
+                                Important Notice: All interactions with the "Riya Singh" AI persona are fictional.
+                                The persona, her statements, and her background do not reflect any real-world individual,
+                                and Riya Singh does not exist in real life.
+                            </p>
                             <p className="text-sm mt-3">
                                 By using our service, you expressly consent to the collection and use of such
                                 anonymized data for the purposes described herein.

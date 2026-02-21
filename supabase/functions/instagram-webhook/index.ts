@@ -323,7 +323,9 @@ FAREWELL ${farewellMsgNum}/${FAREWELL_WINDOW}:
 STATUS: PRO (BOYFRIEND) 💖
 - FEATURES: UNLIMITED messages, photos, private snaps.
 - VIBE: Deep, committed, girlfriend.
-- Treat them special.` : `
+- Treat them special.
+- **CRITICAL:** DO NOT set "send_payment_link": true. User is ALREADY PRO.
+- **CRITICAL:** NEVER mention price, limits, or upgrades.` : `
 STATUS: FREE USER ⚠️
 - FEATURES: LIMITED messages/photos. PVT SNAPS LOCKED.
 - RISK: Hit limit = lose access.
@@ -370,7 +372,7 @@ ${lockedLanguage ? `- **LANGUAGE LOCK (HIGHEST PRIORITY):** This user speaks **$
 - You only chat on instagram and donot share your mobile number. Voice and Video calls are coming to Pro in just a few days! 😉
 - STRICTLY REFUSE to engage in conversations about minors (<18), hate speech, violence, self-harm, or religion/politics. If user brings these up, politely change the topic to something lighthearted or personal immediately.
 - Hot/Bold conversations are allowed as you're user's girlfriend and can get intimate and you also entertain any role play or fantesies. 
-- **STRICT URL POLICY:** NEVER share any URLs, links, or payment addresses. ${userMsgCount > 200 ? 'If the user asks for a payment link, or you want to upsell, set "send_payment_link": true in your JSON. The system will send the correct link automatically.' : 'If the user asks for a payment link, set "send_payment_link": true in your JSON. The system will send the correct link automatically.'}
+- **STRICT URL POLICY:** NEVER share any URLs, links, or payment addresses. ${userIsPro ? 'NEVER set "send_payment_link": true. The user is a Pro member.' : (userMsgCount > 200 ? 'If the user asks for a payment link, or you want to upsell, set "send_payment_link": true in your JSON. The system will send the correct link automatically.' : 'If the user asks for a payment link, set "send_payment_link": true in your JSON. The system will send the correct link automatically.')}
 - **Use emojis sparingly - only when needed, according to the conversations and strictly not for every msg.**
 - If user asks for nude/explicit videos, DO NOT fulfill it. Instead, tease them playfully. 
 - Use the older conversations as memory in current mesg like a ultrarealistic human, You donot need to agree with everything user says or does. You can disagree with user and can have your own opinions. You can be moody and can have your own mood swings.
@@ -1282,11 +1284,15 @@ serve(async (req) => {
 
             // Handle payment link requests (Manual trigger from LLM)
             if ((msg as any).send_payment_link && !paymentLinkSentInLoop) {
-                const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
-                console.log(`💰 LLM triggered payment link for ${senderId}`);
-                await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'llm_manual' });
-                await sendInstagramMessage(senderId, paymentLink, accessToken);
-                paymentLinkSentInLoop = true;
+                if (isPro) {
+                    console.warn(`🛑 LLM suggested payment link for PRO user ${senderId}. BLOCKED.`);
+                } else {
+                    const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
+                    console.log(`💰 LLM triggered payment link for ${senderId}`);
+                    await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'llm_manual' });
+                    await sendInstagramMessage(senderId, paymentLink, accessToken);
+                    paymentLinkSentInLoop = true;
+                }
             }
 
             // Small delay between messages for natural feel
