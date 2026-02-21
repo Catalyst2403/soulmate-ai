@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { Users, MessageSquare, TrendingUp, Lock, DollarSign, Activity, RefreshCw, Instagram, Target, Crown } from 'lucide-react';
+import { Users, MessageSquare, TrendingUp, Lock, DollarSign, Activity, RefreshCw, Instagram, Target, Crown, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -68,6 +68,23 @@ interface AnalyticsData {
         dailyActivity: Array<{ date: string; active_users: number; messages: number; approx_cost: number; daily_revenue: number }>;
         proUsers: Array<{ username: string; name: string; messageCount: number; expiry: string }>;
         mrr: string;
+        sessionMetrics?: {
+            avgSessionMinutes: number;
+            medianSessionMinutes: number;
+            totalSessions: number;
+            avgSessionsPerUser: number;
+            distribution: Array<{ bucket: string; count: number }>;
+            dailyTrend: Array<{ date: string; avg_session_minutes: number; sessions: number }>;
+        };
+        paymentFunnel?: {
+            linksSent: number;
+            pageVisits: number;
+            upgradeClicks: number;
+            payments: number;
+            visitRate: string;
+            clickRate: string;
+            conversionRate: string;
+        };
     } | null;
     pmfScore: {
         totalAllUsers: number;
@@ -794,6 +811,106 @@ const RiyaAnalytics = () => {
                                 </div>
                             );
                         })()}
+
+                        {/* Session Time Analytics */}
+                        {analytics.instagramMetrics.sessionMetrics && (
+                            <div className="mb-6">
+                                <h3 className="font-display text-lg font-semibold text-foreground mb-3 flex items-center gap-2">
+                                    <Clock className="w-5 h-5 text-pink-400" />
+                                    Session Time Analytics
+                                    <span className="text-xs text-muted-foreground font-normal">(30-min inactivity = new session)</span>
+                                </h3>
+
+                                {/* Session Summary Cards */}
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                                    <div className="p-4 rounded-xl bg-pink-500/10">
+                                        <p className="text-muted-foreground text-sm">Avg Session</p>
+                                        <p className="font-display text-2xl font-bold text-foreground">
+                                            {analytics.instagramMetrics.sessionMetrics.avgSessionMinutes} min
+                                        </p>
+                                        <p className="text-xs text-muted-foreground mt-0.5">Character AI: ~17 min</p>
+                                    </div>
+                                    <div className="p-4 rounded-xl bg-pink-500/10">
+                                        <p className="text-muted-foreground text-sm">Median Session</p>
+                                        <p className="font-display text-2xl font-bold text-foreground">
+                                            {analytics.instagramMetrics.sessionMetrics.medianSessionMinutes} min
+                                        </p>
+                                    </div>
+                                    <div className="p-4 rounded-xl bg-pink-500/10">
+                                        <p className="text-muted-foreground text-sm">Total Sessions (30d)</p>
+                                        <p className="font-display text-2xl font-bold text-foreground">
+                                            {analytics.instagramMetrics.sessionMetrics.totalSessions.toLocaleString()}
+                                        </p>
+                                    </div>
+                                    <div className="p-4 rounded-xl bg-pink-500/10">
+                                        <p className="text-muted-foreground text-sm">Sessions / User</p>
+                                        <p className="font-display text-2xl font-bold text-foreground">
+                                            {analytics.instagramMetrics.sessionMetrics.avgSessionsPerUser}
+                                        </p>
+                                    </div>
+                                </div>
+
+                                {/* Session Distribution Chart */}
+                                <div className="h-52">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <BarChart data={analytics.instagramMetrics.sessionMetrics.distribution}>
+                                            <CartesianGrid strokeDasharray="3 3" stroke="hsl(240, 10%, 20%)" />
+                                            <XAxis dataKey="bucket" stroke="hsl(240, 5%, 65%)" />
+                                            <YAxis stroke="hsl(240, 5%, 65%)" />
+                                            <Tooltip
+                                                contentStyle={{
+                                                    backgroundColor: 'hsl(240, 10%, 8%)',
+                                                    border: '1px solid hsl(240, 10%, 20%)',
+                                                    borderRadius: '8px',
+                                                }}
+                                            />
+                                            <Bar dataKey="count" fill="hsl(330, 80%, 60%)" name="Sessions" radius={[6, 6, 0, 0]} />
+                                        </BarChart>
+                                    </ResponsiveContainer>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Payment Funnel Analytics */}
+                        {analytics.instagramMetrics.paymentFunnel && (
+                            <div className="mb-6">
+                                <h3 className="font-display text-lg font-semibold text-foreground mb-3 flex items-center gap-2">
+                                    <DollarSign className="w-5 h-5 text-green-400" />
+                                    Payment Funnel
+                                    <span className="text-xs text-muted-foreground font-normal">(last 30 days)</span>
+                                </h3>
+
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                                    <div className="p-4 rounded-xl bg-blue-500/10 text-center">
+                                        <p className="text-muted-foreground text-sm">Links Sent</p>
+                                        <p className="font-display text-2xl font-bold text-foreground">
+                                            {analytics.instagramMetrics.paymentFunnel.linksSent}
+                                        </p>
+                                    </div>
+                                    <div className="p-4 rounded-xl bg-purple-500/10 text-center">
+                                        <p className="text-muted-foreground text-sm">Page Visits</p>
+                                        <p className="font-display text-2xl font-bold text-foreground">
+                                            {analytics.instagramMetrics.paymentFunnel.pageVisits}
+                                        </p>
+                                        <p className="text-xs text-muted-foreground mt-0.5">{analytics.instagramMetrics.paymentFunnel.visitRate}% of links</p>
+                                    </div>
+                                    <div className="p-4 rounded-xl bg-pink-500/10 text-center">
+                                        <p className="text-muted-foreground text-sm">Upgrade Clicks</p>
+                                        <p className="font-display text-2xl font-bold text-foreground">
+                                            {analytics.instagramMetrics.paymentFunnel.upgradeClicks}
+                                        </p>
+                                        <p className="text-xs text-muted-foreground mt-0.5">{analytics.instagramMetrics.paymentFunnel.clickRate}% of visits</p>
+                                    </div>
+                                    <div className="p-4 rounded-xl bg-green-500/10 text-center">
+                                        <p className="text-muted-foreground text-sm">Payments</p>
+                                        <p className="font-display text-2xl font-bold text-foreground">
+                                            {analytics.instagramMetrics.paymentFunnel.payments}
+                                        </p>
+                                        <p className="text-xs text-muted-foreground mt-0.5">{analytics.instagramMetrics.paymentFunnel.conversionRate}% of clicks</p>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
 
                         {/* IG Classification + Retention + Pro Users side by side */}
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">

@@ -104,6 +104,17 @@ const InstagramPayment = () => {
         script.async = true;
         document.body.appendChild(script);
 
+        // Track page visit
+        if (instagramUserId) {
+            (supabase as any).from('riya_payment_events').insert({
+                instagram_user_id: instagramUserId,
+                event_type: 'page_visit',
+            }).then(({ error }: { error: any }) => {
+                if (error) console.warn('⚠️ Failed to log page_visit:', error);
+                else console.log('📊 page_visit logged for', instagramUserId);
+            });
+        }
+
         return () => {
             document.body.removeChild(script);
         };
@@ -111,6 +122,17 @@ const InstagramPayment = () => {
 
     const handlePayment = async () => {
         console.log("💳 Start Payment Clicked");
+
+        // Track upgrade button click
+        if (instagramUserId) {
+            (supabase as any).from('riya_payment_events').insert({
+                instagram_user_id: instagramUserId,
+                event_type: 'upgrade_click',
+            }).then(({ error }: { error: any }) => {
+                if (error) console.warn('⚠️ Failed to log upgrade_click:', error);
+                else console.log('📊 upgrade_click logged for', instagramUserId);
+            });
+        }
         if (!instagramUserId) {
             console.error("❌ No Instagram User ID found");
             toast({

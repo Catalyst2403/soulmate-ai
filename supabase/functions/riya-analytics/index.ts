@@ -300,6 +300,68 @@ serve(async (req) => {
         // IG Approx Cost (messages × ₹0.08)
         const igApproxCostINR = (totalIgMessages * 0.08).toFixed(2);
 
+        // IG Session Time Metrics
+        console.log('⏱️ Fetching IG session metrics...');
+        const { data: sessionMetricsRpc, error: sessionError } = await supabase
+            .rpc('get_instagram_session_metrics', { days_lookback: 30 });
+
+        if (sessionError) {
+            console.error('Error fetching session metrics:', sessionError);
+        }
+
+        const sessionRow = sessionMetricsRpc?.[0] || {};
+        const sessionMetrics = {
+            avgSessionMinutes: Number(sessionRow.avg_session_minutes) || 0,
+            medianSessionMinutes: Number(sessionRow.median_session_minutes) || 0,
+            totalSessions: Number(sessionRow.total_sessions) || 0,
+            avgSessionsPerUser: Number(sessionRow.avg_sessions_per_user) || 0,
+            distribution: [
+                { bucket: '0-5 min', count: Number(sessionRow.bucket_0_5) || 0 },
+                { bucket: '5-15 min', count: Number(sessionRow.bucket_5_15) || 0 },
+                { bucket: '15-30 min', count: Number(sessionRow.bucket_15_30) || 0 },
+                { bucket: '30-60 min', count: Number(sessionRow.bucket_30_60) || 0 },
+                { bucket: '60+ min', count: Number(sessionRow.bucket_60_plus) || 0 },
+            ],
+            dailyTrend: sessionRow.daily_data || [],
+        };
+
+        console.log(`⏱️ Sessions: ${sessionMetrics.totalSessions} total, avg=${sessionMetrics.avgSessionMinutes}min, median=${sessionMetrics.medianSessionMinutes}min`);
+
+        // ============================================
+        // 8b. PAYMENT FUNNEL METRICS
+        // ============================================
+        console.log('💰 Fetching payment funnel metrics...');
+
+        const { data: paymentEvents, error: paymentError } = await supabase
+            .from('riya_payment_events')
+            .select('event_type, created_at')
+            .gte('created_at', thirtyDaysAgoIg.toISOString());
+
+        if (paymentError) {
+            console.error('Error fetching payment events:', paymentError);
+        }
+
+        const linksSent = paymentEvents?.filter((e: any) => e.event_type === 'link_sent').length || 0;
+        const pageVisits = paymentEvents?.filter((e: any) => e.event_type === 'page_visit').length || 0;
+        const upgradeClicks = paymentEvents?.filter((e: any) => e.event_type === 'upgrade_click').length || 0;
+        const paymentSuccesses = paymentEvents?.filter((e: any) => e.event_type === 'payment_success').length || 0;
+
+        const visitRate = linksSent > 0 ? ((pageVisits / linksSent) * 100).toFixed(1) : '0';
+        const clickRate = pageVisits > 0 ? ((upgradeClicks / pageVisits) * 100).toFixed(1) : '0';
+        const paymentConvRate = upgradeClicks > 0 ? ((paymentSuccesses / upgradeClicks) * 100).toFixed(1) : '0';
+
+        const paymentFunnel = {
+            linksSent,
+            pageVisits,
+            upgradeClicks,
+            payments: paymentSuccesses,
+            visitRate,
+            clickRate,
+            conversionRate: paymentConvRate,
+        };
+
+        console.log(`💰 Payment Funnel: ${linksSent} sent → ${pageVisits} visits → ${upgradeClicks} clicks → ${paymentSuccesses} payments`);
+
         // New IG Users Per Day (last 30 days)
         const igNewUsersPerDay: Record<string, number> = {};
         igUsers?.forEach((u: any) => {
@@ -523,7 +585,9 @@ serve(async (req) => {
                 newUsersTrend: igNewUsersTrend,
                 dailyActivity: igDailyActivityWithRevenue,
                 proUsers: proUsers,
-                mrr: mrr.toFixed(2)
+                mrr: mrr.toFixed(2),
+                sessionMetrics: sessionMetrics,
+                paymentFunnel: paymentFunnel
             },
             pmfScore: {
                 totalAllUsers: totalAllUsers,
