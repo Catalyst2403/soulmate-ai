@@ -292,8 +292,8 @@ Deno.serve(async (req) => {
                     user_id: userId || null,
                     instagram_user_id: instagramUserId,
                     source: 'instagram',
-                    role: 'system', // Changed from 'sender'
-                    content: JSON.stringify([{ text: "[SYSTEM EVENT: User has successfully upgraded to PRO plan. React excitedly and thank them for supporting you! You can now send unlimited images and messages.]" }]), // Changed from 'message'
+                    role: 'user',
+                    content: JSON.stringify([{ text: "[SYSTEM EVENT: User has successfully upgraded to PRO plan. React excitedly and thank them for supporting you! You can now send unlimited images and messages.]" }]),
                     model_used: 'system',
                     metadata: { type: 'system_event', event: 'upgrade_success' }
                 });

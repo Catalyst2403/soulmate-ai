@@ -37,7 +37,7 @@ const PLANS = {
         description: "6 months - Best Value!"
     },
     instagram_monthly: {
-        amount: 4900,        // ₹49
+        amount: 9900,        // ₹99
         duration_days: 30,
         name: "Pro Monthly (Instagram)",
         description: "Unlimited Access on Instagram"

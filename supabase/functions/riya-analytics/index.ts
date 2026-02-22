@@ -391,23 +391,22 @@ serve(async (req) => {
         }));
 
         // IG Revenue & MRR Logic
-        // Calculate Daily Revenue from riya_instagram_users (₹49 per purchase)
+        // Calculate Daily Revenue from riya_subscriptions (Actual amount paid)
         const revenueByDate: Record<string, number> = {};
-        igUsers?.forEach((u: any) => {
-            if (u.subscription_start_date && u.is_pro && new Date(u.subscription_start_date) <= now) {
-                const date = new Date(u.subscription_start_date).toISOString().split('T')[0];
-                revenueByDate[date] = (revenueByDate[date] || 0) + 49;
+        const activeIgSubscriptions = subscriptions?.filter((s: any) =>
+            s.instagram_user_id && s.status === 'active'
+        ) || [];
+
+        // Daily revenue aggregation
+        subscriptions?.filter(s => s.instagram_user_id).forEach((s: any) => {
+            if (s.starts_at) {
+                const date = new Date(s.starts_at).toISOString().split('T')[0];
+                revenueByDate[date] = (revenueByDate[date] || 0) + (s.amount_paid || 0);
             }
         });
 
-        // MRR Calculation: Active IG Subs * ₹49
-        const activeIgSubs = igUsers?.filter((u: any) =>
-            u.is_pro &&
-            u.subscription_end_date &&
-            new Date(u.subscription_end_date) > now
-        ).length || 0;
-
-        const mrr = activeIgSubs * 49;
+        // MRR Calculation: Sum of actual amount_paid for active IG subscriptions
+        const mrr = activeIgSubscriptions.reduce((sum, s) => sum + (s.amount_paid || 0), 0);
 
         // Merge Revenue into Daily Activity
         const igDailyActivityWithRevenue = igDailyActivity.map((day: any) => ({
