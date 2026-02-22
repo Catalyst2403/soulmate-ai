@@ -52,6 +52,7 @@ const InstagramPayment = () => {
     const [isSuccess, setIsSuccess] = useState(false);
     const [language, setLanguage] = useState<'en' | 'hi'>('en'); // Default to English
     const [showFullImage, setShowFullImage] = useState(false);
+    const [hasAgreedToTerms, setHasAgreedToTerms] = useState(false);
 
     // ... (rest of the component logic remains the same until the return statement)
     const content = {
@@ -60,7 +61,7 @@ const InstagramPayment = () => {
             tagline: "Don't let the conversation die... 💔",
             planName: "Riya Pro (Instagram)",
             badge: "Most Popular",
-            price: "₹49",
+            price: "₹99",
             period: "/month",
             limitedTime: "Limited Time Offer ⏳",
             unlimitedMessages: "Unlimited Messages",
@@ -69,17 +70,19 @@ const InstagramPayment = () => {
             unlimitedPhotosSub: "Unlock Her Private Gallery",
             unfilteredAccess: "Unfiltered Access",
             unfilteredAccessSub: "See private snaps & unfiltered chats",
-            cta: "Unlock for ₹49",
+            cta: "Unlock for ₹99",
             footer: "Secured by Razorpay • Cancel anytime",
             privacy: "Privacy Policy",
-            terms: "Terms of Service"
+            terms: "Terms of Service",
+            agreeText: "I have read and agree to the ",
+            and: " and "
         },
         hi: {
             header: "रिया को अपग्रेड करें",
             tagline: "बातचीत रुकने न दें... 💔",
             planName: "रिया प्रो (Instagram)",
             badge: "सबसे लोकप्रिय",
-            price: "₹49",
+            price: "₹99",
             period: "/महीना",
             limitedTime: "सीमित समय के लिए ऑफ़र ⏳",
             unlimitedMessages: "अनगिनत मैसेज",
@@ -88,10 +91,12 @@ const InstagramPayment = () => {
             unlimitedPhotosSub: "उसकी प्राइवेट गैलरी अनलॉक करें",
             unfilteredAccess: "बिना किसी रोक-टोक के",
             unfilteredAccessSub: "प्राइवेट स्नैप्स देखें और खुल के बातें करें",
-            cta: "सिर्फ ₹49 में अनलॉक करें",
+            cta: "सिर्फ ₹99 में अनलॉक करें",
             footer: "Razorpay द्वारा सुरक्षित • कभी भी कैंसिल करें",
             privacy: "गोपनीयता नीति",
-            terms: "सेवा की शर्तें"
+            terms: "सेवा की शर्तें",
+            agreeText: "मैंने पढ़ लिया है और मैं सहमत हूँ ",
+            and: " और "
         }
     };
 
@@ -374,10 +379,34 @@ const InstagramPayment = () => {
                     </div>
 
                     <div className="mt-auto pt-6">
+                        <div className="flex items-start gap-3 mb-6 group cursor-pointer" onClick={() => setHasAgreedToTerms(!hasAgreedToTerms)}>
+                            <div className={`mt-0.5 w-5 h-5 rounded border flex items-center justify-center shrink-0 transition-colors ${hasAgreedToTerms ? 'bg-[#E1306C] border-[#E1306C]' : 'bg-gray-800 border-white/20'}`}>
+                                {hasAgreedToTerms && <Check className="w-3.5 h-3.5 text-white" />}
+                            </div>
+                            <p className="text-xs text-gray-400 leading-relaxed select-none">
+                                {t.agreeText}
+                                <Link
+                                    to={`/riya/privacy-policy?returnPath=${encodeURIComponent(`/riya/pay/instagram?id=${instagramUserId}`)}`}
+                                    className="text-pink-400 hover:text-pink-300 transition-colors underline"
+                                    onClick={(e) => e.stopPropagation()}
+                                >
+                                    {t.privacy}
+                                </Link>
+                                {t.and}
+                                <Link
+                                    to={`/riya/terms?returnPath=${encodeURIComponent(`/riya/pay/instagram?id=${instagramUserId}`)}`}
+                                    className="text-pink-400 hover:text-pink-300 transition-colors underline"
+                                    onClick={(e) => e.stopPropagation()}
+                                >
+                                    {t.terms}
+                                </Link>
+                            </p>
+                        </div>
+
                         <Button
-                            className="w-full h-14 text-lg font-bold bg-gradient-to-r from-[#833AB4] via-[#FD1D1D] to-[#F77737] hover:opacity-90 transition-opacity rounded-xl"
+                            className="w-full h-14 text-lg font-bold bg-gradient-to-r from-[#833AB4] via-[#FD1D1D] to-[#F77737] hover:opacity-90 disabled:opacity-40 disabled:grayscale transition-all rounded-xl"
                             onClick={handlePayment}
-                            disabled={isLoading}
+                            disabled={isLoading || !hasAgreedToTerms}
                         >
                             {isLoading ? (
                                 <span className="flex items-center gap-2">
@@ -396,25 +425,10 @@ const InstagramPayment = () => {
                                 ⚠️ Please do not close or refresh this window until verification is complete!
                             </p>
                         )}
-                        <div className="text-center mt-4 space-y-2">
+                        <div className="text-center mt-4">
                             <p className="text-xs text-gray-500">
                                 {t.footer}
                             </p>
-                            <div className="flex justify-center gap-4 text-xs text-gray-600">
-                                <Link
-                                    to={`/riya/privacy-policy?returnPath=${encodeURIComponent(`/riya/pay/instagram?id=${instagramUserId}`)}`}
-                                    className="hover:text-gray-400 transition-colors"
-                                >
-                                    {t.privacy}
-                                </Link>
-                                <span>•</span>
-                                <Link
-                                    to={`/riya/terms?returnPath=${encodeURIComponent(`/riya/pay/instagram?id=${instagramUserId}`)}`}
-                                    className="hover:text-gray-400 transition-colors"
-                                >
-                                    {t.terms}
-                                </Link>
-                            </div>
                         </div>
                     </div>
                 </motion.div >
