@@ -822,18 +822,23 @@ const RiyaAnalytics = () => {
                                 </h3>
 
                                 {/* Session Summary Cards */}
-                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                                <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
                                     <div className="p-4 rounded-xl bg-pink-500/10">
                                         <p className="text-muted-foreground text-sm">Avg Session</p>
                                         <p className="font-display text-2xl font-bold text-foreground">
                                             {analytics.instagramMetrics.sessionMetrics.avgSessionMinutes} min
                                         </p>
-                                        <p className="text-xs text-muted-foreground mt-0.5">Character AI: ~17 min</p>
                                     </div>
                                     <div className="p-4 rounded-xl bg-pink-500/10">
                                         <p className="text-muted-foreground text-sm">Median Session</p>
                                         <p className="font-display text-2xl font-bold text-foreground">
                                             {analytics.instagramMetrics.sessionMetrics.medianSessionMinutes} min
+                                        </p>
+                                    </div>
+                                    <div className="p-4 rounded-xl bg-yellow-500/10">
+                                        <p className="text-muted-foreground text-sm">Longest Session 🔥</p>
+                                        <p className="font-display text-2xl font-bold text-foreground">
+                                            {analytics.instagramMetrics.sessionMetrics.maxSessionMinutes || 0} min
                                         </p>
                                     </div>
                                     <div className="p-4 rounded-xl bg-pink-500/10">
@@ -868,6 +873,32 @@ const RiyaAnalytics = () => {
                                         </BarChart>
                                     </ResponsiveContainer>
                                 </div>
+
+                                {/* Top 5 Session Users */}
+                                {analytics.instagramMetrics.sessionMetrics.topSessions?.length > 0 && (
+                                    <div className="mt-4">
+                                        <h4 className="font-semibold text-foreground mb-3 flex items-center gap-2">
+                                            🏆 Top Session Users
+                                        </h4>
+                                        <div className="space-y-2">
+                                            {analytics.instagramMetrics.sessionMetrics.topSessions.map((user: any, i: number) => (
+                                                <div key={i} className="flex justify-between items-center p-3 rounded-lg bg-pink-500/5 hover:bg-pink-500/10 transition-colors">
+                                                    <div className="flex items-center gap-3">
+                                                        <span className="text-lg font-bold text-muted-foreground w-6">{i + 1}</span>
+                                                        <div>
+                                                            <p className="text-sm font-medium text-foreground">@{user.username}</p>
+                                                            {user.name && <p className="text-xs text-muted-foreground">{user.name}</p>}
+                                                        </div>
+                                                    </div>
+                                                    <div className="text-right">
+                                                        <p className="text-sm font-bold text-pink-400">{user.longest_session_min} min</p>
+                                                        <p className="text-xs text-muted-foreground">{user.total_sessions} sessions · {user.total_messages} msgs</p>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         )}
 

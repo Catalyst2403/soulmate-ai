@@ -201,6 +201,22 @@ serve(async (req) => {
         }
 
         console.log(`✅ Webhook activation successful for ${orderId}`);
+
+        // Log payment_success event for analytics funnel (never break webhook flow)
+        try {
+            const igId = instagramUserId || null;
+            if (igId) {
+                await supabase.from('riya_payment_events').insert({
+                    instagram_user_id: igId,
+                    event_type: 'payment_success',
+                    metadata: { orderId, paymentId, planType, source: 'razorpay-webhook' },
+                });
+                console.log(`📊 payment_success event logged for ${igId}`);
+            }
+        } catch (e) {
+            console.warn('⚠️ payment_success event log failed (non-critical):', e);
+        }
+
         return new Response("Success", { status: 200 });
 
     } catch (error) {

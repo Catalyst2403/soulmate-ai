@@ -313,6 +313,7 @@ serve(async (req) => {
         const sessionMetrics = {
             avgSessionMinutes: Number(sessionRow.avg_session_minutes) || 0,
             medianSessionMinutes: Number(sessionRow.median_session_minutes) || 0,
+            maxSessionMinutes: Number(sessionRow.max_session_minutes) || 0,
             totalSessions: Number(sessionRow.total_sessions) || 0,
             avgSessionsPerUser: Number(sessionRow.avg_sessions_per_user) || 0,
             distribution: [
@@ -323,6 +324,7 @@ serve(async (req) => {
                 { bucket: '60+ min', count: Number(sessionRow.bucket_60_plus) || 0 },
             ],
             dailyTrend: sessionRow.daily_data || [],
+            topSessions: sessionRow.top_sessions || [],
         };
 
         console.log(`⏱️ Sessions: ${sessionMetrics.totalSessions} total, avg=${sessionMetrics.avgSessionMinutes}min, median=${sessionMetrics.medianSessionMinutes}min`);
