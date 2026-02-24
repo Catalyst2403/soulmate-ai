@@ -264,12 +264,13 @@ function getCategoryForTime(hour: number): string {
 async function selectContextualImage(
     supabase: any,
     requestedContext: string,
-    isPro: boolean
+    isPro: boolean,
+    userId: string
 ): Promise<ImageResult | null> {
     const hour = getCurrentISTHour();
     const timeBasedCategory = getCategoryForTime(hour);
 
-    // Use requested context if provided, otherwise use time-based
+    // 1. Determine target category (LLM context > Time-based > Generic)
     let targetCategory = requestedContext || timeBasedCategory;
 
     console.log(`\n========== 📸 IMAGE SELECTION DEBUG ==========`);
@@ -278,16 +279,26 @@ async function selectContextualImage(
     console.log(`📸 Target category: ${targetCategory}`);
     console.log(`📸 User isPro: ${isPro}`);
 
-    // Query matching images
+    // 2. Fetch already sent images for this user (if logged in)
+    let sentIds: string[] = [];
+    if (userId) {
+        const { data: sentImages } = await supabase
+            .from('riya_sent_images')
+            .select('image_id')
+            .eq('user_id', userId);
+        sentIds = sentImages?.map((s: any) => s.image_id) || [];
+    }
+
+    // 3. Query matching images - PRIORITY: Newest (created_at DESC)
     let query = supabase
         .from('riya_gallery')
-        .select('id, filename, storage_path, blur_storage_path, description, category, is_premium, times_sent');
+        .select('id, filename, storage_path, blur_storage_path, description, category, is_premium, times_sent, created_at')
+        .order('created_at', { ascending: false });
 
-    // For private_snaps, only select if explicitly requested
     if (targetCategory === 'private_snaps') {
         query = query.eq('category', 'private_snaps');
     } else if (targetCategory !== 'generic_selfie') {
-        // Match category OR time window
+        // Match category
         query = query.eq('category', targetCategory);
     } else {
         query = query.eq('category', 'generic_selfie');
@@ -295,68 +306,73 @@ async function selectContextualImage(
 
     const { data: images, error } = await query;
 
-    console.log(`📸 Query result - Error: ${error ? JSON.stringify(error) : 'none'}`);
-    console.log(`📸 Query result - Images found: ${images?.length || 0}`);
-
-    if (images && images.length > 0) {
-        console.log(`📸 Available images:`, images.map((i: any) => `${i.filename} (${i.storage_path})`));
-    }
-
     if (error) {
         console.error('❌ Error fetching images:', error);
         return null;
     }
 
-    let selectedImages = images || [];
-
-    // If no matching images, fallback to generic_selfie
-    if (selectedImages.length === 0) {
-        console.log('⚠️ No matching images, falling back to generic_selfie');
-        const { data: fallback, error: fallbackError } = await supabase
-            .from('riya_gallery')
-            .select('*')
-            .eq('category', 'generic_selfie');
-
-        console.log(`📸 Fallback result - Error: ${fallbackError ? JSON.stringify(fallbackError) : 'none'}`);
-        console.log(`📸 Fallback images found: ${fallback?.length || 0}`);
-
-        selectedImages = fallback || [];
+    // Filter out already sent images if we have alternatives
+    let available = images || [];
+    const originalCount = available.length;
+    if (userId) {
+        available = available.filter((img: any) => !sentIds.includes(img.id));
     }
 
-    if (selectedImages.length === 0) {
-        console.log('❌ No images available at all - riya_gallery table might be empty!');
-        console.log(`========== END IMAGE DEBUG ==========\n`);
+    // If no NEW images in this category, recycle
+    if (available.length === 0 && originalCount > 0) {
+        console.log(`🔄 All images in '${targetCategory}' seen by ${userId}. Recycling pool.`);
+        available = images || [];
+    }
+
+    // 4. Fallback handle (if target category is empty)
+    if (available.length === 0) {
+        console.log('⚠️ No matching images, falling back to generic_selfie');
+        const { data: fallback } = await supabase
+            .from('riya_gallery')
+            .select('*')
+            .eq('category', 'generic_selfie')
+            .order('created_at', { ascending: false });
+
+        let filteredFallback = userId
+            ? fallback?.filter((img: any) => !sentIds.includes(img.id))
+            : fallback;
+
+        if (!filteredFallback || filteredFallback.length === 0) {
+            available = fallback || [];
+        } else {
+            available = filteredFallback;
+        }
+    }
+
+    if (available.length === 0) {
+        console.log('❌ No images available at all!');
         return null;
     }
 
-    // Random selection
-    const selected = selectedImages[Math.floor(Math.random() * selectedImages.length)];
-    console.log(`📷 Selected: ${selected.filename}`);
-    console.log(`📷 Storage path in DB: ${selected.storage_path}`);
-    console.log(`📷 Blur path in DB: ${selected.blur_storage_path || 'NULL'}`);
-    console.log(`📷 Is premium: ${selected.is_premium}`);
+    // 5. Selection Strategy: SEQUENTIAL (LATEST FIRST)
+    // First available is newest unsent
+    const selected = available[0];
 
-    // PROMOTIONAL PERIOD: No blur for anyone - all images visible
-    const isBlurred = false; // Was: !isPro && selected.is_premium
-    console.log(`📷 Should blur: ${isBlurred} (DISABLED for promo)`);
+    // PROMOTIONAL PERIOD: No blur
+    const isBlurred = false;
 
-    // Always use unblurred image during promo
     const storagePath = selected.storage_path;
-    console.log(`📷 Final storage path: ${storagePath}`);
-
-    // Get public URL from storage
     const { data: urlData } = supabase.storage
         .from('riya-images')
         .getPublicUrl(storagePath);
 
-    console.log(`📷 Generated URL: ${urlData?.publicUrl || 'FAILED'}`);
-    console.log(`========== END IMAGE DEBUG ==========\n`);
-
-    // Increment times_sent counter
-    await supabase
-        .from('riya_gallery')
-        .update({ times_sent: (selected.times_sent || 0) + 1 })
-        .eq('id', selected.id);
+    // 6. Track as sent (if logged in)
+    if (userId) {
+        await Promise.all([
+            supabase.from('riya_sent_images').insert({
+                user_id: userId,
+                image_id: selected.id
+            }),
+            supabase.from('riya_gallery')
+                .update({ times_sent: (selected.times_sent || 0) + 1 })
+                .eq('id', selected.id)
+        ]);
+    }
 
     return {
         url: urlData.publicUrl,
@@ -366,6 +382,7 @@ async function selectContextualImage(
         is_blurred: isBlurred,
     };
 }
+
 
 /**
  * Check if user has reached their daily image limit
@@ -1277,7 +1294,7 @@ This user is LOGGED IN. You CAN send photos when appropriate.`;
                     }
 
                     // Select and attach image
-                    const image = await selectContextualImage(supabase, msg.image_context, isPro);
+                    const image = await selectContextualImage(supabase, msg.image_context, isPro, userId || guestSessionId || '');
 
                     if (image) {
                         msg.image = {

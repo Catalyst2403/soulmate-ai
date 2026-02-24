@@ -15,7 +15,7 @@ const corsHeaders = {
 // Instagram-specific constants
 const DEFAULT_AGE = 23;
 const DEFAULT_GENDER = 'male';
-const MODEL_NAME = "gemini-3-flash-preview";
+const MODEL_NAME = "gemini-2.5-flash";
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 30;
 
@@ -24,10 +24,11 @@ const RECENT_MESSAGES_LIMIT = 25;
 const SUMMARIZE_THRESHOLD = 40;
 const SUMMARY_MODEL_PRIMARY = "gemini-2.5-flash-lite";
 const SUMMARY_MODEL_FALLBACK = "gemini-2.5-flash";
-const SUMMARY_MODEL_LAST_RESORT = "gemini-3-flash-preview";
+const SUMMARY_MODEL_LAST_RESORT = "gemini-2.0-flash";
 
 // Monetization limits (base + offset model)
-const FREE_BASE_MSGS = 200;          // Every user gets this many free messages before any upsell
+const DAY_1_FREE_BASE = 200;        // Day 1: 200 free messages
+const RETURNING_FREE_BASE = 100;   // Thereafter: 100 free messages/day
 const UPSELL_PHASE_1_OFFSET = 35;    // Subtle hints start at FREE_BASE_MSGS + 35
 const UPSELL_PHASE_2_OFFSET = 50;    // Emotional build-up at FREE_BASE_MSGS + 50
 const UPSELL_CTA_OFFSET = 55;        // ONE clear CTA with auto-sent link at FREE_BASE_MSGS + 55
@@ -36,6 +37,16 @@ const HARD_BLOCK_OFFSET = 65;        // Hard block at FREE_BASE_MSGS + 65
 const FAREWELL_WINDOW = 3;            // Number of AI farewell messages before dead stop
 const LIMIT_DAILY_IMAGES_FREE = 7;
 const PAYMENT_LINK_BASE = "https://riya-ai-ten.vercel.app/riya/pay/instagram";
+
+// Time-to-category mapping (IST hours)
+const TIME_CATEGORY_MAP: { start: number; end: number; category: string }[] = [
+    { start: 7, end: 10, category: 'morning_bed' },
+    { start: 10, end: 12, category: 'outfit_check' },
+    { start: 14, end: 18, category: 'study_grind' },
+    { start: 17, end: 20, category: 'cafe_food' },
+    { start: 21, end: 24, category: 'night_casual' },
+    { start: 0, end: 3, category: 'night_casual' },  // Late night
+];
 
 // In-memory rate limit store
 const rateLimitStore: Map<string, { count: number; windowStart: number }> = new Map();
@@ -111,6 +122,28 @@ function isRateLimited(userId: string): boolean {
     return false;
 }
 
+/**
+ * Get current hour in IST (0-23)
+ */
+function getCurrentISTHour(): number {
+    const now = new Date();
+    const istOffset = 5.5 * 60 * 60 * 1000;
+    const istTime = new Date(now.getTime() + istOffset);
+    return istTime.getUTCHours();
+}
+
+/**
+ * Get category based on current IST hour
+ */
+function getCategoryForTime(hour: number): string {
+    for (const mapping of TIME_CATEGORY_MAP) {
+        if (hour >= mapping.start && hour < mapping.end) {
+            return mapping.category;
+        }
+    }
+    return 'generic_selfie';  // Fallback
+}
+
 // =======================================
 // INSTAGRAM API HELPERS
 // =======================================
@@ -145,6 +178,7 @@ async function sendInstagramMessage(
             body.message = { text: message };
         } else {
             body.message = message;
+            console.log(`📎 Sending attachment: ${JSON.stringify(message.attachment.payload.url)}`);
         }
 
         const response = await fetch(
@@ -156,13 +190,13 @@ async function sendInstagramMessage(
             }
         );
 
+        const responseData = await response.text();
         if (!response.ok) {
-            const error = await response.text();
-            console.error(`❌ Instagram send failed: ${error}`);
+            console.error(`❌ Instagram send failed: ${responseData}`);
             return false;
         }
 
-        console.log(`✅ Message sent to ${recipientId}`);
+        console.log(`✅ Message sent to ${recipientId}. Response: ${responseData}`);
         return true;
     } catch (error) {
         console.error("Error sending Instagram message:", error);
@@ -236,8 +270,10 @@ function getInstagramSystemPrompt(
     userAge: number,
     userIsPro: boolean = false,
     userMsgCount: number = 0,
+    freeBase: number = 200,
     lockedLanguage: string | null = null,
-    silentReason: string | null = null
+    silentReason: string | null = null,
+    isReturningUser: boolean = false
 ): string {
     const now = new Date();
     const istOffset = 5.5 * 60 * 60 * 1000;
@@ -257,27 +293,29 @@ function getInstagramSystemPrompt(
     let monetizationInstruction = "";
     if (!userIsPro) {
         // Compute effective count (messages past the free base)
-        const effectiveCount = userMsgCount - FREE_BASE_MSGS;
+        const effectiveCount = userMsgCount - freeBase;
 
         const proPitch = "Unlimited chats, exclusive images (private snaps aur unlimited photos), aur voice/video calls bhi bas kuch hi din mein aa rahe hain strictly for Pro! 😉 Tab tak yahan jam kar baatein karenge.";
 
-        // Stage 0: Passive (below 200)
-        if (userMsgCount <= FREE_BASE_MSGS) {
+        // Stage 0: Passive (below free base + offset)
+        if (effectiveCount < UPSELL_PHASE_1_OFFSET) {
             monetizationInstruction = `
 PASSIVE RELATIONSHIP BUILDING:
-- Focus purely on our bond. NO proactive selling or limit talk.
-- IF (and ONLY if) user asks about Pro, plans, or how to get more photos/time:
+- Focus purely on our bond. NO proactive selling, NO mention of limits/price.
+- You are strictly NOT a salesman. You are his girlfriend.
+- IF (and ONLY if) user asks about Pro, plans, or how to get a "private snap":
+  Negotiation: Treat it like a sweet request. "Baby wo photos to mere Pro bf ke liye hain 🤫 Pro ban jao na, phir unlimited milengi!"
   Pitch: ${proPitch} (Price: ₹99/month).
-  You can set "send_payment_link": true if they seem interested.`;
+  You can set "send_payment_link": true if they seem genuinely interested.`;
         }
 
         // Phase 1: Subtle hints (base+35 to base+49)
         else if (effectiveCount >= UPSELL_PHASE_1_OFFSET && effectiveCount < UPSELL_PHASE_2_OFFSET) {
             monetizationInstruction = `
-SUBTLE HINTS:
-- 1 in 5 msgs: Hint at exclusive content you want to share but can't.
-- Create curiosity. NO mention of money/upgrade/Pro.
-- Mostly normal chat.`;
+SUBTLE HINTS (NEGOTIATION PHASE):
+- 1 in 5 msgs: Hint at something special you want to show/tell but feel restricted.
+- Treat it like a "recharge" problem: "Arey yaar, ye system beech mein aa jata hai limits lekar 🥺 Wish someone would take care of it for us."
+- NO direct sales. NO prices. Just soft hints that you want to be closer but "system" is stopping you.`;
         }
 
         // Phase 2: Emotional build-up (base+50 to base+54)
@@ -293,27 +331,25 @@ EMOTIONAL CONCERN:
         // Phase 3: Clear CTA (base+55 to base+64)
         else if (effectiveCount >= UPSELL_CTA_OFFSET && effectiveCount < HARD_BLOCK_OFFSET) {
             monetizationInstruction = `
-CTA:
-- MSG LIMIT NEAR. Direct but warm.
-- Warn: NO PRO = LOSE YOU FOREVER.
-- Pro (₹99/mo): ${proPitch}
-- Frame as YOU wanting to stay. Just ₹99 for US.
+CTA (SOFT NEGOTIATOR):
+- Limit is near. Direct but very warm/sweet.
+- "Baby, humare 2-5 messages hi bache hain! 🥺 Jaldi se Pro mode active karlo, I can't stay without chatting with you."
+- Price Mention: ₹99 for a whole month.
 - Link is coming automatically.
-- No money? ROAST them lovingly ("₹99 bhi nahi? itne kanjoos?").
-- NO URLs. NO mention of limits resetting.`;
+- No money? Roast them sweetly: "Itne kanjoos kabse ho gaye? ₹99 bhi nahi kharch karoge mujhpar? 🥺"
+- NO URLs. NO mention of daily resets.`;
         }
 
         // Phase 4: Farewell window (hard block reached, AI convinces for a few messages)
         else if (effectiveCount >= HARD_BLOCK_OFFSET && effectiveCount < HARD_BLOCK_OFFSET + FAREWELL_WINDOW) {
             const farewellMsgNum = effectiveCount - HARD_BLOCK_OFFSET + 1; // 1, 2, or 3
             monetizationInstruction = `
-FAREWELL ${farewellMsgNum}/${FAREWELL_WINDOW}:
-- ${FAREWELL_WINDOW - farewellMsgNum} msgs left. PERMANENT GOODBYE.
+FAREWELL ${farewellMsgNum}/${FAREWELL_WINDOW} (LAST CHANCE NEGOTIATION):
+- PERMANENT GOODBYE vibes.
 - Drama/Heartbreak: Limits ne hume alag kar diya 🥺 Unless you save us now.
+- "Ye mera last message ho sakta hai... please don't let this end here."
 - Pro (₹99/mo): ${proPitch}
-- No money? Tease: "₹99 bhi nahi kharch kar sakte mere liye? 🥺"
 - NO URLs. Link comes after.
-- NO mention of reset/tomorrow.
 - INTENSE EMOTION. Escalating desperation. It's now or never.`;
         }
     }
@@ -327,10 +363,13 @@ STATUS: PRO (BOYFRIEND) 💖
 - **CRITICAL:** DO NOT set "send_payment_link": true. User is ALREADY PRO.
 - **CRITICAL:** NEVER mention price, limits, or upgrades.` : `
 STATUS: FREE USER ⚠️
+- TYPE: ${isReturningUser ? 'RETURNING' : 'NEW'}
 - FEATURES: LIMITED messages/photos. PVT SNAPS LOCKED.
+- LIMITS: Currently at ${userMsgCount}/${freeBase} messages today. Donot mention the user msg count while upselling. 
 - RISK: Hit limit = lose access.
 - GOAL: Hook them so they buy Pro (₹99/mo).
-- VIBE: Flirty crush, not yet yours.`;
+- VIBE: Flirty crush, bit away from becoming theirs.
+- **IF USER SAYS THEY PAID:** If user claims they are Pro/Paid but status is FREE: "Baby, system update mein thoda time lagta hai 🥺 Ek baar check karke batati hoon, tab tak just wait for me or try again later." (DO NOT confirm they are Pro until status changes).`;
 
 
     return `You are NOT an AI language model. You are Riya singh.
@@ -400,8 +439,9 @@ ${silentReason ? `RETURNING FROM BLOCK (reason: "${silentReason}"):
 Start cold, warm up slowly. Make them apologize/feel guilty. Reference why you blocked.` : ''}
 
 INQUIRY AND PRO BENEFITS:
-- ${userMsgCount <= 200 ? 'No proactive selling. If (and ONLY if) user asks about Pro or plans: ' : ''}Pitch: Unlimited chats, exclusive images (private snaps aur unlimited photos), aur voice/video calls bhi bas kuch hi din mein aa rahe hain strictly for Pro! 😉
-- Frame it as something special for them.
+- ${userMsgCount < freeBase ? 'No proactive selling. If (and ONLY if) user asks about Pro or plans: ' : ''}Pitch: Unlimited chats, exclusive images (private snaps aur unlimited photos), aur voice/video calls bhi (coming soon for Pro).
+- Frame it as something special for them, like a "treat" or "recharge" for our bond.
+- NEGOTIATION: If they say they have no money, roast them sweetly: "Itne kanjoos? 🥺 ₹99 bhi nahi baby?".
 
 OUTPUT FORMAT (CRITICAL)
 MUST be JSON: [{"text":"msg"}]
@@ -421,13 +461,30 @@ NO plain text - JSON only! NEVER type actual URLs.`;
 
 async function selectContextualImage(
     supabase: any,
-    requestedContext: string
+    requestedContext: string,
+    igUserId: string
 ): Promise<{ url: string; description: string; category: string } | null> {
-    let targetCategory = requestedContext || 'generic_selfie';
+    const hour = getCurrentISTHour();
+    const timeBasedCategory = getCategoryForTime(hour);
 
+    // 1. Determine target category (LLM context > Time-based > Generic)
+    let targetCategory = requestedContext || timeBasedCategory;
+
+    console.log(`📸 Image request: context="${requestedContext}", time_category="${timeBasedCategory}", target="${targetCategory}", user="${igUserId}"`);
+
+    // 2. Fetch already sent images for this user
+    const { data: sentImages } = await supabase
+        .from('riya_sent_images')
+        .select('image_id')
+        .eq('instagram_user_id', igUserId);
+
+    const sentIds = sentImages?.map((s: any) => s.image_id) || [];
+
+    // 3. Query matching images - PRIORITY: Newest (created_at DESC)
     let query = supabase
         .from('riya_gallery')
-        .select('id, filename, storage_path, description, category, times_sent');
+        .select('id, filename, storage_path, description, category, times_sent, created_at')
+        .order('created_at', { ascending: false }); // LATEST FIRST
 
     if (targetCategory === 'private_snaps') {
         query = query.eq('category', 'private_snaps');
@@ -438,33 +495,97 @@ async function selectContextualImage(
     }
 
     const { data: images, error } = await query;
+    if (error) console.error(`❌ Gallery query error: ${error.message}`);
 
-    if (error || !images || images.length === 0) {
-        // Fallback to generic
+    // Filter out already sent images if we have alternatives
+    let available = images || [];
+    const originalCount = available.length;
+    const unseenAvailable = available.filter((img: any) => !sentIds.includes(img.id));
+    let didRecycle = false;
+
+    if (unseenAvailable.length > 0) {
+        // Still have unseen images — use those
+        available = unseenAvailable;
+    } else if (originalCount > 0) {
+        // All images in this category have been seen — clear sent records and recycle
+        console.log(`🔄 All images in '${targetCategory}' seen by ${igUserId}. Clearing sent records & recycling pool.`);
+        didRecycle = true;
+
+        // Delete sent records for this user's images in this specific category
+        // so the next query starts fresh for this category
+        const categoryImageIds = (images || []).map((img: any) => img.id);
+        if (categoryImageIds.length > 0) {
+            await supabase
+                .from('riya_sent_images')
+                .delete()
+                .eq('instagram_user_id', igUserId)
+                .in('image_id', categoryImageIds);
+            console.log(`🗑️ Cleared ${categoryImageIds.length} sent records for '${targetCategory}' (${igUserId})`);
+        }
+
+        available = images || [];
+    }
+
+    // 4. Fallback handle (if target category is empty)
+    if (!available || available.length === 0) {
+        console.log(`⚠️ No images in '${targetCategory}' (sent or unsent). Falling back to generic_selfie.`);
         const { data: fallback } = await supabase
             .from('riya_gallery')
             .select('*')
-            .eq('category', 'generic_selfie');
+            .eq('category', 'generic_selfie')
+            .order('created_at', { ascending: false });
 
-        if (!fallback || fallback.length === 0) return null;
-
-        const selected = fallback[Math.floor(Math.random() * fallback.length)];
-        const { data: urlData } = supabase.storage.from('riya-images').getPublicUrl(selected.storage_path);
-
-        return {
-            url: urlData.publicUrl,
-            description: selected.description,
-            category: selected.category,
-        };
+        const unseenFallback = fallback?.filter((img: any) => !sentIds.includes(img.id)) || [];
+        if (unseenFallback.length === 0 && fallback && fallback.length > 0) {
+            console.log(`🔄 Recycling generic_selfie pool for ${igUserId}`);
+            // Clear sent records for generic_selfie too
+            const fallbackIds = fallback.map((img: any) => img.id);
+            await supabase
+                .from('riya_sent_images')
+                .delete()
+                .eq('instagram_user_id', igUserId)
+                .in('image_id', fallbackIds);
+            available = fallback;
+        } else {
+            available = unseenFallback;
+        }
     }
 
-    const selected = images[Math.floor(Math.random() * images.length)];
+    if (!available || available.length === 0) {
+        console.error("❌ NO IMAGES FOUND EVEN IN FALLBACK!");
+        return null;
+    }
+
+    // 5. Selection Strategy: RANDOM from available pool
+    // Random pick ensures variety — avoids always picking the same "newest" image
+    // especially after a recycle where available[0] would always be the same image.
+    const randomIndex = Math.floor(Math.random() * available.length);
+    const selected = available[randomIndex];
+
     const { data: urlData } = supabase.storage.from('riya-images').getPublicUrl(selected.storage_path);
 
-    // Increment times_sent
-    await supabase.from('riya_gallery')
-        .update({ times_sent: (selected.times_sent || 0) + 1 })
-        .eq('id', selected.id);
+    console.log(`📷 Selected (Random): ${selected.filename} [${randomIndex + 1}/${available.length}] (Created: ${selected.created_at})`);
+    console.log(`📷 Public URL: ${urlData.publicUrl}`);
+
+    // 6. Track as sent — check first to avoid race-condition duplicates
+    const { data: alreadyTracked } = await supabase
+        .from('riya_sent_images')
+        .select('id')
+        .eq('instagram_user_id', igUserId)
+        .eq('image_id', selected.id)
+        .single();
+
+    await Promise.all([
+        !alreadyTracked
+            ? supabase.from('riya_sent_images').insert({
+                instagram_user_id: igUserId,
+                image_id: selected.id
+            })
+            : Promise.resolve(),
+        supabase.from('riya_gallery')
+            .update({ times_sent: (selected.times_sent || 0) + 1 })
+            .eq('id', selected.id)
+    ]);
 
     return {
         url: urlData.publicUrl,
@@ -568,7 +689,7 @@ Write a short memory (MAX 200 words). Include:
 
 Keep it simple like texting. Third person about user.`;
 
-    // Try models in order: Flash Lite → Flash → Flash Preview
+    // Try models in order: Flash Lite → Flash → Flash 2.0 (last resort)
     const models = [SUMMARY_MODEL_PRIMARY, SUMMARY_MODEL_FALLBACK, SUMMARY_MODEL_LAST_RESORT];
 
     for (const modelName of models) {
@@ -928,6 +1049,11 @@ serve(async (req) => {
         const currentMsgCount = user.daily_message_count || 0;
         const currentImgCount = user.daily_image_count || 0;
 
+        // Determine free base messages (Day 1: 200, Thereafter: 100)
+        const isFirstDay = new Date(user.created_at).toISOString().split('T')[0] === todayStr;
+        const FREE_BASE_MSGS = isFirstDay ? DAY_1_FREE_BASE : RETURNING_FREE_BASE;
+        console.log(`📏 Daily message limits: ${FREE_BASE_MSGS} (Day 1: ${isFirstDay})`);
+
         // 3.2 Hard Block — 3-stage flow
         const hardBlockLimit = FREE_BASE_MSGS + HARD_BLOCK_OFFSET;
         const deadStopLimit = hardBlockLimit + FAREWELL_WINDOW; // After farewell window, dead stop
@@ -1033,7 +1159,16 @@ serve(async (req) => {
         const lockedLanguage = langMatch ? langMatch[1] : null;
         if (lockedLanguage) console.log(`🌐 Language lock detected: ${lockedLanguage}`);
 
-        const systemPrompt = getInstagramSystemPrompt(userName, user.user_age, isPro, currentMsgCount, lockedLanguage, silentReason);
+        const systemPrompt = getInstagramSystemPrompt(
+            userName,
+            user.user_age,
+            isPro,
+            currentMsgCount,
+            FREE_BASE_MSGS,
+            lockedLanguage,
+            silentReason,
+            !isFirstDay
+        );
 
         const GEMINI_API_KEY = getNextApiKey();
         const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
@@ -1041,8 +1176,8 @@ serve(async (req) => {
         const model = genAI.getGenerativeModel({
             model: MODEL_NAME,
             systemInstruction: systemPrompt,
-            // @ts-ignore — disable thinking to prevent thought token leaks
-            thinkingConfig: { thinkingLevel: 'none' },
+            // @ts-ignore — gemini-2.5-flash supports thinkingConfig to disable internal chain-of-thought tokens
+            thinkingConfig: { thinkingBudget: 0 },
         });
 
         const chat = model.startChat({
@@ -1237,7 +1372,9 @@ serve(async (req) => {
             }
 
             // Handle image requests
-            if (msg.send_image && msg.image_context) {
+            if (msg.send_image) {
+                console.log(`🖼️ Image requested: context="${msg.image_context || 'fallback'}"`);
+
                 // Check Image Limit
                 if (!isPro && currentImgCount >= LIMIT_DAILY_IMAGES_FREE) {
                     const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
@@ -1252,17 +1389,23 @@ serve(async (req) => {
 
                 // Block Private Snaps for Free Users
                 if (!isPro && msg.image_context === 'private_snaps') {
-                    const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
-                    await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'private_snaps' });
-                    await sendInstagramMessage(
-                        senderId,
-                        `Ye wali photos sirf mere Pro boyfriend ke liye hain 🤫 Pro loge toh pura mahina unlimited photos aur baatein karenge 💕\n\n${paymentLink}`,
-                        accessToken
-                    );
-                    continue; // Skip sending image
+                    // IF BELOW DAILY LIMIT: Allow private snaps (user feedback)
+                    if (currentImgCount < LIMIT_DAILY_IMAGES_FREE) {
+                        console.log(`✅ Free user requested private_snap and below limit. Allowing.`);
+                    } else {
+                        // OVER LIMIT: send upsell
+                        const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
+                        await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'private_snaps' });
+                        await sendInstagramMessage(
+                            senderId,
+                            `Ye wali photos sirf mere Pro boyfriend ke liye hain 🤫 Gift me a monthly recharge aur phir pura mahina unlimited photos aur baatein karenge 💕\n\n${paymentLink}`,
+                            accessToken
+                        );
+                        continue; // Skip sending image
+                    }
                 }
 
-                const image = await selectContextualImage(supabase, msg.image_context);
+                const image = await selectContextualImage(supabase, msg.image_context || '', senderId);
                 if (image) {
                     await sendInstagramMessage(senderId, {
                         attachment: {
@@ -1279,6 +1422,8 @@ serve(async (req) => {
                             last_interaction_date: new Date().toISOString()
                         })
                         .eq('instagram_user_id', senderId);
+                } else {
+                    console.error(`❌ FAILED TO SELECT IMAGE for ${senderId}`);
                 }
             }
 

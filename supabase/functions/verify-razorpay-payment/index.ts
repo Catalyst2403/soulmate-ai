@@ -307,6 +307,21 @@ Deno.serve(async (req) => {
 
         console.log(`✅ Payment ${paymentId} verified and subscription activated for user ${userId || instagramUserId}`);
 
+        // Log payment_success event for analytics funnel (never break payment flow)
+        try {
+            const igId = instagramUserId || null;
+            if (igId) {
+                await supabase.from('riya_payment_events').insert({
+                    instagram_user_id: igId,
+                    event_type: 'payment_success',
+                    metadata: { orderId, paymentId, planType, source: 'verify-razorpay-payment' },
+                });
+                console.log(`📊 payment_success event logged for ${igId}`);
+            }
+        } catch (e) {
+            console.warn('⚠️ payment_success event log failed (non-critical):', e);
+        }
+
         return new Response(
             JSON.stringify({
                 success: true,

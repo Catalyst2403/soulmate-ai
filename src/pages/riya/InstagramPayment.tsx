@@ -128,16 +128,7 @@ const InstagramPayment = () => {
     const handlePayment = async () => {
         console.log("💳 Start Payment Clicked");
 
-        // Track upgrade button click
-        if (instagramUserId) {
-            (supabase as any).from('riya_payment_events').insert({
-                instagram_user_id: instagramUserId,
-                event_type: 'upgrade_click',
-            }).then(({ error }: { error: any }) => {
-                if (error) console.warn('⚠️ Failed to log upgrade_click:', error);
-                else console.log('📊 upgrade_click logged for', instagramUserId);
-            });
-        }
+        // Bail early if no valid user
         if (!instagramUserId) {
             console.error("❌ No Instagram User ID found");
             toast({
@@ -147,6 +138,15 @@ const InstagramPayment = () => {
             });
             return;
         }
+
+        // Track upgrade button click (after validating user ID)
+        (supabase as any).from('riya_payment_events').insert({
+            instagram_user_id: instagramUserId,
+            event_type: 'upgrade_click',
+        }).then(({ error }: { error: any }) => {
+            if (error) console.warn('⚠️ Failed to log upgrade_click:', error);
+            else console.log('📊 upgrade_click logged for', instagramUserId);
+        });
 
         setIsLoading(true);
 
