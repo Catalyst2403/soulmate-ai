@@ -52,7 +52,7 @@ const InstagramPayment = () => {
     const [isSuccess, setIsSuccess] = useState(false);
     const [language, setLanguage] = useState<'en' | 'hi'>('en'); // Default to English
     const [showFullImage, setShowFullImage] = useState(false);
-    const [hasAgreedToTerms, setHasAgreedToTerms] = useState(false);
+
 
     // ... (rest of the component logic remains the same until the return statement)
     const content = {
@@ -379,34 +379,10 @@ const InstagramPayment = () => {
                     </div>
 
                     <div className="mt-auto pt-6">
-                        <div className="flex items-start gap-3 mb-6 group cursor-pointer" onClick={() => setHasAgreedToTerms(!hasAgreedToTerms)}>
-                            <div className={`mt-0.5 w-5 h-5 rounded border flex items-center justify-center shrink-0 transition-colors ${hasAgreedToTerms ? 'bg-[#E1306C] border-[#E1306C]' : 'bg-gray-800 border-white/20'}`}>
-                                {hasAgreedToTerms && <Check className="w-3.5 h-3.5 text-white" />}
-                            </div>
-                            <p className="text-xs text-gray-400 leading-relaxed select-none">
-                                {t.agreeText}
-                                <Link
-                                    to={`/riya/privacy-policy?returnPath=${encodeURIComponent(`/riya/pay/instagram?id=${instagramUserId}`)}`}
-                                    className="text-pink-400 hover:text-pink-300 transition-colors underline"
-                                    onClick={(e) => e.stopPropagation()}
-                                >
-                                    {t.privacy}
-                                </Link>
-                                {t.and}
-                                <Link
-                                    to={`/riya/terms?returnPath=${encodeURIComponent(`/riya/pay/instagram?id=${instagramUserId}`)}`}
-                                    className="text-pink-400 hover:text-pink-300 transition-colors underline"
-                                    onClick={(e) => e.stopPropagation()}
-                                >
-                                    {t.terms}
-                                </Link>
-                            </p>
-                        </div>
-
                         <Button
                             className="w-full h-14 text-lg font-bold bg-gradient-to-r from-[#833AB4] via-[#FD1D1D] to-[#F77737] hover:opacity-90 disabled:opacity-40 disabled:grayscale transition-all rounded-xl"
                             onClick={handlePayment}
-                            disabled={isLoading || !hasAgreedToTerms}
+                            disabled={isLoading}
                         >
                             {isLoading ? (
                                 <span className="flex items-center gap-2">
@@ -425,7 +401,24 @@ const InstagramPayment = () => {
                                 ⚠️ Please do not close or refresh this window until verification is complete!
                             </p>
                         )}
-                        <div className="text-center mt-4">
+                        <p className="text-xs text-gray-500 text-center mt-3 leading-relaxed">
+                            By upgrading you agree to our{' '}
+                            <Link
+                                to={`/riya/privacy-policy?returnPath=${encodeURIComponent(`/riya/pay/instagram?id=${instagramUserId}`)}`}
+                                className="text-pink-400 hover:text-pink-300 transition-colors underline whitespace-nowrap"
+                            >
+                                {t.privacy}
+                            </Link>
+                            {' '}and{' '}
+                            <Link
+                                to={`/riya/terms?returnPath=${encodeURIComponent(`/riya/pay/instagram?id=${instagramUserId}`)}`}
+                                className="text-pink-400 hover:text-pink-300 transition-colors underline whitespace-nowrap"
+                            >
+                                {t.terms}
+                            </Link>
+                            .
+                        </p>
+                        <div className="text-center mt-3">
                             <p className="text-xs text-gray-500">
                                 {t.footer}
                             </p>
