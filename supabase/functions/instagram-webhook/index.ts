@@ -15,12 +15,29 @@ const corsHeaders = {
 // Instagram-specific constants
 const DEFAULT_AGE = 23;
 const DEFAULT_GENDER = 'male';
-const MODEL_NAME = "gemini-2.5-flash";
+const MODEL_NAME = "gemini-2.5-flash";          // Primary model
+const MODEL_FALLBACK = "gemini-2.5-flash-lite";    // Fallback if primary hits quota
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 30;
 
+// =======================================
+// DEBOUNCE CONFIGURATION
+// =======================================
+// When a user sends multiple messages in quick succession, we wait
+// DEBOUNCE_MS before processing, then merge all messages into one AI call.
+const DEBOUNCE_MS = 3500; // 3.5 second debounce window
+const DEBOUNCE_TABLE = 'riya_pending_messages';
+
+// Max tokens to budget for conversation history (approximate).
+// 1 token ≈ 4 chars. We cap history contribution at ~80k tokens (~320k chars)
+// to stay well within the 1M TPM limit even for power users.
+const MAX_HISTORY_CHARS = 200_000;
+
 // Summarization settings
+// Heavy users (>200 total msgs) get a tighter recent window to cap token usage
 const RECENT_MESSAGES_LIMIT = 25;
+const HEAVY_USER_THRESHOLD = 200;  // total messages to be considered heavy
+const HEAVY_USER_RECENT_LIMIT = 15; // reduced context window for heavy users
 const SUMMARIZE_THRESHOLD = 40;
 const SUMMARY_MODEL_PRIMARY = "gemini-2.5-flash-lite";
 const SUMMARY_MODEL_FALLBACK = "gemini-2.5-flash";
@@ -715,99 +732,203 @@ Keep it simple like texting. Third person about user.`;
 // MAIN WEBHOOK HANDLER
 // =======================================
 
+// =======================================
+// PARSED MESSAGE TYPE
+// =======================================
+interface ParsedMessage {
+    senderId: string;
+    messageText: string;  // may be merged from multiple messages
+    messageId: string;
+    replyToMid: string | null;
+    attachmentContext: string;
+    pendingRowId?: string; // riya_pending_messages.id for cleanup
+}
+
+// =======================================
+// DEBOUNCE + MERGE LOGIC
+// =======================================
+async function debounceAndProcess(
+    parsed: ParsedMessage,
+    supabase: ReturnType<typeof createClient>,
+    accessToken: string
+): Promise<void> {
+    const { senderId, messageId } = parsed;
+
+    // 1. Insert this message into the pending table (idempotent via UNIQUE message_id)
+    const { data: inserted, error: insertErr } = await supabase
+        .from(DEBOUNCE_TABLE)
+        .upsert(
+            {
+                user_id: senderId,
+                message_id: messageId,
+                message_text: parsed.messageText,
+                status: 'pending',
+            },
+            { onConflict: 'message_id', ignoreDuplicates: false }
+        )
+        .select('id, created_at')
+        .single();
+
+    if (insertErr || !inserted) {
+        console.error('❌ Failed to insert pending message:', insertErr);
+        return; // can't debounce without DB row
+    }
+
+    const myRowId = inserted.id as string;
+    const myCreatedAt = inserted.created_at as string;
+    console.log(`⏳ Debounce: inserted pending row ${myRowId} for user ${senderId}, sleeping ${DEBOUNCE_MS}ms...`);
+
+    // 2. Sleep the debounce window
+    await new Promise<void>((res) => setTimeout(res, DEBOUNCE_MS));
+
+    // 3. Check: am I the LATEST pending message for this user?
+    const { data: latest } = await supabase
+        .from(DEBOUNCE_TABLE)
+        .select('id, created_at')
+        .eq('user_id', senderId)
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+
+    if (!latest || latest.id !== myRowId) {
+        // A newer message came in — let it handle the batch; I exit silently.
+        console.log(`⏭️ Debounce: absorbing row ${myRowId} (newer message ${latest?.id} will handle batch)`);
+        await supabase
+            .from(DEBOUNCE_TABLE)
+            .update({ status: 'absorbed' })
+            .eq('id', myRowId);
+        return;
+    }
+
+    // 4. I am the last writer — collect ALL pending messages for this user
+    const { data: allPending } = await supabase
+        .from(DEBOUNCE_TABLE)
+        .select('id, message_text, created_at')
+        .eq('user_id', senderId)
+        .eq('status', 'pending')
+        .order('created_at', { ascending: true });
+
+    const pendingRows = allPending || [];
+    const pendingIds = pendingRows.map((r: any) => r.id as string);
+
+    // Mark all as 'processing' atomically
+    await supabase
+        .from(DEBOUNCE_TABLE)
+        .update({ status: 'processing' })
+        .in('id', pendingIds);
+
+    // 5. Merge messages in chronological order
+    const mergedText = pendingRows
+        .map((r: any) => (r.message_text as string).trim())
+        .filter(Boolean)
+        .join('\n');
+
+    console.log(`🔀 Debounce: merging ${pendingRows.length} message(s) for ${senderId}: "${mergedText.slice(0, 120)}"`);
+
+    // 6. Process the merged message
+    const mergedParsed: ParsedMessage = {
+        ...parsed,
+        messageText: mergedText,
+        pendingRowId: myRowId,
+    };
+
+    try {
+        await handleRequest(mergedParsed, supabase, accessToken);
+        // Mark done
+        await supabase.from(DEBOUNCE_TABLE).update({ status: 'done' }).in('id', pendingIds);
+    } catch (err) {
+        console.error('❌ handleRequest failed after debounce:', err);
+        await supabase.from(DEBOUNCE_TABLE).update({ status: 'error' }).in('id', pendingIds);
+    }
+
+    // 7. Cleanup old rows (older than 10 min) — best effort
+    supabase
+        .from(DEBOUNCE_TABLE)
+        .delete()
+        .lt('created_at', new Date(Date.now() - 600_000).toISOString())
+        .then(() => console.log('🧹 Cleaned old pending message rows'))
+        .catch(() => { }); // fire-and-forget
+}
+
+// =======================================
+// MAIN WEBHOOK SERVE
+// =======================================
 serve(async (req) => {
     const url = new URL(req.url);
 
-    console.log(`🔔 ${req.method} request received at ${new Date().toISOString()}`);
-    console.log(`🔗 URL: ${req.url}`);
-    console.log(`📋 Headers: content-type=${req.headers.get('content-type')}, x-hub-signature=${req.headers.get('x-hub-signature-256') ? 'present' : 'missing'}`);
-
     // CORS preflight
-    if (req.method === "OPTIONS") {
+    if (req.method === 'OPTIONS') {
         return new Response(null, { headers: corsHeaders });
     }
 
-    // =======================================
-    // WEBHOOK VERIFICATION (GET)
-    // =======================================
-    if (req.method === "GET") {
-        const mode = url.searchParams.get("hub.mode");
-        const token = url.searchParams.get("hub.verify_token");
-        const challenge = url.searchParams.get("hub.challenge");
-
-        const verifyToken = Deno.env.get("INSTAGRAM_VERIFY_TOKEN");
-        console.log(`🔑 Verify: mode=${mode}, token_match=${token === verifyToken}, challenge=${challenge}`);
-
-        if (mode === "subscribe" && token === verifyToken) {
-            console.log("✅ Webhook verified");
+    // GET = webhook verification — handle inline (no debounce needed)
+    if (req.method === 'GET') {
+        const mode = url.searchParams.get('hub.mode');
+        const token = url.searchParams.get('hub.verify_token');
+        const challenge = url.searchParams.get('hub.challenge');
+        const verifyToken = Deno.env.get('INSTAGRAM_VERIFY_TOKEN');
+        console.log(`🔑 Verify: mode=${mode}, token_match=${token === verifyToken}`);
+        if (mode === 'subscribe' && token === verifyToken) {
+            console.log('✅ Webhook verified');
             return new Response(challenge, { status: 200 });
         }
-
-        console.warn("❌ Webhook verification failed");
-        return new Response("Forbidden", { status: 403 });
+        return new Response('Forbidden', { status: 403 });
     }
 
-    // =======================================
-    // MESSAGE HANDLING (POST)
-    // =======================================
+    if (req.method !== 'POST') {
+        return new Response('Method not allowed', { status: 405 });
+    }
+
+    // --- POST: parse body and respond 200 to Instagram IMMEDIATELY ---
+    // Instagram requires a fast 200 or it marks the webhook as failed and retries.
+    let bodyText = '';
     try {
-        const bodyText = await req.text();
-        console.log("📨 Webhook POST received, body length:", bodyText.length);
-        console.log("📨 FULL BODY:", bodyText.substring(0, 2000)); // Log full payload
+        bodyText = await req.text();
+    } catch {
+        return new Response('OK', { status: 200 }); // can't read body, ack anyway
+    }
 
-        const payload = JSON.parse(bodyText);
-        console.log("📦 Payload object:", payload.object);
-        console.log("📦 Entry count:", payload.entry?.length);
-        console.log("📦 Entry[0] id:", payload.entry?.[0]?.id);
-        console.log("📦 Entry[0] time:", payload.entry?.[0]?.time);
-        console.log("📦 Messaging count:", payload.entry?.[0]?.messaging?.length);
-        console.log("📦 Changes count:", payload.entry?.[0]?.changes?.length);
+    console.log(`🔔 Webhook POST at ${new Date().toISOString()}, body length: ${bodyText.length}`);
 
-        // Log env vars availability
-        console.log("🔧 ENV CHECK: INSTAGRAM_ACCESS_TOKEN=", Deno.env.get("INSTAGRAM_ACCESS_TOKEN") ? "SET" : "MISSING");
-        console.log("🔧 ENV CHECK: INSTAGRAM_APP_SECRET=", Deno.env.get("INSTAGRAM_APP_SECRET") ? "SET" : "MISSING");
-        console.log("🔧 ENV CHECK: SUPABASE_URL=", Deno.env.get("SUPABASE_URL") ? "SET" : "MISSING");
+    let payload: any;
+    try { payload = JSON.parse(bodyText); } catch {
+        console.warn('⚠️ Unparseable body');
+        return new Response('OK', { status: 200 });
+    }
 
-        // Validate signature (log but don't block during testing)
-        const appSecret = Deno.env.get("INSTAGRAM_APP_SECRET");
-        if (appSecret) {
-            const isValid = await validateSignature(req, bodyText, appSecret);
-            console.log("🔐 Signature valid:", isValid);
-            if (!isValid) {
-                console.warn("⚠️ Invalid signature - proceeding anyway for testing");
-            }
-        } else {
-            console.warn("⚠️ No INSTAGRAM_APP_SECRET set, skipping signature validation");
-        }
+    if (payload.object !== 'instagram') {
+        return new Response('OK', { status: 200 });
+    }
 
-        // Check if this is an Instagram webhook
-        if (payload.object !== "instagram") {
-            return new Response("OK", { status: 200 });
-        }
+    // Validate signature (log, don't block)
+    const appSecret = Deno.env.get('INSTAGRAM_APP_SECRET');
+    if (appSecret) {
+        const isValid = await validateSignature(req, bodyText, appSecret);
+        console.log('🔐 Signature valid:', isValid);
+        if (!isValid) console.warn('⚠️ Invalid signature — proceeding');
+    }
 
-        // Extract messaging data
-        const entry = payload.entry?.[0];
-        const messaging = entry?.messaging?.[0];
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const supabase = createClient(supabaseUrl, supabaseKey);
+    const accessToken = Deno.env.get('INSTAGRAM_ACCESS_TOKEN')!;
 
-        if (!messaging) {
-            console.log("⏭️ No messaging data in webhook");
-            return new Response("OK", { status: 200 });
-        }
+    const entry = payload.entry?.[0];
+    const messaging = entry?.messaging?.[0];
 
-        // ECHO HANDLING: Save messages sent BY Riya's account for context
-        // but don't generate a response (covers both bot replies and manual DMs)
-        if (messaging.message?.is_echo) {
-            console.log("⏭️ Echo message (sent by us) - saving for context");
+    if (!messaging) {
+        console.log('⏭️ No messaging data or not a message event');
+        return new Response('OK', { status: 200 });
+    }
 
-            // Save to DB so manual messages appear in conversation history
-            if (messaging.message?.text) {
-                const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-                const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-                const echoSupabase = createClient(supabaseUrl, supabaseKey);
-                const recipientId = messaging.recipient?.id;
-
-                // Deduplicate: check if this exact message was already saved (bot replies save their own)
-                const { data: existing } = await echoSupabase
+    // Echo messages: save manual DMs for context, don't generate a reply
+    if (messaging.message?.is_echo) {
+        console.log('⏭️ Echo message (sent by us) — saving for context');
+        if (messaging.message?.text) {
+            const recipientId = messaging.recipient?.id;
+            if (recipientId) {
+                const { data: existing } = await supabase
                     .from('riya_conversations')
                     .select('id')
                     .eq('source', 'instagram')
@@ -816,116 +937,111 @@ serve(async (req) => {
                     .eq('instagram_user_id', recipientId)
                     .gte('created_at', new Date(Date.now() - 60000).toISOString())
                     .single();
-
-                if (!existing && recipientId) {
-                    await echoSupabase.from('riya_conversations').insert({
-                        user_id: null,
-                        guest_session_id: null,
+                if (!existing) {
+                    await supabase.from('riya_conversations').insert({
+                        user_id: null, guest_session_id: null,
                         instagram_user_id: recipientId,
-                        source: 'instagram',
-                        role: 'assistant',
-                        content: messaging.message.text,
-                        model_used: 'manual',
+                        source: 'instagram', role: 'assistant',
+                        content: messaging.message.text, model_used: 'manual',
                         created_at: new Date().toISOString(),
                     });
                     console.log(`💬 Manual message saved for context (to ${recipientId})`);
                 }
             }
-
-            return new Response("OK", { status: 200 });
         }
+        return new Response('OK', { status: 200 });
+    }
 
-        // =======================================
-        // HANDLE ATTACHMENTS (images, reels, GIFs, videos, posts)
-        // =======================================
-        const attachments = messaging.message?.attachments;
-        let attachmentContext = '';
-
-        if (attachments && attachments.length > 0) {
-            const attachmentDescriptions: string[] = [];
-
-            for (const att of attachments) {
-                switch (att.type) {
-                    case 'image':
-                        attachmentDescriptions.push('[User sent a photo/image]');
-                        break;
-                    case 'video':
-                        attachmentDescriptions.push('[User sent a video]');
-                        break;
-                    case 'audio':
-                        attachmentDescriptions.push('[User sent a voice message]');
-                        break;
-                    case 'ig_reel':
-                        const reelTitle = att.payload?.title || '';
-                        attachmentDescriptions.push(
-                            reelTitle
-                                ? `[User shared a reel: "${reelTitle}"]`
-                                : '[User shared a reel]'
-                        );
-                        break;
-                    case 'ig_post':
-                        const postTitle = att.payload?.title || '';
-                        attachmentDescriptions.push(
-                            postTitle
-                                ? `[User shared an Instagram post: "${postTitle}"]`
-                                : '[User shared an Instagram post]'
-                        );
-                        break;
-                    case 'share':
-                        attachmentDescriptions.push('[User shared a link/post]');
-                        break;
-                    case 'story_mention':
-                        attachmentDescriptions.push('[User mentioned you in their story]');
-                        break;
-                    case 'animated_image':
-                        attachmentDescriptions.push('[User sent a GIF]');
-                        break;
-                    default:
-                        attachmentDescriptions.push(`[User sent ${att.type || 'something'}]`);
-                        break;
+    // Attachment handling
+    const attachments = messaging.message?.attachments;
+    let attachmentContext = '';
+    if (attachments?.length > 0) {
+        const descs: string[] = [];
+        for (const att of attachments) {
+            switch (att.type) {
+                case 'image': descs.push('[User sent a photo/image]'); break;
+                case 'video': descs.push('[User sent a video]'); break;
+                case 'audio': descs.push('[User sent a voice message]'); break;
+                case 'ig_reel': {
+                    const t = att.payload?.title || '';
+                    descs.push(t ? `[User shared a reel: "${t}"]` : '[User shared a reel]');
+                    break;
                 }
+                case 'ig_post': {
+                    const t = att.payload?.title || '';
+                    descs.push(t ? `[User shared an Instagram post: "${t}"]` : '[User shared an Instagram post]');
+                    break;
+                }
+                case 'share': descs.push('[User shared a link/post]'); break;
+                case 'story_mention': descs.push('[User mentioned you in their story]'); break;
+                case 'animated_image': descs.push('[User sent a GIF]'); break;
+                default: descs.push(`[User sent ${att.type || 'something'}]`); break;
             }
-
-            attachmentContext = attachmentDescriptions.join(' ');
-            console.log(`📎 Attachments: ${attachmentContext}`);
         }
+        attachmentContext = descs.join(' ');
+        console.log(`📎 Attachments: ${attachmentContext}`);
+    }
 
-        // Skip if no text AND no attachments (read receipts, reactions, etc.)
-        if (!messaging.message?.text && !attachmentContext) {
-            console.log("⏭️ No text or attachments (could be read receipt, reaction, etc.)");
-            return new Response("OK", { status: 200 });
-        }
+    // Skip if no text and no attachments (read receipts, reactions, etc.)
+    if (!messaging.message?.text && !attachmentContext) {
+        console.log('⏭️ No text or attachments — skipping');
+        return new Response('OK', { status: 200 });
+    }
 
-        const senderId = messaging.sender.id;
-        let messageText = messaging.message?.text || '';
-        const messageId = messaging.message.mid;
-        const replyToMid = messaging.message?.reply_to?.mid;
+    const senderId: string = messaging.sender.id;
+    let messageText: string = messaging.message?.text || '';
+    const messageId: string = messaging.message?.mid || `${senderId}-${Date.now()}`;
+    const replyToMid: string | null = messaging.message?.reply_to?.mid || null;
 
-        // Append attachment context to the message text for Gemini
-        if (attachmentContext) {
-            messageText = messageText
-                ? `${messageText} ${attachmentContext}`
-                : attachmentContext;
-        }
+    if (attachmentContext) {
+        messageText = messageText ? `${messageText} ${attachmentContext}` : attachmentContext;
+    }
 
-        console.log(`📬 Instagram message from ${senderId}: ${messageText.substring(0, 80)}...`);
-        if (replyToMid) {
-            console.log(`↩️ Reply to message: ${replyToMid}`);
-        }
+    console.log(`📬 Message from ${senderId}: "${messageText.slice(0, 80)}..."`);
 
-        // Initialize Supabase
-        const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-        const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-        const supabase = createClient(supabaseUrl, supabaseKey);
-        const accessToken = Deno.env.get("INSTAGRAM_ACCESS_TOKEN")!;
+    // --- Respond 200 to Instagram NOW (before debounce sleep) ---
+    // We fire debounceAndProcess in the background via EdgeRuntime.waitUntil
+    // so the response is sent immediately and Instagram doesn't retry.
+    const parsed: ParsedMessage = { senderId, messageText, messageId, replyToMid, attachmentContext };
 
-        // Rate limiting
+    // Use EdgeRuntime.waitUntil to keep the background task alive after response
+    try {
+        (globalThis as any).EdgeRuntime?.waitUntil(
+            debounceAndProcess(parsed, supabase, accessToken)
+        );
+    } catch {
+        // EdgeRuntime not available — fall back to fire-and-forget Promise
+        debounceAndProcess(parsed, supabase, accessToken).catch(console.error);
+    }
+
+    return new Response('OK', { status: 200 });
+});
+
+// =======================================
+// CORE MESSAGE HANDLER
+// Called by debounceAndProcess() after the debounce window has elapsed
+// and all pending messages have been merged into one.
+// =======================================
+async function handleRequest(
+    parsed: ParsedMessage,
+    supabase: ReturnType<typeof createClient>,
+    accessToken: string
+): Promise<void> {
+    const { senderId, messageId, replyToMid } = parsed;
+    let { messageText } = parsed; // let — may be prefixed with reply context below
+
+    console.log(`⚙️ handleRequest: processing merged message for ${senderId}: "${messageText.slice(0, 80)}"`);
+    if (replyToMid) console.log(`↩️ Reply to: ${replyToMid}`);
+
+    try {
+
+        // Rate limiting (in-memory guard — per debounced batch, not per raw message)
         if (isRateLimited(senderId)) {
-            await sendInstagramMessage(senderId, "Thoda slow baby 😅 Itne messages ek saath nahi!", accessToken);
-            return new Response("OK", { status: 200 });
+            await sendInstagramMessage(senderId, "Thoda slow baby \ud83d\ude05 Itne messages ek saath nahi!", accessToken);
+            return;
         }
 
-        // Deduplicate (check if message already processed)
+        // Deduplicate: if this exact merged text was already processed in the last 60s, skip
         const { data: existingMsg } = await supabase
             .from('riya_conversations')
             .select('id')
@@ -936,8 +1052,8 @@ serve(async (req) => {
             .single();
 
         if (existingMsg) {
-            console.log("⏭️ Duplicate message, skipping");
-            return new Response("OK", { status: 200 });
+            console.log('\u23ed\ufe0f Duplicate merged message, skipping');
+            return;
         }
 
         // =======================================
@@ -971,7 +1087,7 @@ serve(async (req) => {
             if (createError) {
                 console.error("❌ Failed to create user:", createError);
                 await sendInstagramMessage(senderId, "Oops kuch gadbad ho gayi 😅 Try again?", accessToken);
-                return new Response("OK", { status: 200 });
+                return;
             }
 
             user = newUser;
@@ -1013,7 +1129,7 @@ serve(async (req) => {
                     })
                     .eq('instagram_user_id', senderId);
 
-                return new Response("OK", { status: 200 });
+                return;
             } else {
                 // Cooldown expired — clear it and inject return context
                 console.log(`✅ Silent treatment expired for ${senderId}, resuming conversation`);
@@ -1061,7 +1177,7 @@ serve(async (req) => {
         // Stage 3: DEAD STOP — past farewell window, complete silence
         if (!isPro && currentMsgCount >= deadStopLimit) {
             console.log(`🚫 Dead stop for ${senderId} (${currentMsgCount}/${deadStopLimit}). No response.`);
-            return new Response("OK", { status: 200 });
+            return;
         }
 
         // Stage 1: FAREWELL WINDOW — AI generates emotional convincing
@@ -1099,16 +1215,33 @@ serve(async (req) => {
             console.error("Error fetching summary:", summaryError);
         }
 
-        // 4c. Fetch last 50 messages (sliding window)
+        // 4c. Fetch recent messages — use tighter window for heavy users to cap token usage
+        const recentLimit = totalMsgCount > HEAVY_USER_THRESHOLD
+            ? HEAVY_USER_RECENT_LIMIT
+            : RECENT_MESSAGES_LIMIT;
+        if (totalMsgCount > HEAVY_USER_THRESHOLD) {
+            console.log(`⚡ Heavy user (${totalMsgCount} msgs): capping context to ${recentLimit} messages to manage TPM`);
+        }
+
         const { data: history } = await supabase
             .from('riya_conversations')
             .select('role, content, created_at')
             .eq('instagram_user_id', senderId)
             .eq('source', 'instagram')
             .order('created_at', { ascending: false })
-            .limit(RECENT_MESSAGES_LIMIT);
+            .limit(recentLimit);
 
-        const conversationHistory = (history || []).reverse();
+        let conversationHistory = (history || []).reverse();
+
+        // Hard token-budget guard: if history is still too large, trim oldest messages
+        let totalHistoryChars = conversationHistory.reduce((sum: number, m: any) => sum + (m.content?.length || 0), 0);
+        while (totalHistoryChars > MAX_HISTORY_CHARS && conversationHistory.length > 4) {
+            const removed = conversationHistory.shift(); // drop oldest
+            totalHistoryChars -= (removed?.content?.length || 0);
+        }
+        if (totalHistoryChars > MAX_HISTORY_CHARS) {
+            console.warn(`⚠️ History still large (${totalHistoryChars} chars) after trimming — proceeding with ${conversationHistory.length} messages`);
+        }
 
         console.log(`📝 Context: ${existingSummary ? 'Summary + ' : ''}${conversationHistory.length} recent messages`);
         if (existingSummary) {
@@ -1170,24 +1303,6 @@ serve(async (req) => {
             !isFirstDay
         );
 
-        const GEMINI_API_KEY = getNextApiKey();
-        const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-
-        const model = genAI.getGenerativeModel({
-            model: MODEL_NAME,
-            systemInstruction: systemPrompt,
-            // @ts-ignore — gemini-2.5-flash supports thinkingConfig to disable internal chain-of-thought tokens
-            thinkingConfig: { thinkingBudget: 0 },
-        });
-
-        const chat = model.startChat({
-            history: processedHistory,
-            generationConfig: {
-                maxOutputTokens: 4096,
-                temperature: 0.9,
-            },
-        });
-
         // Handle reply-to context: if user replied to a specific message, prepend it
         if (replyToMid) {
             try {
@@ -1209,7 +1324,44 @@ serve(async (req) => {
             }
         }
 
-        const result = await chat.sendMessage(messageText);
+        // Generate response — try primary model, fall back on quota errors
+        let result: any;
+        let activeModel = MODEL_NAME;
+        try {
+            console.log(`🤖 Using primary model: ${MODEL_NAME}`);
+            const genAI = new GoogleGenerativeAI(getNextApiKey());
+            const model = genAI.getGenerativeModel({
+                model: MODEL_NAME,
+                systemInstruction: systemPrompt,
+                // @ts-ignore
+                thinkingConfig: { thinkingBudget: 0 },
+            });
+            const chat = model.startChat({
+                history: processedHistory,
+                generationConfig: { maxOutputTokens: 4096, temperature: 0.9 },
+            });
+            result = await chat.sendMessage(messageText);
+        } catch (primaryErr) {
+            const errMsg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
+            const isQuota = errMsg.includes('429') || errMsg.includes('quota') || errMsg.includes('Resource has been exhausted')
+                || errMsg.includes('404') || errMsg.toLowerCase().includes('not found') || errMsg.includes('model');
+            if (!isQuota) throw primaryErr; // Non-quota/model error — don't retry
+
+            console.warn(`⚠️ Primary model (${MODEL_NAME}) quota hit — switching to fallback: ${MODEL_FALLBACK}`);
+            activeModel = MODEL_FALLBACK;
+            const fallbackGenAI = new GoogleGenerativeAI(getNextApiKey());
+            const fallbackModel = fallbackGenAI.getGenerativeModel({
+                model: MODEL_FALLBACK,
+                systemInstruction: systemPrompt,
+            });
+            const fallbackChat = fallbackModel.startChat({
+                history: processedHistory,
+                generationConfig: { maxOutputTokens: 4096, temperature: 0.9 },
+            });
+            result = await fallbackChat.sendMessage(messageText);
+            console.log(`✅ Fallback model (${MODEL_FALLBACK}) responded successfully`);
+        }
+        console.log(`📌 Active model used: ${activeModel}`);
 
         // =======================================
         // EXTRACT RESPONSE (filter out thinking parts)
@@ -1556,10 +1708,11 @@ serve(async (req) => {
 
                     console.log(`📝 Summarizing ${msgsToSummarize.length} messages...`);
 
+                    const summaryGenAI = new GoogleGenerativeAI(getNextApiKey());
                     const newSummary = await generateConversationSummary(
                         msgsToSummarize,
                         existingSummary?.summary || null,
-                        genAI
+                        summaryGenAI
                     );
 
                     const { error: upsertError } = await supabase
@@ -1585,10 +1738,9 @@ serve(async (req) => {
             })();
         }
 
-        return new Response("OK", { status: 200 });
-
     } catch (error) {
-        console.error("❌ Instagram webhook error:", error);
-        return new Response("Internal error", { status: 500 });
+        console.error('\u274c handleRequest error:', error);
+        // Bubble up to debounceAndProcess() which marks pending rows as 'error'
+        throw error;
     }
-});
+}

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { Users, MessageSquare, TrendingUp, Lock, DollarSign, Activity, RefreshCw, Instagram, Target, Crown, Clock } from 'lucide-react';
+import { Users, MessageSquare, TrendingUp, Lock, DollarSign, Activity, RefreshCw, Instagram, Target, Crown, Clock, AlertCircle, Terminal, Search, Filter, ChevronDown, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -130,7 +130,121 @@ const RiyaAnalytics = () => {
     const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [activeUsersInterval, setActiveUsersInterval] = useState('7 days');
-    const [analyticsView, setAnalyticsView] = useState<'combined' | 'web' | 'instagram'>('instagram');
+    const [analyticsView, setAnalyticsView] = useState<'combined' | 'web' | 'instagram' | 'logs'>('instagram');
+
+    // Log viewer state
+    const [logs, setLogs] = useState<any[]>([]);
+    const [isLoadingLogs, setIsLoadingLogs] = useState(false);
+    const [logFilter, setLogFilter] = useState<'all' | 'error' | 'warn' | 'info'>('all');
+    const [logSearch, setLogSearch] = useState('');
+    const [logDateFrom, setLogDateFrom] = useState(() => {
+        const d = new Date();
+        d.setHours(d.getHours() - 3);
+        return d.toISOString().slice(0, 16); // datetime-local format
+    });
+    const [logDateTo, setLogDateTo] = useState(() => new Date().toISOString().slice(0, 16));
+    const [expandedLogs, setExpandedLogs] = useState<Set<number>>(new Set());
+    const [logFunction, setLogFunction] = useState<'instagram-webhook' | 'riya-chat' | 'riya-analytics'>('instagram-webhook');
+
+    // -------------------------------------------------------
+    // LOG FETCHER — queries riya_conversations for error analysis
+    // since Supabase Management API requires mgmt token.
+    // We pull recent conversations with model_used='silent' or
+    // look for users who got no response (dropped messages).
+    // -------------------------------------------------------
+    const fetchLogs = async () => {
+        setIsLoadingLogs(true);
+        setLogs([]);
+        try {
+            const supabase = getSupabase();
+            if (!supabase) { alert('Supabase config missing'); return; }
+
+            const fromTs = new Date(logDateFrom).toISOString();
+            const toTs = new Date(logDateTo).toISOString();
+
+            // Query: find user messages with NO assistant reply within 90 seconds
+            // These are the "dropped" / failed requests
+            let query = supabase
+                .from('riya_conversations')
+                .select('id, instagram_user_id, role, content, model_used, created_at')
+                .eq('source', 'instagram')
+                .gte('created_at', fromTs)
+                .lte('created_at', toTs)
+                .order('created_at', { ascending: false })
+                .limit(500);
+
+            if (logFilter === 'error') {
+                // model_used = 'silent' means dropped/blocked, or look for no follow-up
+                query = query.in('model_used', ['silent', 'manual']);
+            }
+
+            const { data, error } = await query;
+            if (error) throw error;
+
+            // Group into pseudo-log lines with severity
+            const enriched = (data || []).map((row: any) => {
+                let level: 'info' | 'warn' | 'error' = 'info';
+                let summary = '';
+
+                if (row.model_used === 'silent') { level = 'warn'; summary = '🔇 Message during silent treatment (no reply sent)'; }
+                else if (row.role === 'user') { level = 'info'; summary = `📨 User message`; }
+                else if (row.role === 'assistant') { level = 'info'; summary = `🤖 AI reply via ${row.model_used}`; }
+
+                return { ...row, level, summary };
+            });
+
+            // Client-side search filter
+            const search = logSearch.toLowerCase();
+            const filtered = enriched.filter((l: any) => {
+                const matchLevel = logFilter === 'all' || l.level === logFilter;
+                const matchSearch = !search || l.content?.toLowerCase().includes(search)
+                    || l.instagram_user_id?.includes(search)
+                    || l.summary?.toLowerCase().includes(search);
+                return matchLevel && matchSearch;
+            });
+
+            // Also fetch failed exchanges: user msgs with no assistant reply within 2 min
+            if (logFilter === 'error' || logFilter === 'all') {
+                const { data: userMsgs } = await supabase
+                    .from('riya_conversations')
+                    .select('id, instagram_user_id, content, created_at')
+                    .eq('source', 'instagram')
+                    .eq('role', 'user')
+                    .gte('created_at', fromTs)
+                    .lte('created_at', toTs)
+                    .order('created_at', { ascending: false })
+                    .limit(200);
+
+                // For each user msg, check if there's an assistant reply within 2 min
+                const allMsgs = data || [];
+                const failedExchanges = (userMsgs || []).filter((umsg: any) => {
+                    const cutoff = new Date(new Date(umsg.created_at).getTime() + 120_000).toISOString();
+                    return !allMsgs.some((m: any) =>
+                        m.role === 'assistant'
+                        && m.instagram_user_id === umsg.instagram_user_id
+                        && m.created_at > umsg.created_at
+                        && m.created_at <= cutoff
+                    );
+                }).map((umsg: any) => ({
+                    ...umsg,
+                    role: 'user',
+                    model_used: null,
+                    level: 'error' as const,
+                    summary: '❌ No AI reply within 2 min — possible crash/drop',
+                }));
+
+                filtered.unshift(...failedExchanges);
+                filtered.sort((a: any, b: any) => b.created_at.localeCompare(a.created_at));
+            }
+
+            setLogs(filtered);
+        } catch (err: any) {
+            console.error('Log fetch error:', err);
+            alert('Failed to fetch logs: ' + err.message);
+        } finally {
+            setIsLoadingLogs(false);
+        }
+    };
 
     // Drill-down state
     const [selectedTier, setSelectedTier] = useState<string | null>(null);
@@ -323,7 +437,7 @@ const RiyaAnalytics = () => {
                     transition={{ delay: 0.02 }}
                     className="flex gap-2 mb-6"
                 >
-                    {(['combined', 'web', 'instagram'] as const).map((view) => (
+                    {(['combined', 'web', 'instagram', 'logs'] as const).map((view) => (
                         <button
                             key={view}
                             onClick={() => setAnalyticsView(view)}
@@ -334,10 +448,183 @@ const RiyaAnalytics = () => {
                                 : 'bg-muted/10 text-muted-foreground hover:bg-muted/20'
                                 }`}
                         >
-                            {view === 'combined' ? '📊 Combined' : view === 'web' ? '🌐 Web' : '📸 Instagram'}
+                            {view === 'combined' ? '📊 Combined' : view === 'web' ? '🌐 Web' : view === 'instagram' ? '📸 Instagram' : '🔍 Logs'}
                         </button>
                     ))}
                 </motion.div>
+
+                {/* ===== LOG VIEWER PANEL ===== */}
+                {analyticsView === 'logs' && (
+                    <motion.div
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="glass-card p-6 mb-6"
+                    >
+                        <div className="flex items-center gap-2 mb-5">
+                            <Terminal className="w-5 h-5 text-amber-400" />
+                            <h2 className="font-display text-xl font-semibold text-foreground">Log Viewer</h2>
+                            <span className="ml-auto text-xs text-muted-foreground">
+                                {logs.length} entries
+                            </span>
+                        </div>
+
+                        {/* Filters */}
+                        <div className="flex flex-wrap gap-3 mb-4">
+                            {/* Date From */}
+                            <div className="flex flex-col gap-1">
+                                <label className="text-xs text-muted-foreground">From</label>
+                                <input
+                                    type="datetime-local"
+                                    value={logDateFrom}
+                                    onChange={e => setLogDateFrom(e.target.value)}
+                                    className="text-sm bg-muted/20 border border-border rounded-lg px-3 py-2 text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                                />
+                            </div>
+                            {/* Date To */}
+                            <div className="flex flex-col gap-1">
+                                <label className="text-xs text-muted-foreground">To</label>
+                                <input
+                                    type="datetime-local"
+                                    value={logDateTo}
+                                    onChange={e => setLogDateTo(e.target.value)}
+                                    className="text-sm bg-muted/20 border border-border rounded-lg px-3 py-2 text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                                />
+                            </div>
+                            {/* Level Filter */}
+                            <div className="flex flex-col gap-1">
+                                <label className="text-xs text-muted-foreground">Status</label>
+                                <select
+                                    value={logFilter}
+                                    onChange={e => setLogFilter(e.target.value as any)}
+                                    className="text-sm bg-muted/20 border border-border rounded-lg px-3 py-2 text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                                >
+                                    <option value="all">All Messages</option>
+                                    <option value="error">❌ Errors Only (no AI reply)</option>
+                                    <option value="warn">⚠️ Silent Treatment</option>
+                                    <option value="info">ℹ️ Info Only</option>
+                                </select>
+                            </div>
+                            {/* Search */}
+                            <div className="flex flex-col gap-1 flex-1 min-w-[160px]">
+                                <label className="text-xs text-muted-foreground">Search</label>
+                                <div className="relative">
+                                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+                                    <input
+                                        type="text"
+                                        placeholder="User ID, content..."
+                                        value={logSearch}
+                                        onChange={e => setLogSearch(e.target.value)}
+                                        className="w-full text-sm bg-muted/20 border border-border rounded-lg pl-8 pr-3 py-2 text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary"
+                                    />
+                                </div>
+                            </div>
+                            {/* Fetch Button */}
+                            <div className="flex flex-col justify-end">
+                                <button
+                                    onClick={fetchLogs}
+                                    disabled={isLoadingLogs}
+                                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-500/20 text-amber-400 border border-amber-500/30 hover:bg-amber-500/30 transition-colors text-sm font-semibold disabled:opacity-50"
+                                >
+                                    <RefreshCw className={`w-3.5 h-3.5 ${isLoadingLogs ? 'animate-spin' : ''}`} />
+                                    Fetch Logs
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Legend */}
+                        <div className="flex gap-4 mb-4 text-xs">
+                            <span className="flex items-center gap-1.5 text-red-400"><span className="w-2 h-2 rounded-full bg-red-400"></span>Error (no AI reply)</span>
+                            <span className="flex items-center gap-1.5 text-yellow-400"><span className="w-2 h-2 rounded-full bg-yellow-400"></span>Silent treatment</span>
+                            <span className="flex items-center gap-1.5 text-blue-400"><span className="w-2 h-2 rounded-full bg-blue-400"></span>Info</span>
+                        </div>
+
+                        {/* Log Table */}
+                        {isLoadingLogs ? (
+                            <div className="flex items-center justify-center py-12 gap-3 text-muted-foreground">
+                                <RefreshCw className="w-5 h-5 animate-spin" />
+                                Fetching logs...
+                            </div>
+                        ) : logs.length === 0 ? (
+                            <div className="text-center py-12 text-muted-foreground">
+                                <Filter className="w-8 h-8 mx-auto mb-3 opacity-40" />
+                                <p>No logs fetched yet — click "Fetch Logs" to load</p>
+                            </div>
+                        ) : (
+                            <div className="space-y-1 max-h-[600px] overflow-y-auto pr-1">
+                                {logs.map((log, idx) => {
+                                    const isExpanded = expandedLogs.has(idx);
+                                    const levelColor = log.level === 'error'
+                                        ? 'border-l-red-500 bg-red-500/5 hover:bg-red-500/10'
+                                        : log.level === 'warn'
+                                            ? 'border-l-yellow-500 bg-yellow-500/5 hover:bg-yellow-500/10'
+                                            : 'border-l-blue-500/40 bg-muted/5 hover:bg-muted/10';
+                                    const dotColor = log.level === 'error' ? 'bg-red-400' : log.level === 'warn' ? 'bg-yellow-400' : 'bg-blue-400';
+                                    const ts = new Date(log.created_at).toLocaleTimeString('en-IN', {
+                                        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'Asia/Kolkata'
+                                    });
+                                    const dateStr = new Date(log.created_at).toLocaleDateString('en-IN', { month: 'short', day: 'numeric', timeZone: 'Asia/Kolkata' });
+
+                                    return (
+                                        <div
+                                            key={idx}
+                                            className={`border-l-2 rounded-r-lg px-3 py-2 cursor-pointer transition-colors ${levelColor}`}
+                                            onClick={() => {
+                                                const next = new Set(expandedLogs);
+                                                isExpanded ? next.delete(idx) : next.add(idx);
+                                                setExpandedLogs(next);
+                                            }}
+                                        >
+                                            <div className="flex items-start gap-2">
+                                                <span className={`mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${dotColor}`}></span>
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="flex items-center gap-2 flex-wrap">
+                                                        <span className="text-xs text-muted-foreground font-mono">{dateStr} {ts} IST</span>
+                                                        <span className="text-xs text-muted-foreground">·</span>
+                                                        <span className="text-xs font-mono text-muted-foreground truncate max-w-[120px]" title={log.instagram_user_id}>
+                                                            {log.instagram_user_id ? `uid:${log.instagram_user_id.slice(-6)}` : '–'}
+                                                        </span>
+                                                        {log.model_used && (
+                                                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted/30 text-muted-foreground font-mono">{log.model_used}</span>
+                                                        )}
+                                                        <span className="ml-auto text-xs text-muted-foreground">{isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}</span>
+                                                    </div>
+                                                    <p className="text-sm text-foreground mt-0.5 truncate">
+                                                        {log.summary} — <span className="text-muted-foreground">{log.content?.slice(0, 80)}{log.content?.length > 80 ? '…' : ''}</span>
+                                                    </p>
+                                                </div>
+                                            </div>
+                                            {isExpanded && (
+                                                <div className="mt-2 ml-3.5 p-3 rounded-lg bg-muted/10 border border-border/30">
+                                                    <p className="text-xs text-muted-foreground mb-1">Full User ID: <span className="font-mono text-foreground">{log.instagram_user_id}</span></p>
+                                                    <p className="text-xs text-muted-foreground mb-1">Timestamp: <span className="font-mono text-foreground">{new Date(log.created_at).toISOString()}</span></p>
+                                                    <p className="text-xs text-muted-foreground mb-1">Role: <span className="font-mono text-foreground">{log.role}</span></p>
+                                                    <p className="text-xs text-muted-foreground">Message:</p>
+                                                    <pre className="text-xs text-foreground mt-1 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{log.content}</pre>
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+
+                        {/* Quick SQL hint */}
+                        <div className="mt-4 p-3 rounded-lg bg-muted/10 border border-border/30">
+                            <p className="text-xs text-muted-foreground font-semibold mb-1">🛠️ Advanced: Run in Supabase SQL Editor to find exact failure times:</p>
+                            <pre className="text-xs text-amber-400 overflow-x-auto whitespace-pre">{`SELECT c1.instagram_user_id, c1.created_at AS msg_time, c1.content
+FROM riya_conversations c1
+WHERE c1.role = 'user' AND c1.source = 'instagram'
+  AND c1.created_at >= NOW() - INTERVAL '24 hours'
+  AND NOT EXISTS (
+    SELECT 1 FROM riya_conversations c2
+    WHERE c2.instagram_user_id = c1.instagram_user_id
+      AND c2.role = 'assistant'
+      AND c2.created_at BETWEEN c1.created_at AND c1.created_at + INTERVAL '2 minutes'
+  )
+ORDER BY c1.created_at DESC;`}</pre>
+                        </div>
+                    </motion.div>
+                )}
 
                 {/* PMF Scorecard - Combined view only */}
                 {analyticsView === 'combined' && analytics.pmfScore && (
