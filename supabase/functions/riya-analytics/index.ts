@@ -343,16 +343,22 @@ serve(async (req) => {
             console.error('Error fetching payment events:', paymentError);
         }
 
+        const limitHits = paymentEvents?.filter((e: any) => e.event_type === 'limit_hit').length || 0;
         const linksSent = paymentEvents?.filter((e: any) => e.event_type === 'link_sent').length || 0;
         const pageVisits = paymentEvents?.filter((e: any) => e.event_type === 'page_visit').length || 0;
         const upgradeClicks = paymentEvents?.filter((e: any) => e.event_type === 'upgrade_click').length || 0;
         const paymentSuccesses = paymentEvents?.filter((e: any) => e.event_type === 'payment_success').length || 0;
+
+        // How many IG users have 200+ lifetime messages
+        const usersExhaustedFree = igUsers?.filter((u: any) => (u.message_count || 0) >= 200).length || 0;
 
         const visitRate = linksSent > 0 ? ((pageVisits / linksSent) * 100).toFixed(1) : '0';
         const clickRate = pageVisits > 0 ? ((upgradeClicks / pageVisits) * 100).toFixed(1) : '0';
         const paymentConvRate = upgradeClicks > 0 ? ((paymentSuccesses / upgradeClicks) * 100).toFixed(1) : '0';
 
         const paymentFunnel = {
+            usersExhaustedFree,
+            limitHits,
             linksSent,
             pageVisits,
             upgradeClicks,
@@ -362,7 +368,7 @@ serve(async (req) => {
             conversionRate: paymentConvRate,
         };
 
-        console.log(`💰 Payment Funnel: ${linksSent} sent → ${pageVisits} visits → ${upgradeClicks} clicks → ${paymentSuccesses} payments`);
+        console.log(`💰 Payment Funnel: ${usersExhaustedFree} exhausted → ${limitHits} hits → ${linksSent} sent → ${pageVisits} visits → ${upgradeClicks} clicks → ${paymentSuccesses} payments`);
 
         // New IG Users Per Day (last 30 days)
         const igNewUsersPerDay: Record<string, number> = {};
