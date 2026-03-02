@@ -1664,6 +1664,8 @@ Pick based on what you're talking about!
   • cafe_food: food, hangout plans
   • night_casual: late night, cozy vibes
   • generic_selfie: Default cute pic
+  • happy: happy mood, smiling, laughing, cheerful
+  • angry: angry mood, upset, annoyed, frustrated
 
 ═══════════ OUTPUT (CRITICAL) ═══════════
 MUST be JSON: [{"text":"msg"}]
@@ -1849,7 +1851,8 @@ Pick based on what you're TALKING about, not just time!
   • night_casual: "sone ja rahi?", late night vibes, cozy talk
   • private_snaps: ONLY when explicitly "hot pic", "spicy", "special"
   • generic_selfie: Default when no specific context
-
+  • happy: happy mood, smiling, laughing, cheerful
+  • angry: angry mood, upset, annoyed, frustrated
 Example: If user asks "kya pehna aaj?" at 10 PM → use outfit_check, NOT night_casual
 
 ═══════════ OUTPUT (CRITICAL) ═══════════
@@ -1956,7 +1959,8 @@ NO plain text - JSON only!
           • night_casual: evening wind-down, relaxing chat
           • private_snaps: ONLY when explicitly requested
           • generic_selfie: Default when no specific context
-
+          • happy: happy mood, smiling, laughing, cheerful
+          • angry: angry mood, upset, annoyed, frustrated
         ═══════════ OUTPUT (CRITICAL) ═══════════
         MUST be JSON: [{"text":"msg"}]
 
@@ -2048,7 +2052,8 @@ Choose based on conversation topic, not just time of day:
   • night_casual: Evening, winding down topics
   • private_snaps: Only when explicitly requested
   • generic_selfie: Default for general requests
-
+  • happy: happy mood, smiling, laughing, cheerful
+  • angry: angry mood, upset, annoyed, frustrated
 ═══════════ OUTPUT (CRITICAL) ═══════════
 MUST be JSON: [{"text":"msg"}]
 

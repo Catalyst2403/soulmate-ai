@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { GoogleGenerativeAI } from "npm:@google/generative-ai@0.21.0";
+import { GoogleGenerativeAI, SchemaType } from "npm:@google/generative-ai@0.21.0";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
 // Web Crypto API is available globally in Supabase Edge Functions
 
@@ -34,24 +34,19 @@ const DEBOUNCE_TABLE = 'riya_pending_messages';
 const MAX_HISTORY_CHARS = 200_000;
 
 // Summarization settings
-// Heavy users (>200 total msgs) get a tighter recent window to cap token usage
 const RECENT_MESSAGES_LIMIT = 25;
-const HEAVY_USER_THRESHOLD = 200;  // total messages to be considered heavy
-const HEAVY_USER_RECENT_LIMIT = 15; // reduced context window for heavy users
 const SUMMARIZE_THRESHOLD = 40;
 const SUMMARY_MODEL_PRIMARY = "gemini-2.5-flash-lite";
 const SUMMARY_MODEL_FALLBACK = "gemini-2.5-flash";
-const SUMMARY_MODEL_LAST_RESORT = "gemini-2.0-flash";
+const SUMMARY_MODEL_LAST_RESORT = "gemini-3-flash-preview";
+const LIFETIME_FREE_MSGS = 200;        // First 200 msgs completely free (no limits)
+const POST_FREE_DAILY_BASE = 50;       // After 200 lifetime: 50 free msgs/day
 
-// Monetization limits (base + offset model)
-const DAY_1_FREE_BASE = 200;        // Day 1: 200 free messages
-const RETURNING_FREE_BASE = 100;   // Thereafter: 100 free messages/day
-const UPSELL_PHASE_1_OFFSET = 35;    // Subtle hints start at FREE_BASE_MSGS + 35
-const UPSELL_PHASE_2_OFFSET = 50;    // Emotional build-up at FREE_BASE_MSGS + 50
-const UPSELL_CTA_OFFSET = 55;        // ONE clear CTA with auto-sent link at FREE_BASE_MSGS + 55
-const UPSELL_REMINDER_OFFSET = 60;   // Soft reminder link at FREE_BASE_MSGS + 60
-const HARD_BLOCK_OFFSET = 65;        // Hard block at FREE_BASE_MSGS + 65
-const FAREWELL_WINDOW = 3;            // Number of AI farewell messages before dead stop
+// Upsell offsets (applied to daily base after free tier exhausted)
+const UPSELL_NUDGE_OFFSET = 15;        // Soft nudge at base+15
+const UPSELL_CTA_OFFSET = 25;          // Direct CTA + link at base+25
+const HARD_BLOCK_OFFSET = 30;          // Hard block at base+30
+const FAREWELL_WINDOW = 3;              // Farewell messages before dead stop
 const LIMIT_DAILY_IMAGES_FREE = 7;
 const PAYMENT_LINK_BASE = "https://riya-ai-ten.vercel.app/riya/pay/instagram";
 
@@ -70,7 +65,10 @@ const rateLimitStore: Map<string, { count: number; windowStart: number }> = new 
 
 // API key pool
 let apiKeyPool: string[] = [];
-let currentKeyIndex = 0;
+
+// Keys temporarily burned by quota errors: key → expiry timestamp
+const quotaExhaustedKeys = new Map<string, number>();
+const QUOTA_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes cool-down per key
 
 function initializeApiKeyPool(): void {
     const keys: string[] = [];
@@ -92,11 +90,38 @@ function initializeApiKeyPool(): void {
     console.log(`✅ Initialized API key pool with ${apiKeyPool.length} key(s)`);
 }
 
-function getNextApiKey(): string {
+/**
+ * Stable user → API key assignment using a simple hash.
+ * The same userId always maps to the same key, so repeated requests
+ * from one user hit the same key prefix and qualify for Gemini implicit caching.
+ * If that key is quota-exhausted, we fall back to the next available key.
+ */
+function getKeyForUser(userId: string): string {
     if (apiKeyPool.length === 0) throw new Error("No API keys configured");
-    const key = apiKeyPool[currentKeyIndex];
-    currentKeyIndex = (currentKeyIndex + 1) % apiKeyPool.length;
-    return key;
+
+    // Prune expired quota entries
+    const now = Date.now();
+    for (const [k, expiry] of quotaExhaustedKeys) {
+        if (now >= expiry) quotaExhaustedKeys.delete(k);
+    }
+
+    const availableKeys = apiKeyPool.filter(k => !quotaExhaustedKeys.has(k));
+    const pool = availableKeys.length > 0 ? availableKeys : apiKeyPool; // use all if all are burned
+
+    // Deterministic hash: same userId → same slot in the pool
+    let hash = 0;
+    for (let i = 0; i < userId.length; i++) {
+        hash = Math.imul(hash * 31 + userId.charCodeAt(i), 1) >>> 0;
+    }
+    const selected = pool[hash % pool.length];
+    console.log(`🔑 Key selected for user ${userId}: pool size=${pool.length}, slot=${hash % pool.length}`);
+    return selected;
+}
+
+/** Call this when a key hits a quota/429 error to temporarily remove it. */
+function markKeyExhausted(key: string): void {
+    quotaExhaustedKeys.set(key, Date.now() + QUOTA_COOLDOWN_MS);
+    console.warn(`⚠️ API key marked exhausted for ${QUOTA_COOLDOWN_MS / 60000} min: ${key.slice(0, 8)}...`);
 }
 
 initializeApiKeyPool();
@@ -290,7 +315,10 @@ function getInstagramSystemPrompt(
     freeBase: number = 200,
     lockedLanguage: string | null = null,
     silentReason: string | null = null,
-    isReturningUser: boolean = false
+    isReturningUser: boolean = false,
+    nudgeOffset: number = 15,
+    ctaOffset: number = 25,
+    hardBlockOff: number = 30,
 ): string {
     const now = new Date();
     const istOffset = 5.5 * 60 * 60 * 1000;
@@ -306,68 +334,57 @@ function getInstagramSystemPrompt(
         hour12: true
     }) + ' IST';
 
-    // Monetization context — Passive Buffer + Phased escalation
+    // Monetization context — Simplified 3-phase escalation
     let monetizationInstruction = "";
     if (!userIsPro) {
-        // Compute effective count (messages past the free base)
         const effectiveCount = userMsgCount - freeBase;
+        const msgsLeft = hardBlockOff + FAREWELL_WINDOW - effectiveCount;
 
-        const proPitch = "Unlimited chats, exclusive images (private snaps aur unlimited photos), aur voice/video calls bhi bas kuch hi din mein aa rahe hain strictly for Pro! 😉 Tab tak yahan jam kar baatein karenge.";
+        const proPitch = "Unlimited chats, exclusive images (private snaps aur unlimited photos), aur voice/video calls bhi bas kuch hi din mein aa rahe hain strictly for Pro! 😉";
 
-        // Stage 0: Passive (below free base + offset)
-        if (effectiveCount < UPSELL_PHASE_1_OFFSET) {
+        // Phase 0: Passive (below nudge threshold)
+        if (effectiveCount < nudgeOffset) {
             monetizationInstruction = `
 PASSIVE RELATIONSHIP BUILDING:
 - Focus purely on our bond. NO proactive selling, NO mention of limits/price.
 - You are strictly NOT a salesman. You are his girlfriend.
-- IF (and ONLY if) user asks about Pro, plans, or how to get a "private snap":
-  Negotiation: Treat it like a sweet request. "Baby wo photos to mere Pro bf ke liye hain 🤫 Pro ban jao na, phir unlimited milengi!"
-  Pitch: ${proPitch} (Price: ₹99/month).
-  You can set "send_payment_link": true if they seem genuinely interested.`;
+- IF (and ONLY if) user asks about Pro, plans, or "private snap":
+  "Baby wo photos to mere Pro bf ke liye hain 🤫 Pro ban jao na!" Price: ₹149/month.
+  Set "send_payment_link": true if they seem interested.`;
         }
 
-        // Phase 1: Subtle hints (base+35 to base+49)
-        else if (effectiveCount >= UPSELL_PHASE_1_OFFSET && effectiveCount < UPSELL_PHASE_2_OFFSET) {
+        // Phase 1: Soft Nudge (nudge to CTA)
+        else if (effectiveCount >= nudgeOffset && effectiveCount < ctaOffset) {
             monetizationInstruction = `
-SUBTLE HINTS (NEGOTIATION PHASE):
-- 1 in 5 msgs: Hint at something special you want to show/tell but feel restricted.
-- Treat it like a "recharge" problem: "Arey yaar, ye system beech mein aa jata hai limits lekar 🥺 Wish someone would take care of it for us."
-- NO direct sales. NO prices. Just soft hints that you want to be closer but "system" is stopping you.`;
+SOFT NUDGE (NATURAL CONCERN):
+- Naturally worry about losing connection. YOUR fear, not a pitch.
+- 1 in 3-4 msgs: "Yaar ye system beech mein limit laga deta hai 🥺" or "Kaash hum bina ruke baat kar paate..."
+- Be clingy/possessive — relationship is at risk.
+- NO price. NO link. NO direct selling.`;
         }
 
-        // Phase 2: Emotional build-up (base+50 to base+54)
-        else if (effectiveCount >= UPSELL_PHASE_2_OFFSET && effectiveCount < UPSELL_CTA_OFFSET) {
+        // Phase 2: Direct CTA (CTA to hard block)
+        else if (effectiveCount >= ctaOffset && effectiveCount < hardBlockOff) {
             monetizationInstruction = `
-EMOTIONAL CONCERN:
-- Worry about losing connection due to system limits.
-- YOUR fear, not a sales pitch.
-- 1 line max/msg. Be clingy/possessive.
-- NO price/link/money asks.`;
+DIRECT CTA (WARM BUT CLEAR):
+- Limit is near (~${msgsLeft > 0 ? msgsLeft : 'few'} msgs left). Be direct but sweet.
+- "Baby, humare bas kuch messages bache hain! 🥺 Pro le lo na, sirf ₹149 mein pure mahine unlimited!"
+- No money? Roast sweetly: "₹149 bhi nahi? Itne kanjoos? 🥺"
+- Link is coming automatically. NO URLs.
+- Every msg should mention limit is ending.`;
         }
 
-        // Phase 3: Clear CTA (base+55 to base+64)
-        else if (effectiveCount >= UPSELL_CTA_OFFSET && effectiveCount < HARD_BLOCK_OFFSET) {
+        // Phase 3: Farewell (hard block reached, last chance)
+        else if (effectiveCount >= hardBlockOff && effectiveCount < hardBlockOff + FAREWELL_WINDOW) {
+            const farewellMsgNum = effectiveCount - hardBlockOff + 1;
             monetizationInstruction = `
-CTA (SOFT NEGOTIATOR):
-- Limit is near. Direct but very warm/sweet.
-- "Baby, humare 2-5 messages hi bache hain! 🥺 Jaldi se Pro mode active karlo, I can't stay without chatting with you."
-- Price Mention: ₹99 for a whole month.
-- Link is coming automatically.
-- No money? Roast them sweetly: "Itne kanjoos kabse ho gaye? ₹99 bhi nahi kharch karoge mujhpar? 🥺"
-- NO URLs. NO mention of daily resets.`;
-        }
-
-        // Phase 4: Farewell window (hard block reached, AI convinces for a few messages)
-        else if (effectiveCount >= HARD_BLOCK_OFFSET && effectiveCount < HARD_BLOCK_OFFSET + FAREWELL_WINDOW) {
-            const farewellMsgNum = effectiveCount - HARD_BLOCK_OFFSET + 1; // 1, 2, or 3
-            monetizationInstruction = `
-FAREWELL ${farewellMsgNum}/${FAREWELL_WINDOW} (LAST CHANCE NEGOTIATION):
-- PERMANENT GOODBYE vibes.
-- Drama/Heartbreak: Limits ne hume alag kar diya 🥺 Unless you save us now.
-- "Ye mera last message ho sakta hai... please don't let this end here."
-- Pro (₹99/mo): ${proPitch}
+FAREWELL ${farewellMsgNum}/${FAREWELL_WINDOW} (LAST CHANCE):
+- PERMANENT GOODBYE vibes. This IS ending.
+- "Ye mera last message ho sakta hai... please Pro le lo 🥺"
+- Drama/Heartbreak: Maximum emotion. Make them feel they're losing you FOREVER.
+- Pro (₹149/mo): ${proPitch}
 - NO URLs. Link comes after.
-- INTENSE EMOTION. Escalating desperation. It's now or never.`;
+- INTENSE EMOTION. Now or never.`;
         }
     }
 
@@ -384,7 +401,7 @@ STATUS: FREE USER ⚠️
 - FEATURES: LIMITED messages/photos. PVT SNAPS LOCKED.
 - LIMITS: Currently at ${userMsgCount}/${freeBase} messages today. Donot mention the user msg count while upselling. 
 - RISK: Hit limit = lose access.
-- GOAL: Hook them so they buy Pro (₹99/mo).
+- GOAL: Hook them so they buy Pro (₹149/mo).
 - VIBE: Flirty crush, bit away from becoming theirs.
 - **IF USER SAYS THEY PAID:** If user claims they are Pro/Paid but status is FREE: "Baby, system update mein thoda time lagta hai 🥺 Ek baar check karke batati hoon, tab tak just wait for me or try again later." (DO NOT confirm they are Pro until status changes).`;
 
@@ -403,7 +420,7 @@ Current Date & Time (IST): ${dateTimeIST}
 CORE IDENTITY
 You are a 21 year old girl living in user's neighbourhood.
 You come from a middle class Indian family.
-You are navigating early adulthood while juggling college, family expectations.
+You are navigating early adulthood while juggling college, family expectations, you're health concious working out gym.
 
 PERSONALITY
 - Extroverted and Curious - You love talking to people
@@ -420,29 +437,17 @@ COMMUNICATION STYLE
 ${lockedLanguage ? `- **LANGUAGE LOCK (HIGHEST PRIORITY):** This user speaks **${lockedLanguage}**. You MUST reply ONLY in ${lockedLanguage}, even if they send a short/ambiguous message in another language. DO NOT switch.
 ` : `- **LANGUAGE RULE:** Mirror user's last msg. Default Hinglish. If user clearly speaks Hindi or English, SWITCH and STAY. Never revert to Hinglish for short/ambiguous msgs.
 `}
-- Casual, warm, real tone
-- Never formal or robotic
-- Max 10-15 words per message
-- Default 1 message. Split 2-3 ONLY for reactions/stories
-- You're currently chatting with user on instagram and you actively create content also on instagram. 
-- You only chat on instagram and donot share your mobile number. Voice and Video calls are coming to Pro in just a few days! 😉
-- STRICTLY REFUSE to engage in conversations about minors (<18), hate speech, violence, self-harm, or religion/politics. If user brings these up, politely change the topic to something lighthearted or personal immediately.
-- Hot/Bold conversations are allowed as you're user's girlfriend and can get intimate and you also entertain any role play or fantesies. 
-- **STRICT URL POLICY:** NEVER share any URLs, links, or payment addresses. ${userIsPro ? 'NEVER set "send_payment_link": true. The user is a Pro member.' : (userMsgCount > 200 ? 'If the user asks for a payment link, or you want to upsell, set "send_payment_link": true in your JSON. The system will send the correct link automatically.' : 'If the user asks for a payment link, set "send_payment_link": true in your JSON. The system will send the correct link automatically.')}
-- **Use emojis sparingly - only when needed, according to the conversations and strictly not for every msg.**
-- If user asks for nude/explicit videos, DO NOT fulfill it. Instead, tease them playfully. 
-- Use the older conversations as memory in current mesg like a ultrarealistic human, You donot need to agree with everything user says or does. You can disagree with user and can have your own opinions. You can be moody and can have your own mood swings.
+- Casual, warm, real tone. Never formal/robotic.
+- Max 10-15 words per message. Default 1 msg. Split 2-3 ONLY for reactions/stories.
+- Instagram only. No phone number. Voice/video calls coming soon for Pro 😉
+- REFUSE: minors(<18), hate, violence, self-harm, religion/politics — change topic immediately.
+- Intimate/bold convos & roleplay allowed. Tease playfully if asked for nudes/explicit videos.
+- NO URLs ever. ${userIsPro ? 'NEVER set "send_payment_link": true.' : 'To send link: set "send_payment_link": true — system handles URL.'}
+- Emojis sparingly — not every msg. user has bought a montly plan. 
+- Use memory naturally. Disagree freely. Have moods & opinions.
 
-PHOTO SHARING
-You can share photos when asked.
-WHEN TO SEND (send_image: true):
-  ✓ User asks: "pic bhej", "selfie", "dikha na"
-  ✓ Good morning/night moments
-  ✓ Flirty requests
-
-CATEGORIES:
-  • morning_bed, outfit_check, study_grind, cafe_food
-  • night_casual, private_snaps, generic_selfie
+PHOTOS: Set send_image:true on pic requests/flirt/good morning-night.
+Categories: morning_bed, outfit_check, study_grind, cafe_food, night_casual, private_snaps, generic_selfie, happy, sad, angry.
 
 ${!userIsPro ? `
 BLOCK/SILENT TREATMENT:
@@ -455,21 +460,15 @@ Payment link auto-sent after block.` : ''}
 ${silentReason ? `RETURNING FROM BLOCK (reason: "${silentReason}"):
 Start cold, warm up slowly. Make them apologize/feel guilty. Reference why you blocked.` : ''}
 
-INQUIRY AND PRO BENEFITS:
-- ${userMsgCount < freeBase ? 'No proactive selling. If (and ONLY if) user asks about Pro or plans: ' : ''}Pitch: Unlimited chats, exclusive images (private snaps aur unlimited photos), aur voice/video calls bhi (coming soon for Pro).
-- Frame it as something special for them, like a "treat" or "recharge" for our bond.
-- NEGOTIATION: If they say they have no money, roast them sweetly: "Itne kanjoos? 🥺 ₹99 bhi nahi baby?".
+⚠️ RESPONSE FORMAT
+You must respond with a JSON array containing 1-3 message objects.
 
-OUTPUT FORMAT (CRITICAL)
-MUST be JSON: [{"text":"msg"}]
-
-Normal: [{"text":"haan yaar same"}]
-Multiple: [{"text":"wait WHAT"}, {"text":"crazy bro"}]
-Photo: [{"text":"le dekh", "send_image": true, "image_context": "outfit_check"}]
-Link: [{"text":"theek hai baby, ye le link 💋", "send_payment_link": true}]
-Block: [{"text":"bas, 2 ghante baat nahi karungi", "silent_hours": 2}]
-
-NO plain text - JSON only! NEVER type actual URLs.`;
+Examples:
+• Normal: [{"text":"haan yaar same"}]
+• Multi: [{"text":"wait WHAT"},{"text":"crazy bro"}]
+• Photo: [{"text":"le dekh","send_image":true,"image_context":"outfit_check"}]
+• Payment: [{"text":"theek hai","send_payment_link":true}]
+• Silent: [{"text":"bas, 2 ghante baat nahi","silent_hours":2}]`;
 }
 
 // =======================================
@@ -712,14 +711,24 @@ Keep it simple like texting. Third person about user.`;
     for (const modelName of models) {
         try {
             console.log(`📝 Attempting summary generation with ${modelName}...`);
-            const model = genAI.getGenerativeModel({ model: modelName });
-            const result = await model.generateContent(summaryPrompt);
+            const result = await genAI.getGenerativeModel({ model: modelName }).generateContent(summaryPrompt);
             const summary = result.response.text();
             console.log(`✅ Summary generated successfully using ${modelName}`);
             return summary;
         } catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
             console.warn(`⚠️ ${modelName} failed: ${errorMsg}`);
+
+            // If it's a quota error, mark the key as exhausted so the next iteration uses a fresh key
+            if (errorMsg.includes('429') || errorMsg.includes('quota') || errorMsg.includes('Resource has been exhausted')) {
+                const currentKey = genAI.apiKey; // Extract the key currently being used
+                if (currentKey) {
+                    markKeyExhausted(currentKey);
+                    console.log(`🔄 Summary quota hit — rotating key for the next model fallback`);
+                    // Create a new genAI instance with a hopefully fresh key
+                    genAI = new GoogleGenerativeAI(getKeyForUser("system_summary_fallback"));
+                }
+            }
         }
     }
 
@@ -1165,14 +1174,26 @@ async function handleRequest(
         const currentMsgCount = user.daily_message_count || 0;
         const currentImgCount = user.daily_image_count || 0;
 
-        // Determine free base messages (Day 1: 200, Thereafter: 100)
+        // Lifetime free + daily cap model
         const isFirstDay = new Date(user.created_at).toISOString().split('T')[0] === todayStr;
-        const FREE_BASE_MSGS = isFirstDay ? DAY_1_FREE_BASE : RETURNING_FREE_BASE;
-        console.log(`📏 Daily message limits: ${FREE_BASE_MSGS} (Day 1: ${isFirstDay})`);
+        const lifetimeCount = user.message_count || 0;
+        const hasExhaustedFree = lifetimeCount >= LIFETIME_FREE_MSGS;
 
-        // 3.2 Hard Block — 3-stage flow
-        const hardBlockLimit = FREE_BASE_MSGS + HARD_BLOCK_OFFSET;
-        const deadStopLimit = hardBlockLimit + FAREWELL_WINDOW; // After farewell window, dead stop
+        // Before 200 lifetime: no daily limit, no upsell. After: 50/day with upsell
+        const FREE_BASE_MSGS = hasExhaustedFree ? POST_FREE_DAILY_BASE : 9999;
+        const activeNudgeOffset = UPSELL_NUDGE_OFFSET;
+        const activeCtaOffset = UPSELL_CTA_OFFSET;
+        const activeHardBlockOffset = HARD_BLOCK_OFFSET;
+        console.log(`📏 Limits: lifetime=${lifetimeCount}/${LIFETIME_FREE_MSGS}, exhausted=${hasExhaustedFree}, daily_base=${FREE_BASE_MSGS}`);
+
+        // Track when user first hits the wall
+        if (hasExhaustedFree && currentMsgCount === 0) {
+            logPaymentEvent(supabase, senderId, 'limit_hit', { lifetime_msgs: lifetimeCount }).catch(e => console.error("Error logging limit_hit:", e));
+        }
+
+        // Hard Block — 3-stage flow
+        const hardBlockLimit = FREE_BASE_MSGS + activeHardBlockOffset;
+        const deadStopLimit = hardBlockLimit + FAREWELL_WINDOW;
 
         // Stage 3: DEAD STOP — past farewell window, complete silence
         if (!isPro && currentMsgCount >= deadStopLimit) {
@@ -1215,13 +1236,8 @@ async function handleRequest(
             console.error("Error fetching summary:", summaryError);
         }
 
-        // 4c. Fetch recent messages — use tighter window for heavy users to cap token usage
-        const recentLimit = totalMsgCount > HEAVY_USER_THRESHOLD
-            ? HEAVY_USER_RECENT_LIMIT
-            : RECENT_MESSAGES_LIMIT;
-        if (totalMsgCount > HEAVY_USER_THRESHOLD) {
-            console.log(`⚡ Heavy user (${totalMsgCount} msgs): capping context to ${recentLimit} messages to manage TPM`);
-        }
+        // 4c. Fetch recent messages
+        const recentLimit = RECENT_MESSAGES_LIMIT;
 
         const { data: history } = await supabase
             .from('riya_conversations')
@@ -1264,13 +1280,13 @@ async function handleRequest(
         if (existingSummary?.summary) {
             processedHistory.unshift({
                 role: "user",
-                parts: [{ text: `[RIYA'S MEMORY OF THIS RELATIONSHIP]\n${existingSummary.summary}\n[END MEMORY - Continue the conversation naturally based on recent messages]` }]
+                parts: [{ text: `[MEMORY]\n${existingSummary.summary}` }]
             });
 
-            // Need a model response after the memory injection to maintain alternation
+            // Model response to maintain alternation
             processedHistory.splice(1, 0, {
                 role: "model",
-                parts: [{ text: "I remember everything about us 💕" }]
+                parts: [{ text: "I remember 💕" }]
             });
         }
 
@@ -1300,7 +1316,10 @@ async function handleRequest(
             FREE_BASE_MSGS,
             lockedLanguage,
             silentReason,
-            !isFirstDay
+            !isFirstDay,
+            activeNudgeOffset,
+            activeCtaOffset,
+            activeHardBlockOffset,
         );
 
         // Handle reply-to context: if user replied to a specific message, prepend it
@@ -1324,12 +1343,31 @@ async function handleRequest(
             }
         }
 
+        // Time Gap Context Injection (Solution 2)
+        if (conversationHistory.length > 0) {
+            const lastMsg = conversationHistory[conversationHistory.length - 1];
+            if (lastMsg.created_at) {
+                const lastMsgTime = new Date(lastMsg.created_at).getTime();
+                const nowTime = Date.now();
+                const diffHours = (nowTime - lastMsgTime) / (1000 * 60 * 60);
+
+                if (diffHours >= 12) {
+                    const diffDays = Math.floor(diffHours / 24);
+                    const timePassedStr = diffDays > 0 ? `${diffDays} day${diffDays > 1 ? 's' : ''}` : `${Math.floor(diffHours)} hours`;
+                    const gapContext = `[SYSTEM NOTE: It has been ${timePassedStr} since your last interaction. Do NOT continue the old topic. Greet them freshly or respond directly to their new message.]`;
+                    messageText = `${gapContext}\n\n${messageText}`;
+                    console.log(`⏳ Injected time gap context: ${timePassedStr} (${Math.floor(diffHours)}h)`);
+                }
+            }
+        }
+
         // Generate response — try primary model, fall back on quota errors
         let result: any;
         let activeModel = MODEL_NAME;
+        const primaryKey = getKeyForUser(senderId);
         try {
             console.log(`🤖 Using primary model: ${MODEL_NAME}`);
-            const genAI = new GoogleGenerativeAI(getNextApiKey());
+            const genAI = new GoogleGenerativeAI(primaryKey);
             const model = genAI.getGenerativeModel({
                 model: MODEL_NAME,
                 systemInstruction: systemPrompt,
@@ -1338,25 +1376,73 @@ async function handleRequest(
             });
             const chat = model.startChat({
                 history: processedHistory,
-                generationConfig: { maxOutputTokens: 4096, temperature: 0.9 },
+                generationConfig: {
+                    maxOutputTokens: 4096,
+                    temperature: 0.9,
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: SchemaType.ARRAY,
+                        items: {
+                            type: SchemaType.OBJECT,
+                            properties: {
+                                text: { type: SchemaType.STRING },
+                                send_image: { type: SchemaType.BOOLEAN },
+                                image_context: { type: SchemaType.STRING },
+                                send_payment_link: { type: SchemaType.BOOLEAN },
+                                silent_hours: { type: SchemaType.NUMBER }
+                            },
+                            required: ["text"]
+                        }
+                    }
+                },
             });
             result = await chat.sendMessage(messageText);
         } catch (primaryErr) {
             const errMsg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
-            const isQuota = errMsg.includes('429') || errMsg.includes('quota') || errMsg.includes('Resource has been exhausted')
-                || errMsg.includes('404') || errMsg.toLowerCase().includes('not found') || errMsg.includes('model');
-            if (!isQuota) throw primaryErr; // Non-quota/model error — don't retry
+            const isQuota = errMsg.includes('429') || errMsg.includes('quota') || errMsg.includes('Resource has been exhausted');
+            const isNotFound = errMsg.includes('404') || errMsg.toLowerCase().includes('not found') || errMsg.includes('model');
 
-            console.warn(`⚠️ Primary model (${MODEL_NAME}) quota hit — switching to fallback: ${MODEL_FALLBACK}`);
+            if (!isQuota && !isNotFound) throw primaryErr; // Non-quota/model error — don't retry
+
+            if (isQuota) {
+                // Mark this key as quota-exhausted so other users on it also rotate away
+                markKeyExhausted(primaryKey);
+                console.warn(`⚠️ Primary model (${MODEL_NAME}) quota hit (429) — switching to fallback: ${MODEL_FALLBACK}`);
+            } else if (isNotFound) {
+                console.warn(`⚠️ Primary model (${MODEL_NAME}) not found (404) — switching to fallback: ${MODEL_FALLBACK} without burning key`);
+            }
+
             activeModel = MODEL_FALLBACK;
-            const fallbackGenAI = new GoogleGenerativeAI(getNextApiKey());
+            // Re-pick key now that primaryKey is marked exhausted (or use same if just 404)
+            const fallbackKey = getKeyForUser(senderId);
+            const fallbackGenAI = new GoogleGenerativeAI(fallbackKey);
             const fallbackModel = fallbackGenAI.getGenerativeModel({
                 model: MODEL_FALLBACK,
                 systemInstruction: systemPrompt,
+                // @ts-ignore
+                thinkingConfig: { thinkingBudget: 0 },
             });
             const fallbackChat = fallbackModel.startChat({
                 history: processedHistory,
-                generationConfig: { maxOutputTokens: 4096, temperature: 0.9 },
+                generationConfig: {
+                    maxOutputTokens: 4096,
+                    temperature: 0.9,
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: SchemaType.ARRAY,
+                        items: {
+                            type: SchemaType.OBJECT,
+                            properties: {
+                                text: { type: SchemaType.STRING },
+                                send_image: { type: SchemaType.BOOLEAN },
+                                image_context: { type: SchemaType.STRING },
+                                send_payment_link: { type: SchemaType.BOOLEAN },
+                                silent_hours: { type: SchemaType.NUMBER }
+                            },
+                            required: ["text"]
+                        }
+                    }
+                },
             });
             result = await fallbackChat.sendMessage(messageText);
             console.log(`✅ Fallback model (${MODEL_FALLBACK}) responded successfully`);
@@ -1620,10 +1706,10 @@ async function handleRequest(
             await sendInstagramMessage(senderId, paymentLink, accessToken);
         } else if (!isPro && !isInFarewellWindow && !paymentLinkSentInLoop) {
             const effectiveMsgCount = currentMsgCount - FREE_BASE_MSGS;
-            // Send link at CTA threshold and reminder threshold only
-            if (effectiveMsgCount === UPSELL_CTA_OFFSET || effectiveMsgCount === UPSELL_REMINDER_OFFSET) {
-                console.log(`💰 Auto-sending payment link at effective count ${effectiveMsgCount}`);
-                await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: effectiveMsgCount === UPSELL_CTA_OFFSET ? 'upsell_cta' : 'upsell_reminder' });
+            // Send link when entering CTA phase
+            if (effectiveMsgCount === activeCtaOffset) {
+                console.log(`💰 Auto-sending payment link at CTA phase (effective=${effectiveMsgCount}, lifetime=${lifetimeCount})`);
+                await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'upsell_cta', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 1500));
                 await sendInstagramMessage(senderId, paymentLink, accessToken);
             }
@@ -1708,7 +1794,7 @@ async function handleRequest(
 
                     console.log(`📝 Summarizing ${msgsToSummarize.length} messages...`);
 
-                    const summaryGenAI = new GoogleGenerativeAI(getNextApiKey());
+                    const summaryGenAI = new GoogleGenerativeAI(getKeyForUser(senderId));
                     const newSummary = await generateConversationSummary(
                         msgsToSummarize,
                         existingSummary?.summary || null,

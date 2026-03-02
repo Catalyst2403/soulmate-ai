@@ -77,6 +77,8 @@ interface AnalyticsData {
             dailyTrend: Array<{ date: string; avg_session_minutes: number; sessions: number }>;
         };
         paymentFunnel?: {
+            usersExhaustedFree: number;
+            limitHits: number;
             linksSent: number;
             pageVisits: number;
             upgradeClicks: number;
@@ -1198,12 +1200,27 @@ ORDER BY c1.created_at DESC;`}</pre>
                                     <span className="text-xs text-muted-foreground font-normal">(last 30 days)</span>
                                 </h3>
 
-                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                                <div className="grid grid-cols-2 lg:grid-cols-6 gap-4 mb-4">
+                                    <div className="p-4 rounded-xl bg-slate-500/10 text-center">
+                                        <p className="text-muted-foreground text-sm">Exhausted Free</p>
+                                        <p className="font-display text-2xl font-bold text-foreground">
+                                            {analytics.instagramMetrics.paymentFunnel.usersExhaustedFree}
+                                        </p>
+                                        <p className="text-xs text-muted-foreground mt-0.5">200+ msgs</p>
+                                    </div>
+                                    <div className="p-4 rounded-xl bg-orange-500/10 text-center">
+                                        <p className="text-muted-foreground text-sm">Limit Hits</p>
+                                        <p className="font-display text-2xl font-bold text-foreground">
+                                            {analytics.instagramMetrics.paymentFunnel.limitHits}
+                                        </p>
+                                        <p className="text-xs text-muted-foreground mt-0.5">hit the wall</p>
+                                    </div>
                                     <div className="p-4 rounded-xl bg-blue-500/10 text-center">
                                         <p className="text-muted-foreground text-sm">Links Sent</p>
                                         <p className="font-display text-2xl font-bold text-foreground">
                                             {analytics.instagramMetrics.paymentFunnel.linksSent}
                                         </p>
+                                        <p className="text-xs text-muted-foreground mt-0.5">auto-sent</p>
                                     </div>
                                     <div className="p-4 rounded-xl bg-purple-500/10 text-center">
                                         <p className="text-muted-foreground text-sm">Page Visits</p>
