@@ -1309,8 +1309,9 @@ async function handleRequest(
         // =======================================
         // STREAK TRACKING
         // =======================================
-        const lastChatDate = user.last_chat_date || null; // YYYY-MM-DD string
-        const todayDate = todayStr; // already computed above
+        // Uses existing last_interaction_date (date type) — no extra column needed
+        const lastChatDate = user.last_interaction_date || null; // YYYY-MM-DD string
+        const todayDate = todayStr;
         let chatStreak = user.chat_streak_days || 0;
 
         if (lastChatDate !== todayDate) {
@@ -1330,9 +1331,9 @@ async function handleRequest(
                 chatStreak = 1;
             }
 
-            // Update DB (fire-and-forget, non-blocking)
+            // Update DB — only streak count, last_interaction_date is updated elsewhere
             supabase.from('riya_instagram_users')
-                .update({ chat_streak_days: chatStreak, last_chat_date: todayDate })
+                .update({ chat_streak_days: chatStreak })
                 .eq('instagram_user_id', senderId)
                 .then(({ error }: { error: any }) => {
                     if (error) console.warn('⚠️ Streak update failed:', error);
@@ -1340,7 +1341,6 @@ async function handleRequest(
                 });
 
             user.chat_streak_days = chatStreak;
-            user.last_chat_date = todayDate;
         }
         console.log(`🔥 Chat streak for ${senderId}: ${chatStreak} day(s)`);
 
