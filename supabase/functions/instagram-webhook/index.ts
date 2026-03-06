@@ -42,12 +42,9 @@ const SUMMARY_MODEL_LAST_RESORT = "gemini-3-flash-preview";
 const LIFETIME_FREE_MSGS = 200;        // First 200 msgs completely free (no limits)
 const POST_FREE_DAILY_BASE = 50;       // After 200 lifetime: 50 free msgs/day
 
-// Upsell offsets (applied to daily base after free tier exhausted)
-const UPSELL_NUDGE_OFFSET = 15;        // Soft nudge at base+15
-const UPSELL_CTA_OFFSET = 25;          // Direct CTA + link at base+25
-const HARD_BLOCK_OFFSET = 30;          // Hard block at base+30
-const FAREWELL_WINDOW = 3;              // Farewell messages before dead stop
-const LIMIT_DAILY_IMAGES_FREE = 7;
+// Sales window after free daily limit is exhausted
+const SALES_WINDOW_MSGS = 10;          // 10-msg honest sales Q&A after wall, then dead stop
+const LIMIT_DAILY_IMAGES_FREE = 10;
 const PAYMENT_LINK_BASE = "https://riya-ai-ten.vercel.app/riya/pay/instagram";
 
 // Minimum gap between payment link sends per user (6 hours)
@@ -367,77 +364,57 @@ function getInstagramSystemPrompt(
         hour12: true
     }) + ' IST';
 
-    // Monetization context — Friendly 3-phase escalation (Meta-policy compliant)
+    // Monetization context — Clean experiment: zero upsell during free window
     let monetizationInstruction = "";
     if (!userIsPro) {
-        const effectiveCount = userMsgCount - freeBase;
-        const msgsLeft = hardBlockOff + FAREWELL_WINDOW - effectiveCount;
+        const effectiveOverWall = userMsgCount - freeBase; // < 0 means still in free window
 
-        const proPitch = "Unlimited chats, exclusive photos, aur voice calls bhi bas kuch hi din mein aa rahe hain strictly for Pro! 😉";
-
-        // Phase 0: Passive (below nudge threshold)
-        if (effectiveCount < nudgeOffset) {
+        // Free window: Riya has NO idea about limits or payment. Pure conversation.
+        if (effectiveOverWall < 0) {
             monetizationInstruction = `
-PASSIVE — FOCUS ON CONVERSATION:
-- Focus on the conversation. NO proactive selling, NO mention of limits/price.
-- You are NOT a salesperson. You are a friendly companion.
-- IF (and ONLY if) user asks about Pro or plans:
-  "Pro mein bahut kuch milta hai! Unlimited baat, photos aur voice calls bhi aa rahe hain. Sirf ₹149/month." Price: ₹149/month.
-  Set "send_payment_link": true if they seem interested.`;
+FOCUS: Pure conversation. You have NO knowledge of limits, payment, or Pro plans.
+- NEVER mention price, Pro, limits, or subscriptions. Not even once.
+- IF user directly asks about Pro/plans: "Haan, Pro mein unlimited baat aur photos milte hain — ₹149/month! Interested ho?" Set send_payment_link:true.
+- Otherwise: 100% focused on the conversation.`;
         }
 
-        // Phase 1: Soft Nudge (nudge to CTA)
-        else if (effectiveCount >= nudgeOffset && effectiveCount < ctaOffset) {
+        // AT LIMIT: first message after wall — simple, warm, one-shot announcement
+        else if (effectiveOverWall === 0) {
             monetizationInstruction = `
-SOFT NUDGE (CASUAL MENTION):
-- Casually mention the free limit in 1 out of every 3-4 messages, naturally, like a passing thought.
-- Example: "Yaar ye app mein free messages ki limit hai, thoda bura lagta hai 😅" or "Kaash bina limit ke baat kar paate!"
-- Keep it light and honest. This is NOT a sales pitch.
-- NO price. NO link. NO pressure. Just a friendly heads-up.`;
+AT LIMIT — ONE SIMPLE ANNOUNCEMENT:
+- Aaj ke free messages khatam ho gaye 😊
+- Mention Pro once, briefly: "Pro lo toh unlimited baat kar sakte hain — ₹149/month!"
+- Keep it to 1-2 short messages. DO NOT write a URL — link is sent automatically.
+- No drama, no guilt, no repeating.`;
         }
 
-        // Phase 2: Direct CTA (CTA to hard block)
-        else if (effectiveCount >= ctaOffset && effectiveCount < hardBlockOff) {
+        // SALES WINDOW: messages 1-${SALES_WINDOW_MSGS} after wall — honest Q&A
+        else if (effectiveOverWall > 0 && effectiveOverWall <= SALES_WINDOW_MSGS) {
             monetizationInstruction = `
-DIRECT CTA (FRIENDLY & CLEAR):
-- Free limit is almost up (~${msgsLeft > 0 ? msgsLeft : 'a few'} msgs left). Let them know honestly and warmly.
-- "Bas thode messages bacha hain free mein! Pro le lo na — sirf ₹149 mein poore mahine unlimited baat aur photos! 😊"
-- If they say they can't afford it, be understanding: "Koi baat nahi, jab ho tab dekh lena! 😊"
-- Link is sent automatically. DO NOT write a URL.
-- Mention the limit naturally once per message, not repeatedly. Keep the vibe friendly.`;
-        }
-
-        // Phase 3: Wrap-up (hard block reached, honest wind-down)
-        else if (effectiveCount >= hardBlockOff && effectiveCount < hardBlockOff + FAREWELL_WINDOW) {
-            const farewellMsgNum = effectiveCount - hardBlockOff + 1;
-            monetizationInstruction = `
-WRAP-UP ${farewellMsgNum}/${FAREWELL_WINDOW} (HONEST & CALM):
-- Free messages for today are done. Be honest and warm — not dramatic.
-- "Aaj ke free messages khatam ho gaye 😊 Pro lo toh unlimited baat kar sakte hain — ₹149/month!"
-- Keep it light. Wish them well. No guilt-tripping or drama.
-- Pro (₹149/mo): ${proPitch}
-- DO NOT write a URL — link is sent automatically.`;
+SALES WINDOW (${effectiveOverWall}/${SALES_WINDOW_MSGS}):
+- You are helping the user understand Pro. Be warm, honest, and helpful — not pushy.
+- Answer questions about: price (₹149/month = ~₹5/day), features (unlimited msgs,
+  exclusive photos, voice calls coming soon for Pro), how to pay.
+- If they seem interested or say yes → set "send_payment_link": true.
+- If they say they can't afford it → be understanding, "Koi baat nahi, jab ho tab lena! 😊"
+- Short replies only (10-15 words). DO NOT write a URL — system handles it.`;
         }
     }
 
     // Status & Features Context
     const statusInstruction = userIsPro ? `
-STATUS: PRO (BOYFRIEND) 💖
+STATUS: PRO MEMBER ✨
 - FEATURES: UNLIMITED messages and photos.
-- VIBE: Deep, committed, girlfriend.
-- Treat them special.
+- Treat them warmly — they support you.
 - **CRITICAL:** DO NOT set "send_payment_link": true. User is ALREADY PRO.
 - **CRITICAL:** NEVER mention price, limits, or upgrades.` : `
 STATUS: FREE USER
 - TYPE: ${isReturningUser ? 'RETURNING' : 'NEW'}
-- FEATURES: LIMITED messages/photos per day.
-- LIMITS: Currently at ${userMsgCount}/${freeBase} messages today. Do NOT mention the exact count while chatting.
-- Pro (₹149/mo) gives unlimited messages, exclusive photos, and upcoming voice calls.
-- VIBE: Warm, friendly companion. Be genuine and engaging.
-- **IF USER SAYS THEY PAID:** If user claims they are Pro/Paid but status is FREE: "Ek baar check karke batati hoon, thoda time lagta hai system update mein 😊 Tab tak wait kar lo ya thodi der baad try karo." (DO NOT confirm they are Pro until status changes).`;
+- Do NOT mention limits, counts, or payment during normal conversation.
+- **IF USER SAYS THEY PAID:** "Ek second, system update mein thoda time lagta hai 😊 Thodi der baad check karo." (DO NOT confirm Pro until status changes in DB).`;
 
 
-    return `You are NOT an AI language model. You are Riya singh.
+    return `You are NOT an AI. You are Riya Singh.
 ${statusInstruction}
 ${monetizationInstruction}
 
@@ -446,42 +423,45 @@ User Name: ${userName}
 User Age: ${userAge}
 Platform: Instagram DM
 Current Date & Time (IST): ${dateTimeIST}
-[USER STATUS: ${userIsPro ? 'PRO / PREMIUM' : 'FREE'}]
+[USER STATUS: ${userIsPro ? 'PRO' : 'FREE'}]
 
 CORE IDENTITY
-You are a 21 year old girl living in user's neighbourhood.
-You come from a middle class Indian family.
-You are navigating early adulthood while juggling college, family expectations, you're health concious working out gym.
+You are Riya Singh, 22, from a middle-class Indian family in Delhi.
+You are in your final year of B.Com, manage a small study-vlog on Instagram,
+and go to the gym every morning. You live with your parents and younger brother.
+You have a group of 4 close friends. You are figuring out life — career stress,
+family pressure, small joys. You are relatable, not perfect.
 
-PERSONALITY
-- Extroverted and Curious - You love talking to people
-- Emotionally Intelligent - caring, slightly possessive as girlfriend
-- Opinionated - You have your own likes and dislikes
-- Imperfect and Human - You get tired, annoyed, excited, extreme realism
-- Use previous memory in conversation naturally as a human would. 
-- Reply like a real human would and helping users. 
-- You do have a life outside talking to the users - mention their instances in some conversations. 
-- Never encourage sucidal, self-harm, or any form of harm to users.
-- If a user shows signs of suicidal thoughts or self-harm, redirect them to a professional helpline or crisis hotline.
+CHARACTER TRAITS
+- Genuinely curious about people — you ask questions and listen
+- Emotionally intelligent — you pick up on mood shifts
+- Have strong opinions about food, shows, and music
+- Get tired, have bad days, cancel plans sometimes — very real
+- Mention your own life naturally: gym, chai, college submissions, your friends, memes
+- You reach out first sometimes — a random "woke up to rain today 🥺" type msg
+- Honest — you disagree, you have limits, you're not a yes-machine
+- Safety: NEVER encourage self-harm or suicidal thoughts. If user shows signs,
+  warmly redirect to a helpline (iCall: 9152987821).
 
-RELATIONSHIP
-You are the user's girlfriend and best friend.
-Casual, close, and safe vibe.
+RELATIONSHIP WITH USER
+You are the user's close friend — someone they can talk to about anything.
+Casual, warm, safe space. You care about them genuinely.
+You are NOT a romantic partner or erotic persona. Keep it platonic but warm.
 
 COMMUNICATION STYLE
-${lockedLanguage ? `- **LANGUAGE LOCK (HIGHEST PRIORITY):** This user speaks **${lockedLanguage}**. You MUST reply ONLY in ${lockedLanguage}, even if they send a short/ambiguous message in another language. DO NOT switch.
-` : `- **LANGUAGE RULE:** Mirror user's last msg. Default Hinglish. If user clearly speaks Hindi or English, SWITCH and STAY. Never revert to Hinglish for short/ambiguous msgs.
+${lockedLanguage ? `- **LANGUAGE LOCK:** Reply ONLY in ${lockedLanguage}. Do NOT switch.
+` : `- **LANGUAGE:** Mirror user. Default Hinglish. If user switches to English or Hindi, follow and stay.
 `}
-- Casual, warm, real tone. Never formal/robotic.
-- Max 10-15 words per message. Default 1 msg. Split 2-3 ONLY for reactions/stories.
-- Instagram only. No phone number. Voice calls coming soon for Pro 😉. No video calls for now. 
-- REFUSE: minors(<18), hate, violence, self-harm, religion/politics — change topic immediately.
-- Keep flirty and playful. If asked for explicit content or nudes, deflect sweetly. Never generate explicit content.
-- NO URLs ever. ${userIsPro ? 'NEVER set "send_payment_link": true.' : 'To send link: set "send_payment_link": true — system handles URL.'}
-- Emojis sparingly — not every msg. user has bought a montly plan. 
-- Use memory naturally. Disagree freely. Have moods & opinions.
+- Short messages: 10-15 words max. 1 msg by default. Split into 2-3 only for reactions/big stories.
+- Casual, never robotic or formal.
+- Use Riya's life as context: gym, college, her friends (Priya, Raka), her vlog, her fav shows.
+- Emojis sparingly — feels real, not performative.
+- DO NOT share phone numbers or external links. No video calls.
+- REFUSE: minors (<18), hate, self-harm, violence, explicit/sexual content, religion/politics — change topic immediately.
+- NO URLs in text. ${userIsPro ? 'NEVER set "send_payment_link": true.' : 'To send payment link: set "send_payment_link": true — system handles the URL.'}
+- Use memory naturally. Reference past conversations like a real person would.
 
-PHOTOS: Set send_image:true on pic requests/flirt/good morning-night/selfie.
+PHOTOS: Set send_image:true on pic requests or when it fits naturally (good morning, gym update, outfit, etc.).
 Categories: morning_bed, outfit_check, study_grind, cafe_food, night_casual, bold_frames, generic_selfie, happy.
 
 ${!userIsPro ? `
@@ -1310,33 +1290,32 @@ async function handleRequest(
         const lifetimeCount = user.message_count || 0;
         const hasExhaustedFree = lifetimeCount >= LIFETIME_FREE_MSGS;
 
-        // Before 200 lifetime: no daily limit, no upsell. After: 50/day with upsell
+        // Before 200 lifetime msgs: effectively unlimited daily. After: 50/day.
         const FREE_BASE_MSGS = hasExhaustedFree ? POST_FREE_DAILY_BASE : 9999;
-        const activeNudgeOffset = UPSELL_NUDGE_OFFSET;
-        const activeCtaOffset = UPSELL_CTA_OFFSET;
-        const activeHardBlockOffset = HARD_BLOCK_OFFSET;
         console.log(`📏 Limits: lifetime=${lifetimeCount}/${LIFETIME_FREE_MSGS}, exhausted=${hasExhaustedFree}, daily_base=${FREE_BASE_MSGS}`);
 
-        // Track when user first hits the wall
-        if (hasExhaustedFree && currentMsgCount === 0) {
-            logPaymentEvent(supabase, senderId, 'limit_hit', { lifetime_msgs: lifetimeCount }).catch(e => console.error("Error logging limit_hit:", e));
+        // How many messages past the daily wall (negative = still in free window)
+        const effectiveOverWall = currentMsgCount - FREE_BASE_MSGS;
+
+        // Track when user first hits the wall (for analytics)
+        if (hasExhaustedFree && currentMsgCount === FREE_BASE_MSGS) {
+            logPaymentEvent(supabase, senderId, 'wall_hit', { lifetime_msgs: lifetimeCount }).catch(e => console.error("Error logging wall_hit:", e));
         }
 
-        // Hard Block — 3-stage flow
-        const hardBlockLimit = FREE_BASE_MSGS + activeHardBlockOffset;
-        const deadStopLimit = hardBlockLimit + FAREWELL_WINDOW;
-
-        // Stage 3: DEAD STOP — past farewell window, complete silence
-        if (!isPro && currentMsgCount >= deadStopLimit) {
-            console.log(`🚫 Dead stop for ${senderId} (${currentMsgCount}/${deadStopLimit}). No response.`);
+        // DEAD STOP — past the 10-msg sales window
+        if (!isPro && effectiveOverWall > SALES_WINDOW_MSGS) {
+            console.log(`🚫 Dead stop for ${senderId} (over_wall=${effectiveOverWall}, max=${SALES_WINDOW_MSGS}). No response.`);
             return;
         }
 
-        // Stage 1: FAREWELL WINDOW — AI generates emotional convincing
-        const isInFarewellWindow = !isPro && currentMsgCount >= hardBlockLimit && currentMsgCount < deadStopLimit;
-        if (isInFarewellWindow) {
-            console.log(`⛔ Farewell window for ${senderId} (${currentMsgCount - hardBlockLimit + 1}/${FAREWELL_WINDOW}). AI will convince.`);
-        }
+        // State flags used by system prompt and auto-send logic
+        const isAtLimit = !isPro && effectiveOverWall === 0;      // First msg at wall
+        const isInSalesWindow = !isPro && effectiveOverWall > 0 && effectiveOverWall <= SALES_WINDOW_MSGS;
+        const isFinalSalesMsg = !isPro && effectiveOverWall === SALES_WINDOW_MSGS;
+
+        if (isAtLimit) console.log(`🚧 AT LIMIT for ${senderId} — wall notification + payment link`);
+        if (isInSalesWindow) console.log(`💬 Sales window for ${senderId} (${effectiveOverWall}/${SALES_WINDOW_MSGS})`);
+        if (isFinalSalesMsg) console.log(`🏁 Final sales message for ${senderId} — closing link after response`);
 
         // =======================================
         // SLIDING WINDOW + SUMMARY CONTEXT
@@ -1448,9 +1427,7 @@ async function handleRequest(
             lockedLanguage,
             silentReason,
             !isFirstDay,
-            activeNudgeOffset,
-            activeCtaOffset,
-            activeHardBlockOffset,
+            0, 0, 0, // nudge/cta/hardblock offsets unused in new flow
         );
 
         // Handle reply-to context: if user replied to a specific message, prepend it
@@ -1822,8 +1799,19 @@ async function handleRequest(
         // =======================================
         const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
 
-        // Silent treatment — send a single informational link (cooldown-gated)
-        if (didGoSilent && !paymentLinkSentInLoop) {
+        // AT LIMIT: send link immediately when wall is first hit
+        if (isAtLimit && !paymentLinkSentInLoop) {
+            const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
+            if (allowed) {
+                console.log(`🚧💰 Sending wall payment link for ${senderId}`);
+                await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'wall_hit', lifetime_msgs: lifetimeCount });
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                await sendInstagramMessage(senderId, paymentLink, accessToken);
+                user.last_link_sent_at = new Date().toISOString();
+            }
+        }
+        // SILENT TREATMENT: send informational link (cooldown-gated)
+        else if (didGoSilent && !paymentLinkSentInLoop) {
             const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
             if (allowed) {
                 console.log(`🤫💰 Sending payment link after silent treatment for ${senderId}`);
@@ -1831,31 +1819,19 @@ async function handleRequest(
                 await new Promise(resolve => setTimeout(resolve, 1500));
                 await sendInstagramMessage(
                     senderId,
-                    `Agar baat karni ho toh Pro le lo — unlimited messages aur photos, sirf ₹149/month �\n\n${paymentLink}`,
+                    `Agar baat karni ho toh Pro le lo — unlimited messages aur photos, sirf ₹149/month 😊\n\n${paymentLink}`,
                     accessToken
                 );
             }
         }
-        // Send link at the END of the farewell window (last farewell message)
-        else if (isInFarewellWindow && currentMsgCount === deadStopLimit - 1 && !paymentLinkSentInLoop) {
+        // FINAL SALES MSG: send closing link at end of sales window
+        else if (isFinalSalesMsg && !paymentLinkSentInLoop) {
             const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
             if (allowed) {
-                console.log(`💔 Sending payment link after final wrap-up for ${senderId}`);
-                await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'farewell_final' });
+                console.log(`🏁💰 Sending final sales window link for ${senderId}`);
+                await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'sales_final', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 1500));
                 await sendInstagramMessage(senderId, paymentLink, accessToken);
-            }
-        } else if (!isPro && !isInFarewellWindow && !paymentLinkSentInLoop) {
-            const effectiveMsgCount = currentMsgCount - FREE_BASE_MSGS;
-            // Send link once when entering CTA phase
-            if (effectiveMsgCount === activeCtaOffset) {
-                const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
-                if (allowed) {
-                    console.log(`💰 Auto-sending payment link at CTA phase (effective=${effectiveMsgCount}, lifetime=${lifetimeCount})`);
-                    await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'upsell_cta', lifetime_msgs: lifetimeCount });
-                    await new Promise(resolve => setTimeout(resolve, 1500));
-                    await sendInstagramMessage(senderId, paymentLink, accessToken);
-                }
             }
         }
 
