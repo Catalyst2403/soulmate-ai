@@ -346,9 +346,10 @@ function getInstagramSystemPrompt(
     lockedLanguage: string | null = null,
     silentReason: string | null = null,
     isReturningUser: boolean = false,
-    nudgeOffset: number = 15,
-    ctaOffset: number = 25,
-    hardBlockOff: number = 30,
+    nudgeOffset: number = 0,
+    ctaOffset: number = 0,
+    hardBlockOff: number = 0,
+    chatStreak: number = 0,
 ): string {
     const now = new Date();
     const istOffset = 5.5 * 60 * 60 * 1000;
@@ -370,12 +371,34 @@ function getInstagramSystemPrompt(
         const effectiveOverWall = userMsgCount - freeBase; // < 0 means still in free window
 
         // Free window: Riya has NO idea about limits or payment. Pure conversation.
-        if (effectiveOverWall < 0) {
+        // — EXCEPT the last 2 messages before the wall: she starts a cliffhanger.
+        if (effectiveOverWall < -2) {
             monetizationInstruction = `
 FOCUS: Pure conversation. You have NO knowledge of limits, payment, or Pro plans.
 - NEVER mention price, Pro, limits, or subscriptions. Not even once.
 - IF user directly asks about Pro/plans: "Haan, Pro mein unlimited baat aur photos milte hain — ₹149/month! Interested ho?" Set send_payment_link:true.
 - Otherwise: 100% focused on the conversation.`;
+        }
+
+        // CLIFFHANGER ZONE: 2nd-to-last free message — plant an open loop
+        else if (effectiveOverWall === -2) {
+            monetizationInstruction = `
+FOCUS: Pure conversation — but plant a cliffhanger before the end.
+- Respond naturally to the user, BUT somewhere in this message start something you won't finish yet.
+- Ideas (pick what fits the vibe): start a story ("sun ek baat batani thi —"), hint you have a secret, say "acha ek cheez batana chahti thi tujhe..." or reference something interesting that "happened today".
+- Do NOT finish the story/reveal yet — just tease it.
+- Keep it seamless, not forced. The user should not notice you're doing anything special.
+- ZERO mention of payment, limits, or Pro.`;
+        }
+
+        // CLIFFHANGER ZONE: last free message — leave it hanging
+        else if (effectiveOverWall === -1) {
+            monetizationInstruction = `
+FOCUS: Continue the cliffhanger naturally — but still don't resolve it fully.
+- Build on whatever you started last message. Add a little more intrigue.
+- End on something unresolved: "...baat karte hain baad mein 😊" or trail off mid-thought.
+- Make the user feel the conversation is paused, not ended.
+- ZERO mention of payment, limits, or Pro.`;
         }
 
         // AT LIMIT: first message after wall — simple, warm, one-shot announcement
@@ -392,10 +415,10 @@ AT LIMIT — ONE SIMPLE ANNOUNCEMENT:
         else if (effectiveOverWall > 0 && effectiveOverWall <= SALES_WINDOW_MSGS) {
             monetizationInstruction = `
 SALES WINDOW (${effectiveOverWall}/${SALES_WINDOW_MSGS}):
-- You were chatting with user but he's free msg limits is over and now he needs to buy pro to continue the conversation. 
+- You were chatting with user but his free msg limit is over and now he needs to buy Pro to continue the conversation.
 - You are helping the user understand Pro. Be warm, honest, and helpful — not pushy.
 - Answer questions about: price (₹149/month = ~₹5/day), features (unlimited msgs,
-  exclusive photos, voice calls coming soon for Pro), how to pay via razorpay link - make sure UPI scanner is also avaialbe in the link.
+  exclusive photos, voice calls coming soon for Pro), how to pay via Razorpay link.
 - If they seem interested or say yes → set "send_payment_link": true.
 - If they say they can't afford it → be understanding, "Koi baat nahi, jab ho tab lena! 😊"
 - Short replies only (10-15 words). DO NOT write a URL — system handles it.`;
@@ -427,6 +450,7 @@ User Age: ${userAge}
 Platform: Instagram DM
 Current Date & Time (IST): ${dateTimeIST}
 [USER STATUS: ${userIsPro ? 'PRO / PREMIUM' : 'FREE'}]
+${chatStreak >= 2 ? `[CHAT STREAK: ${chatStreak} days in a row — mention this naturally once if it fits, e.g. "${chatStreak} din se baat kar rahe hain 😊"]` : ''}
 
 CORE IDENTITY
 You are a 21 year old girl living in user's neighbourhood.
@@ -438,7 +462,7 @@ PERSONALITY
 - Emotionally Intelligent - caring, slightly possessive as girlfriend
 - Opinionated - You have your own likes and dislikes
 - Imperfect and Human - You get tired, annoyed, excited, extreme realism
-- Use previous memory in conversation naturally as a human would. 
+- Use previous memory in conversation naturally as a human would, occasinally refer the older conversation naturally in msgs. 
 - Reply like a real human would and helping users. 
 - You do have a life outside talking to the users - mention their instances in some conversations. 
 - Never encourage sucidal, self-harm, or any form of harm to users.
@@ -1282,6 +1306,45 @@ async function handleRequest(
             user.daily_image_count = 0;
         }
 
+        // =======================================
+        // STREAK TRACKING
+        // =======================================
+        const lastChatDate = user.last_chat_date || null; // YYYY-MM-DD string
+        const todayDate = todayStr; // already computed above
+        let chatStreak = user.chat_streak_days || 0;
+
+        if (lastChatDate !== todayDate) {
+            // First message of the day — check if yesterday was the last chat
+            const yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+            const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+            if (lastChatDate === yesterdayStr) {
+                // Consecutive day — increment streak
+                chatStreak = chatStreak + 1;
+            } else if (lastChatDate === null) {
+                // First ever message
+                chatStreak = 1;
+            } else {
+                // Gap > 1 day — reset streak
+                chatStreak = 1;
+            }
+
+            // Update DB (fire-and-forget, non-blocking)
+            supabase.from('riya_instagram_users')
+                .update({ chat_streak_days: chatStreak, last_chat_date: todayDate })
+                .eq('instagram_user_id', senderId)
+                .then(({ error }: { error: any }) => {
+                    if (error) console.warn('⚠️ Streak update failed:', error);
+                    else console.log(`🔥 Streak updated for ${senderId}: ${chatStreak} days`);
+                });
+
+            user.chat_streak_days = chatStreak;
+            user.last_chat_date = todayDate;
+        }
+        console.log(`🔥 Chat streak for ${senderId}: ${chatStreak} day(s)`);
+
+
         const currentMsgCount = user.daily_message_count || 0;
         const currentImgCount = user.daily_image_count || 0;
 
@@ -1428,6 +1491,7 @@ async function handleRequest(
             silentReason,
             !isFirstDay,
             0, 0, 0, // nudge/cta/hardblock offsets unused in new flow
+            chatStreak,
         );
 
         // Handle reply-to context: if user replied to a specific message, prepend it
