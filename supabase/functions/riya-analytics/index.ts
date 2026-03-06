@@ -195,6 +195,7 @@ serve(async (req) => {
         };
 
         const d1Retention = calculateRetention(1);
+        const d2Retention = calculateRetention(2);
         const d7Retention = calculateRetention(7);
         const d30Retention = calculateRetention(30);
 
@@ -292,7 +293,10 @@ serve(async (req) => {
             return ((retained / eligible.length) * 100).toFixed(2);
         };
 
+        // NOTE: these use last_message_at which only stores the LATEST activity.
+        // For true cohort retention, use the cohortRetention block below (RPC-based).
         const igD1 = calculateIgRetention(1);
+        const igD2 = calculateIgRetention(2);
         const igD3 = calculateIgRetention(3);
         const igD7 = calculateIgRetention(7);
         const igD30 = calculateIgRetention(30);
@@ -328,6 +332,85 @@ serve(async (req) => {
         };
 
         console.log(`⏱️ Sessions: ${sessionMetrics.totalSessions} total, avg=${sessionMetrics.avgSessionMinutes}min, median=${sessionMetrics.medianSessionMinutes}min`);
+
+        // ============================================
+        // 8c. COHORT-BASED RETENTION (D1/D2/D7/D30)
+        // ============================================
+        // Uses riya_conversations to accurately check if a user was active
+        // on the exact day N after signup (±1 day window).
+        // This is the industry-standard Amplitude/Mixpanel-style cohort retention.
+        console.log('🔄 Fetching cohort retention data...');
+        const { data: cohortRetentionRpc, error: cohortError } = await supabase
+            .rpc('get_instagram_cohort_retention');
+
+        if (cohortError) {
+            console.error('Error fetching cohort retention:', cohortError);
+        }
+
+        const cohortRow = cohortRetentionRpc?.[0] || {};
+        const cohortRetention = {
+            d1: {
+                eligible: Number(cohortRow.d1_eligible) || 0,
+                retained: Number(cohortRow.d1_retained) || 0,
+                rate: Number(cohortRow.d1_rate) || 0,
+            },
+            d2: {
+                eligible: Number(cohortRow.d2_eligible) || 0,
+                retained: Number(cohortRow.d2_retained) || 0,
+                rate: Number(cohortRow.d2_rate) || 0,
+            },
+            d7: {
+                eligible: Number(cohortRow.d7_eligible) || 0,
+                retained: Number(cohortRow.d7_retained) || 0,
+                rate: Number(cohortRow.d7_rate) || 0,
+            },
+            d30: {
+                eligible: Number(cohortRow.d30_eligible) || 0,
+                retained: Number(cohortRow.d30_retained) || 0,
+                rate: Number(cohortRow.d30_rate) || 0,
+            },
+        };
+        console.log(`🔄 Cohort retention: D1=${cohortRetention.d1.rate}%, D2=${cohortRetention.d2.rate}%, D7=${cohortRetention.d7.rate}%, D30=${cohortRetention.d30.rate}%`);
+
+        // ============================================
+        // 8d. AGGREGATE / ROLLING METRICS (Avg DAU, MAU, Stickiness)
+        // ============================================
+        console.log('📈 Fetching aggregate metrics...');
+        const { data: aggMetricsRpc, error: aggError } = await supabase
+            .rpc('get_instagram_aggregate_metrics', { p_days: 30 });
+
+        if (aggError) {
+            console.error('Error fetching aggregate metrics:', aggError);
+        }
+
+        const aggRow = aggMetricsRpc?.[0] || {};
+        const aggregateMetrics = {
+            // Rolling 30-day averages
+            avgDau: Number(aggRow.avg_dau) || 0,
+            mau: Number(aggRow.mau) || igMau,   // fallback to igMau
+            avgDauMauRatio: Number(aggRow.avg_dau_mau_ratio) || 0,  // stickiness %
+
+            // Growth
+            avgNewUsersPerDay: Number(aggRow.avg_new_users_per_day) || 0,
+            totalNewUsersPeriod: Number(aggRow.total_new_users_period) || 0,
+
+            // Engagement
+            avgMsgsPerActiveDay: Number(aggRow.avg_msgs_per_active_day) || 0,
+
+            // Revenue aggregates (amount in paise → divide by 100 for ₹)
+            totalRevenuePeriod: ((Number(aggRow.total_revenue_period) || 0) / 100).toFixed(2),
+            avgRevenuePerDay: ((Number(aggRow.avg_revenue_per_day) || 0) / 100).toFixed(2),
+
+            // daily breakdown for sparklines
+            dailyBreakdown: aggRow.daily_breakdown || [],
+
+            // Blended / derived metrics
+            // DAU/MAU is the #1 stickiness metric (WhatsApp ~70%, Instagram ~50%, target >20% for PMF)
+            stickiness: Number(aggRow.avg_dau_mau_ratio) > 0
+                ? `${Number(aggRow.avg_dau_mau_ratio).toFixed(1)}%`
+                : igMau > 0 ? `${((igDau / igMau) * 100).toFixed(1)}%` : '0%',
+        };
+        console.log(`📈 Aggregate: avgDAU=${aggregateMetrics.avgDau}, MAU=${aggregateMetrics.mau}, stickiness=${aggregateMetrics.stickiness}`);
 
         // ============================================
         // 8b. PAYMENT FUNNEL METRICS
@@ -560,6 +643,7 @@ serve(async (req) => {
             },
             retention: {
                 d1: d1Retention,
+                d2: d2Retention,
                 d7: d7Retention,
                 d30: d30Retention
             },
@@ -582,12 +666,18 @@ serve(async (req) => {
                     { tier: '201-500 msgs', count: igTiers['201-500'] },
                     { tier: '500+ msgs', count: igTiers['500+'] }
                 ],
+                // Approximate retention (based on last_message_at — only shows latest activity)
                 retention: {
                     d1: igD1,
+                    d2: igD2,
                     d3: igD3,
                     d7: igD7,
                     d30: igD30
                 },
+                // Cohort retention (industry-standard: checks if user was active on exact day N)
+                cohortRetention,
+                // Rolling aggregate metrics
+                aggregateMetrics,
                 newUsersTrend: igNewUsersTrend,
                 newUsersTrend: igNewUsersTrend,
                 dailyActivity: igDailyActivityWithRevenue,
