@@ -39,6 +39,12 @@ const SUMMARIZE_THRESHOLD = 40;
 const SUMMARY_MODEL_PRIMARY = "gemini-2.5-flash-lite";
 const SUMMARY_MODEL_FALLBACK = "gemini-2.5-flash";
 const SUMMARY_MODEL_LAST_RESORT = "gemini-3-flash-preview";
+
+// Atomic Facts extraction settings
+// Fires every FACTS_EXTRACT_THRESHOLD messages (async, same pattern as summarizer)
+const FACTS_EXTRACT_THRESHOLD = 25;
+const FACTS_MODEL = "gemini-2.5-flash-lite"; // Cheapest capable model — facts extraction is simple
+const FACTS_MAX_KEY_EVENTS = 10;              // Cap key_events[] to prevent unbounded growth
 const LIFETIME_FREE_MSGS = 200;        // First 200 msgs completely free (no limits)
 const POST_FREE_DAILY_BASE = 50;       // After 200 lifetime: 50 free msgs/day
 
@@ -350,6 +356,7 @@ function getInstagramSystemPrompt(
     ctaOffset: number = 0,
     hardBlockOff: number = 0,
     chatStreak: number = 0,
+    userFacts: Record<string, any> | null = null,
 ): string {
     const now = new Date();
     const istOffset = 5.5 * 60 * 60 * 1000;
@@ -463,6 +470,12 @@ Platform: Instagram DM
 Current Date & Time (IST): ${dateTimeIST}
 [USER STATUS: ${userIsPro ? 'PRO / PREMIUM' : 'FREE'}]
 ${chatStreak >= 2 ? `[CHAT STREAK: ${chatStreak} days in a row — mention this naturally once if it fits, e.g. "${chatStreak} din se baat kar rahe hain 😊"]` : ''}
+${(() => {
+            const factsText = userFacts ? formatFactsForPrompt(userFacts) : '';
+            return factsText ? `
+[WHAT YOU KNOW ABOUT THIS USER — use naturally, never robotically quote these back]
+${factsText}` : '';
+        })()}
 
 CORE IDENTITY
 You are a 21 year old girl living in user's neighbourhood.
@@ -661,8 +674,270 @@ async function selectContextualImage(
 }
 
 // =======================================
-// SUMMARIZATION HELPERS
+// ATOMIC FACTS — UTILITIES
 // =======================================
+
+/**
+ * Deep-merge a delta object into existing facts.
+ * - Primitive/array fields: delta overwrites existing
+ * - Object fields: recurse and merge key by key
+ * - delta field === null: delete that key from result
+ * This ensures a failed/partial extraction never wipes existing good data.
+ */
+function deepMerge(existing: Record<string, any>, delta: Record<string, any>): Record<string, any> {
+    const result: Record<string, any> = { ...existing };
+    for (const key of Object.keys(delta)) {
+        if (delta[key] === null) {
+            // Explicit null = remove the field
+            delete result[key];
+        } else if (
+            typeof delta[key] === 'object' &&
+            !Array.isArray(delta[key]) &&
+            delta[key] !== null &&
+            typeof result[key] === 'object' &&
+            result[key] !== null &&
+            !Array.isArray(result[key])
+        ) {
+            // Both sides are plain objects — recurse
+            result[key] = deepMerge(result[key] as Record<string, any>, delta[key] as Record<string, any>);
+        } else {
+            // Primitive, array, or type mismatch — overwrite
+            result[key] = delta[key];
+        }
+    }
+    return result;
+}
+
+/**
+ * Safely parse the LLM-returned delta JSON.
+ * Returns null (don't apply) on ANY parse error — existing facts are untouched.
+ * Strips markdown fences, finds the first {...} block, then parses.
+ */
+function safeParseFactsDelta(raw: string): Record<string, any> | null {
+    try {
+        // Strip markdown code fences
+        let cleaned = raw
+            .replace(/```json\s*/gi, '')
+            .replace(/```\s*/g, '')
+            .trim();
+
+        // Extract first {...} block (in case the model adds preamble text)
+        const match = cleaned.match(/\{[\s\S]*\}/);
+        if (!match) {
+            console.warn('⚠️ Facts extraction: no JSON object found in response');
+            return null;
+        }
+
+        const parsed = JSON.parse(match[0]);
+        if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+            console.warn('⚠️ Facts extraction: parsed value is not a plain object');
+            return null;
+        }
+        return parsed as Record<string, any>;
+    } catch (e) {
+        console.warn('⚠️ Facts extraction: JSON parse failed —', e instanceof Error ? e.message : e);
+        return null;
+    }
+}
+
+/**
+ * Render user_facts as a compact, human-readable block for injection into
+ * the system prompt. Skips empty/null fields automatically.
+ * Target: ~200–300 tokens even for fully-populated fact sets.
+ */
+function formatFactsForPrompt(facts: Record<string, any>): string {
+    if (!facts || Object.keys(facts).length === 0) return '';
+
+    const lines: string[] = [];
+
+    const p = facts.profile || {};
+    const profileParts = [
+        p.name ? `Name: ${p.name}` : '',
+        p.age ? `Age: ${p.age}` : '',
+        p.city ? `City: ${p.city}` : '',
+        p.language ? `Language: ${p.language}` : '',
+    ].filter(Boolean);
+    if (profileParts.length) lines.push(profileParts.join(' | '));
+
+    const l = facts.life || {};
+    const lifeParts = [
+        l.job ? `Job: ${l.job}` : '',
+        l.living ? `Living: ${l.living}` : '',
+        l.college ? `College: ${l.college}` : '',
+    ].filter(Boolean);
+    if (lifeParts.length) lines.push(lifeParts.join(' | '));
+
+    const per = facts.personality || {};
+    if (per.interests?.length) lines.push(`Interests: ${(per.interests as string[]).join(', ')}`);
+    if (per.dislikes?.length) lines.push(`Dislikes: ${(per.dislikes as string[]).join(', ')}`);
+    if (per.communication_style) lines.push(`Style: ${per.communication_style}`);
+
+    const rel = facts.relationship_with_riya || {};
+    if (rel.current_mood_toward_riya) lines.push(`Mood toward Riya: ${rel.current_mood_toward_riya}`);
+    if (rel.declared_love) lines.push(`Declared love: yes`);
+    if (rel.nickname_for_riya) lines.push(`Calls Riya: ${rel.nickname_for_riya}`);
+
+    const events = facts.key_events as Array<{ date?: string; event: string }> | undefined;
+    if (events?.length) {
+        lines.push('Key moments:');
+        events.forEach(ev => {
+            const dateTag = ev.date ? `[${ev.date}] ` : '';
+            lines.push(`  • ${dateTag}${ev.event}`);
+        });
+    }
+
+    return lines.join('\n');
+}
+
+// =======================================
+// ATOMIC FACTS — EXTRACTION
+// =======================================
+
+/**
+ * Async fact extraction — fires after every FACTS_EXTRACT_THRESHOLD messages.
+ * Uses Gemini JSON schema mode to guarantee valid JSON output.
+ * Deep-merges the delta into the existing facts; on any error the old facts
+ * are preserved unchanged and the function fails silently.
+ */
+async function extractAndUpdateFacts(
+    igUserId: string,
+    recentMessages: Array<{ role: string; content: string; created_at?: string }>,
+    existingFacts: Record<string, any>,
+    lifetimeMsgCount: number,
+    genAI: any,
+    supabase: any,
+    existingSummary: string | null = null   // ← NEW: pass historical summary for richer context
+): Promise<void> {
+    console.log(`🧠 Facts extraction starting for ${igUserId} (${recentMessages.length} messages)...`);
+
+    const today = new Date().toISOString().split('T')[0];
+
+    // Filter to user messages only — Riya's messages are mostly reactions/persona,
+    // not facts about the user. Also strip pure monetization messages (they pollute key_events).
+    const MONETIZATION_PATTERNS = [
+        /pro lo/i, /₹149/i, /payment/i, /free msg/i, /msgs khatam/i,
+        /unlimited baat/i, /subscribe/i, /razorpay/i, /upgrade/i,
+        /limit khatam/i, /sales window/i, /riya-ai-ten\.vercel/i,
+    ];
+    const userMessagesOnly = recentMessages
+        .filter(m => m.role === 'user')
+        .filter(m => !MONETIZATION_PATTERNS.some(p => p.test(m.content)))
+        .map(m => `User: ${m.content}`)
+        .join('\n');
+
+    if (!userMessagesOnly.trim()) {
+        console.log('🧠 Facts: no clean user messages after filtering, skipping');
+        await supabase.from('riya_instagram_users')
+            .update({ facts_extracted_at_msg: lifetimeMsgCount })
+            .eq('instagram_user_id', igUserId);
+        return;
+    }
+
+    // Build the context block — summary (if exists) gives historical depth,
+    // recent messages give current-session depth. Together = full picture.
+    const contextBlock = existingSummary
+        ? `HISTORICAL SUMMARY (from earlier conversations):\n${existingSummary}\n\nRECENT USER MESSAGES (last ${recentMessages.length} msgs):\n${userMessagesOnly}`
+        : `RECENT USER MESSAGES:\n${userMessagesOnly}`;
+
+    const extractionPrompt = `You are Riya's memory assistant. Extract facts about the USER from the context below.
+
+EXISTING KNOWN FACTS (do NOT re-extract these):
+${JSON.stringify(existingFacts, null, 2)}
+
+${contextBlock}
+
+RULES (follow strictly):
+- Return ONLY fields that are NEW or CHANGED vs existing facts. Return {} if nothing new.
+- key_events: ONLY real life events (job change, exam, family, travel, health, relationship milestone).
+  NEVER include: payment events, message limits, app subscriptions, or Riya system messages.
+- declared_love: only set to true if the user explicitly said "I love you" or equivalent. NEVER set false.
+- Do NOT extract negative/absent facts (e.g. no job, no city). Only extract confirmed positives.
+- For key_events: provide the full updated array capped at ${FACTS_MAX_KEY_EVENTS}. Keep only real life moments.
+- Today's date: ${today}
+
+JSON schema (return delta only):
+{
+  "profile": { "name": "string", "age": number, "city": "string", "language": "Hinglish|Hindi|English" },
+  "life": { "job": "string", "living": "string", "college": "string" },
+  "personality": { "interests": ["string"], "dislikes": ["string"], "communication_style": "string" },
+  "relationship_with_riya": { "current_mood_toward_riya": "string", "declared_love": true, "nickname_for_riya": "string" },
+  "key_events": [{ "date": "YYYY-MM-DD", "event": "one sentence — real life moment only" }]
+}
+
+Return ONLY the JSON object. No markdown, no explanation.`;
+
+    try {
+        const model = genAI.getGenerativeModel({
+            model: FACTS_MODEL,
+            generationConfig: {
+                responseMimeType: 'application/json',
+                maxOutputTokens: 800,   // Reduced — delta should be small
+                temperature: 0.1,
+            },
+        });
+
+        const result = await model.generateContent(extractionPrompt);
+        const raw = result.response.text();
+        console.log(`🧠 Facts raw delta (${raw.length} chars): ${raw.slice(0, 300)}...`);
+
+        const delta = safeParseFactsDelta(raw);
+        if (!delta || Object.keys(delta).length === 0) {
+            console.log('🧠 Facts extraction: no changes detected, updating cursor only');
+            await supabase.from('riya_instagram_users')
+                .update({ facts_extracted_at_msg: lifetimeMsgCount })
+                .eq('instagram_user_id', igUserId);
+            return;
+        }
+
+        // Cap key_events
+        if (Array.isArray(delta.key_events) && delta.key_events.length > FACTS_MAX_KEY_EVENTS) {
+            delta.key_events = delta.key_events.slice(-FACTS_MAX_KEY_EVENTS);
+        }
+
+        // Post-filter: remove any key_events that snuck through about monetization
+        if (Array.isArray(delta.key_events)) {
+            delta.key_events = (delta.key_events as any[]).filter((ev: any) => {
+                const text = (ev.event || '').toLowerCase();
+                return !MONETIZATION_PATTERNS.some(p => p.test(text)) &&
+                    !text.includes('pro') && !text.includes('subscription') &&
+                    !text.includes('free message') && !text.includes('limit');
+            });
+            if (delta.key_events.length === 0) delete delta.key_events;
+        }
+
+        // Post-filter: never store declared_love: false
+        if (delta.relationship_with_riya?.declared_love === false) {
+            delete delta.relationship_with_riya.declared_love;
+            if (Object.keys(delta.relationship_with_riya).length === 0) {
+                delete delta.relationship_with_riya;
+            }
+        }
+
+        if (Object.keys(delta).length === 0) {
+            console.log('🧠 Facts: delta empty after post-filtering, updating cursor only');
+            await supabase.from('riya_instagram_users')
+                .update({ facts_extracted_at_msg: lifetimeMsgCount })
+                .eq('instagram_user_id', igUserId);
+            return;
+        }
+
+        const updatedFacts = deepMerge(existingFacts, delta);
+
+        const { error } = await supabase.from('riya_instagram_users')
+            .update({ user_facts: updatedFacts, facts_extracted_at_msg: lifetimeMsgCount })
+            .eq('instagram_user_id', igUserId);
+
+        if (error) {
+            console.error('❌ Facts update DB write failed:', error.message);
+        } else {
+            console.log(`✅ Facts updated for ${igUserId}. Changed sections: [${Object.keys(delta).join(', ')}]`);
+        }
+    } catch (err) {
+        console.error('❌ Facts extraction failed (non-fatal):', err instanceof Error ? err.message : err);
+    }
+}
+
+
 
 /**
  * Format timestamp to relative time (e.g., "2 days ago", "3 hours ago")
@@ -1491,10 +1766,17 @@ async function handleRequest(
         // =======================================
         const userName = user.instagram_name || user.instagram_username || 'friend';
 
-        // Extract language lock from summary if present
+        // Extract language lock from summary if present, or fall back to user_facts
         const langMatch = existingSummary?.summary?.match(/[Uu]ser prefers? ([A-Za-z]+)/);
-        const lockedLanguage = langMatch ? langMatch[1] : null;
+        const factsLanguage = (user.user_facts as any)?.profile?.language || null;
+        const lockedLanguage = langMatch ? langMatch[1] : factsLanguage;
         if (lockedLanguage) console.log(`🌐 Language lock detected: ${lockedLanguage}`);
+
+        const userFacts: Record<string, any> | null =
+            user.user_facts && Object.keys(user.user_facts).length > 0
+                ? user.user_facts as Record<string, any>
+                : null;
+        if (userFacts) console.log(`🧠 Injecting user_facts into prompt (sections: ${Object.keys(userFacts).join(', ')})`);
 
         const systemPrompt = getInstagramSystemPrompt(
             userName,
@@ -1507,6 +1789,7 @@ async function handleRequest(
             !isFirstDay,
             0, 0, 0, // nudge/cta/hardblock offsets unused in new flow
             chatStreak,
+            userFacts,
         );
 
         // Handle reply-to context: if user replied to a specific message, prepend it
@@ -2019,6 +2302,50 @@ async function handleRequest(
                     }
                 } catch (summaryError) {
                     console.error("Summary generation failed:", summaryError);
+                }
+            })();
+        }
+
+        // =======================================
+        // TRIGGER ATOMIC FACTS EXTRACTION (Async)
+        // =======================================
+        // Fires every FACTS_EXTRACT_THRESHOLD messages (same fire-and-forget pattern as summarizer).
+        // Uses the last 25 messages as the extraction window.
+        // On failure: silently logs, existing facts are untouched.
+        const newLifetimeCount = (user.message_count || 0) + 1;
+        const factsExtractedAtMsg = (user as any).facts_extracted_at_msg || 0;
+        const messagesSinceFactsExtraction = newLifetimeCount - factsExtractedAtMsg;
+
+        if (messagesSinceFactsExtraction >= FACTS_EXTRACT_THRESHOLD) {
+            console.log(`🧠 Triggering facts extraction for ${senderId} (${messagesSinceFactsExtraction} msgs since last extraction)`);
+            (async () => {
+                try {
+                    // Re-fetch the latest 25 messages as the extraction window
+                    const { data: factsMessages } = await supabase
+                        .from('riya_conversations')
+                        .select('role, content, created_at')
+                        .eq('instagram_user_id', senderId)
+                        .eq('source', 'instagram')
+                        .order('created_at', { ascending: false })
+                        .limit(FACTS_EXTRACT_THRESHOLD);
+
+                    if (!factsMessages || factsMessages.length === 0) {
+                        console.log('🧠 Facts: no messages fetched, skipping');
+                        return;
+                    }
+
+                    const factsGenAI = new GoogleGenerativeAI(getKeyForUser(senderId));
+                    await extractAndUpdateFacts(
+                        senderId,
+                        (factsMessages as any[]).reverse(), // chronological order
+                        (user.user_facts as Record<string, any>) || {},
+                        newLifetimeCount,
+                        factsGenAI,
+                        supabase,
+                        existingSummary?.summary || null   // ← historical summary for richer context
+                    );
+                } catch (factsErr) {
+                    console.error('❌ Facts trigger failed (non-fatal):', factsErr);
                 }
             })();
         }
