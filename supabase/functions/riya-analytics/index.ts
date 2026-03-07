@@ -348,29 +348,21 @@ serve(async (req) => {
         }
 
         const cohortRow = cohortRetentionRpc?.[0] || {};
-        const cohortRetention = {
-            d1: {
-                eligible: Number(cohortRow.d1_eligible) || 0,
-                retained: Number(cohortRow.d1_retained) || 0,
-                rate: Number(cohortRow.d1_rate) || 0,
-            },
-            d2: {
-                eligible: Number(cohortRow.d2_eligible) || 0,
-                retained: Number(cohortRow.d2_retained) || 0,
-                rate: Number(cohortRow.d2_rate) || 0,
-            },
-            d7: {
-                eligible: Number(cohortRow.d7_eligible) || 0,
-                retained: Number(cohortRow.d7_retained) || 0,
-                rate: Number(cohortRow.d7_rate) || 0,
-            },
-            d30: {
-                eligible: Number(cohortRow.d30_eligible) || 0,
-                retained: Number(cohortRow.d30_retained) || 0,
-                rate: Number(cohortRow.d30_rate) || 0,
-            },
-        };
-        console.log(`🔄 Cohort retention: D1=${cohortRetention.d1.rate}%, D2=${cohortRetention.d2.rate}%, D7=${cohortRetention.d7.rate}%, D30=${cohortRetention.d30.rate}%`);
+        const cohortRetention = cohortRow && Object.keys(cohortRow).length > 0 ? {
+            d1Rate: (Number(cohortRow.d1_rate) || 0).toFixed(1),
+            d1Eligible: Number(cohortRow.d1_eligible) || 0,
+            d1Retained: Number(cohortRow.d1_retained) || 0,
+            d2Rate: (Number(cohortRow.d2_rate) || 0).toFixed(1),
+            d2Eligible: Number(cohortRow.d2_eligible) || 0,
+            d2Retained: Number(cohortRow.d2_retained) || 0,
+            d7Rate: (Number(cohortRow.d7_rate) || 0).toFixed(1),
+            d7Eligible: Number(cohortRow.d7_eligible) || 0,
+            d7Retained: Number(cohortRow.d7_retained) || 0,
+            d30Rate: (Number(cohortRow.d30_rate) || 0).toFixed(1),
+            d30Eligible: Number(cohortRow.d30_eligible) || 0,
+            d30Retained: Number(cohortRow.d30_retained) || 0,
+        } : null;
+        console.log(`🔄 Cohort retention: D1=${cohortRow.d1_rate || 0}%, D2=${cohortRow.d2_rate || 0}%, D7=${cohortRow.d7_rate || 0}%, D30=${cohortRow.d30_rate || 0}%`);
 
         // ============================================
         // 8d. AGGREGATE / ROLLING METRICS (Avg DAU, MAU, Stickiness)
@@ -384,33 +376,27 @@ serve(async (req) => {
         }
 
         const aggRow = aggMetricsRpc?.[0] || {};
-        const aggregateMetrics = {
-            // Rolling 30-day averages
-            avgDau: Number(aggRow.avg_dau) || 0,
-            mau: Number(aggRow.mau) || igMau,   // fallback to igMau
-            avgDauMauRatio: Number(aggRow.avg_dau_mau_ratio) || 0,  // stickiness %
-
-            // Growth
-            avgNewUsersPerDay: Number(aggRow.avg_new_users_per_day) || 0,
-            totalNewUsersPeriod: Number(aggRow.total_new_users_period) || 0,
-
-            // Engagement
-            avgMsgsPerActiveDay: Number(aggRow.avg_msgs_per_active_day) || 0,
-
-            // Revenue aggregates (amount in paise → divide by 100 for ₹)
-            totalRevenuePeriod: ((Number(aggRow.total_revenue_period) || 0) / 100).toFixed(2),
-            avgRevenuePerDay: ((Number(aggRow.avg_revenue_per_day) || 0) / 100).toFixed(2),
-
-            // daily breakdown for sparklines
-            dailyBreakdown: aggRow.daily_breakdown || [],
-
-            // Blended / derived metrics
-            // DAU/MAU is the #1 stickiness metric (WhatsApp ~70%, Instagram ~50%, target >20% for PMF)
-            stickiness: Number(aggRow.avg_dau_mau_ratio) > 0
-                ? `${Number(aggRow.avg_dau_mau_ratio).toFixed(1)}%`
-                : igMau > 0 ? `${((igDau / igMau) * 100).toFixed(1)}%` : '0%',
-        };
-        console.log(`📈 Aggregate: avgDAU=${aggregateMetrics.avgDau}, MAU=${aggregateMetrics.mau}, stickiness=${aggregateMetrics.stickiness}`);
+        const aggregateMetrics = aggRow && Object.keys(aggRow).length > 0 ? {
+            period: 30,
+            avgDau: Math.round(Number(aggRow.avg_dau) || 0),
+            mau: Number(aggRow.mau) || igMau,
+            dauMauRatio: Number(aggRow.avg_dau_mau_ratio) > 0
+                ? Number(aggRow.avg_dau_mau_ratio).toFixed(1)
+                : igMau > 0 ? ((igDau / igMau) * 100).toFixed(1) : '0',
+            avgNewUsersPerDay: Math.round(Number(aggRow.avg_new_users_per_day) || 0),
+            totalNewUsers: Number(aggRow.total_new_users_period) || 0,
+            avgMsgsPerActiveDay: Math.round(Number(aggRow.avg_msgs_per_active_day) || 0),
+            totalRevenueINR: ((Number(aggRow.total_revenue_period) || 0) / 100).toFixed(0),
+            avgDailyRevenueINR: (Number(aggRow.avg_revenue_per_day) || 0) / 100,
+            dailyBreakdown: (aggRow.daily_breakdown || []).map((d: any) => ({
+                date: d.date,
+                dau: Number(d.dau) || 0,
+                messages: Number(d.messages) || 0,
+                new_users: Number(d.new_users) || 0,
+                revenue: ((Number(d.revenue) || 0) / 100),
+            })),
+        } : null;
+        console.log(`📈 Aggregate: avgDAU=${aggregateMetrics?.avgDau}, MAU=${aggregateMetrics?.mau}, stickiness=${aggregateMetrics?.dauMauRatio}%`);
 
         // ============================================
         // 8b. PAYMENT FUNNEL METRICS
@@ -678,7 +664,6 @@ serve(async (req) => {
                 cohortRetention,
                 // Rolling aggregate metrics
                 aggregateMetrics,
-                newUsersTrend: igNewUsersTrend,
                 newUsersTrend: igNewUsersTrend,
                 dailyActivity: igDailyActivityWithRevenue,
                 proUsers: proUsers,

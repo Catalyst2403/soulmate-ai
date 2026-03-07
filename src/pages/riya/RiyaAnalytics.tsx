@@ -48,8 +48,29 @@ interface AnalyticsData {
     };
     retention: {
         d1: string;
+        d2?: string;
         d7: string;
         d30: string;
+    };
+    cohortRetention?: {
+        d1Rate: string; d1Eligible: number; d1Retained: number;
+        d2Rate: string; d2Eligible: number; d2Retained: number;
+        d7Rate: string; d7Eligible: number; d7Retained: number;
+        d30Rate: string; d30Eligible: number; d30Retained: number;
+    };
+    aggregateMetrics?: {
+        period: number;
+        avgDau: number;
+        mau: number;
+        dauMauRatio: string;
+        avgNewUsersPerDay: number;
+        totalNewUsers: number;
+        avgMsgsPerActiveDay: number;
+        totalRevenueINR: number;
+        avgDailyRevenueINR: number;
+        sameDayLastWeekDau?: number;
+        sevenDayAvgDau?: number;
+        dailyBreakdown: Array<{ date: string; dau: number; messages: number; new_users: number; revenue: number }>;
     };
     instagramMetrics: {
         total: number;
@@ -1247,6 +1268,161 @@ ORDER BY c1.created_at DESC;`}</pre>
                             </div>
                         )}
 
+                        {/* ===== AGGREGATE METRICS (30-day rolling averages) ===== */}
+                        {analytics.aggregateMetrics && (() => {
+                            const ag = analytics.aggregateMetrics!;
+                            // Compute 7-day avg and same-day-last-week from dailyBreakdown
+                            const breakdown = [...(ag.dailyBreakdown || [])].sort((a, b) => a.date.localeCompare(b.date));
+                            const todayStr = new Date().toISOString().split('T')[0];
+                            const lastWeekStr = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+                            const lastWeekDay = breakdown.find(d => d.date === lastWeekStr);
+                            const last7 = breakdown.slice(-7);
+                            const avg7Dau = last7.length ? Math.round(last7.reduce((s, d) => s + d.dau, 0) / last7.length) : 0;
+                            const todayEntry = breakdown.find(d => d.date === todayStr);
+                            return (
+                                <div className="mb-6">
+                                    <h3 className="font-display text-lg font-semibold text-foreground mb-3 flex items-center gap-2">
+                                        <TrendingUp className="w-5 h-5 text-pink-400" />
+                                        Aggregate Metrics
+                                        <span className="text-xs text-muted-foreground font-normal">({ag.period}d rolling)</span>
+                                    </h3>
+
+                                    {/* Key aggregate cards */}
+                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                                        <div className="p-4 rounded-xl bg-pink-500/10 text-center">
+                                            <p className="text-muted-foreground text-xs mb-1">Avg DAU</p>
+                                            <p className="font-display text-2xl font-bold text-foreground">{ag.avgDau}</p>
+                                            {avg7Dau > 0 && <p className="text-[10px] text-muted-foreground mt-1">7d avg: {avg7Dau}</p>}
+                                        </div>
+                                        <div className="p-4 rounded-xl bg-pink-500/10 text-center">
+                                            <p className="text-muted-foreground text-xs mb-1">MAU (30d)</p>
+                                            <p className="font-display text-2xl font-bold text-foreground">{ag.mau}</p>
+                                        </div>
+                                        <div className="p-4 rounded-xl bg-pink-500/10 text-center">
+                                            <p className="text-muted-foreground text-xs mb-1">Stickiness</p>
+                                            <p className={`font-display text-2xl font-bold ${parseFloat(ag.dauMauRatio) >= 20 ? 'text-green-400' :
+                                                parseFloat(ag.dauMauRatio) >= 10 ? 'text-yellow-400' : 'text-foreground'
+                                                }`}>{ag.dauMauRatio}%</p>
+                                            <p className="text-[10px] text-muted-foreground mt-1">DAU/MAU</p>
+                                        </div>
+                                        <div className="p-4 rounded-xl bg-pink-500/10 text-center">
+                                            <p className="text-muted-foreground text-xs mb-1">Avg New/Day</p>
+                                            <p className="font-display text-2xl font-bold text-foreground">{ag.avgNewUsersPerDay}</p>
+                                            <p className="text-[10px] text-muted-foreground mt-1">Total: {ag.totalNewUsers}</p>
+                                        </div>
+                                        <div className="p-4 rounded-xl bg-green-500/10 text-center">
+                                            <p className="text-muted-foreground text-xs mb-1">Total Rev ({ag.period}d)</p>
+                                            <p className="font-display text-2xl font-bold text-foreground">₹{ag.totalRevenueINR}</p>
+                                        </div>
+                                        <div className="p-4 rounded-xl bg-green-500/10 text-center">
+                                            <p className="text-muted-foreground text-xs mb-1">Avg Daily Rev</p>
+                                            <p className="font-display text-2xl font-bold text-foreground">₹{ag.avgDailyRevenueINR.toFixed(0)}</p>
+                                        </div>
+                                        <div className="p-4 rounded-xl bg-blue-500/10 text-center">
+                                            <p className="text-muted-foreground text-xs mb-1">Today DAU</p>
+                                            <p className="font-display text-2xl font-bold text-foreground">{todayEntry?.dau ?? '—'}</p>
+                                            {lastWeekDay && <p className="text-[10px] text-muted-foreground mt-1">Last wk: {lastWeekDay.dau}</p>}
+                                        </div>
+                                        <div className="p-4 rounded-xl bg-blue-500/10 text-center">
+                                            <p className="text-muted-foreground text-xs mb-1">7d Avg DAU</p>
+                                            <p className="font-display text-2xl font-bold text-foreground">{avg7Dau}</p>
+                                            {lastWeekDay && <p className="text-[10px] text-muted-foreground mt-1">Same wk DAU: {lastWeekDay.dau}</p>}
+                                        </div>
+                                    </div>
+
+                                    {/* DAU trend with 7-day average line */}
+                                    {breakdown.length > 0 && (() => {
+                                        // Compute rolling 7-day avg for each point
+                                        const chartData = breakdown.slice(-30).map((d, i, arr) => {
+                                            const window = arr.slice(Math.max(0, i - 6), i + 1);
+                                            const rolling7 = Math.round(window.reduce((s, x) => s + x.dau, 0) / window.length);
+                                            return {
+                                                date: d.date,
+                                                dau: d.dau,
+                                                '7d avg': rolling7,
+                                                new_users: d.new_users,
+                                            };
+                                        });
+                                        return (
+                                            <div className="h-56">
+                                                <ResponsiveContainer width="100%" height="100%">
+                                                    <LineChart data={chartData}>
+                                                        <CartesianGrid strokeDasharray="3 3" stroke="hsl(240, 10%, 20%)" />
+                                                        <XAxis
+                                                            dataKey="date"
+                                                            stroke="hsl(240, 5%, 65%)"
+                                                            tickFormatter={(v: string) => {
+                                                                const d = new Date(v + 'T00:00:00');
+                                                                return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                                                            }}
+                                                            tick={{ fontSize: 10 }}
+                                                        />
+                                                        <YAxis stroke="hsl(240, 5%, 65%)" tick={{ fontSize: 10 }} />
+                                                        <Tooltip
+                                                            contentStyle={{
+                                                                backgroundColor: 'hsl(240, 10%, 8%)',
+                                                                border: '1px solid hsl(240, 10%, 20%)',
+                                                                borderRadius: '8px',
+                                                            }}
+                                                        />
+                                                        <Legend />
+                                                        <Line type="monotone" dataKey="dau" stroke="hsl(174, 100%, 50%)" strokeWidth={2} dot={false} name="DAU" />
+                                                        <Line type="monotone" dataKey="7d avg" stroke="hsl(280, 80%, 65%)" strokeWidth={2} strokeDasharray="5 3" dot={false} name="7d Avg" />
+                                                        <Line type="monotone" dataKey="new_users" stroke="hsl(45, 90%, 55%)" strokeWidth={1.5} dot={false} name="New Users" />
+                                                    </LineChart>
+                                                </ResponsiveContainer>
+                                            </div>
+                                        );
+                                    })()}
+
+                                    {/* Same day last week comparison table */}
+                                    {breakdown.length >= 8 && (() => {
+                                        const last7days = breakdown.slice(-7);
+                                        const prev7days = breakdown.slice(-14, -7);
+                                        const rows = last7days.map((day, i) => {
+                                            const prev = prev7days[i];
+                                            const diffDau = prev ? day.dau - prev.dau : null;
+                                            return { date: day.date, dau: day.dau, prevDau: prev?.dau, diffDau, newUsers: day.new_users };
+                                        }).reverse();
+                                        return (
+                                            <div className="mt-4 overflow-x-auto">
+                                                <h4 className="text-sm font-semibold text-foreground mb-2">Day-over-Week Comparison (last 7 days)</h4>
+                                                <table className="w-full text-sm">
+                                                    <thead>
+                                                        <tr className="border-b border-border">
+                                                            <th className="text-left py-2 px-3 text-muted-foreground font-medium">Date</th>
+                                                            <th className="text-right py-2 px-3 text-muted-foreground font-medium">DAU</th>
+                                                            <th className="text-right py-2 px-3 text-muted-foreground font-medium">Same Day −7</th>
+                                                            <th className="text-right py-2 px-3 text-muted-foreground font-medium">Δ</th>
+                                                            <th className="text-right py-2 px-3 text-muted-foreground font-medium">New Users</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {rows.map((r, i) => (
+                                                            <tr key={i} className="border-b border-border/40">
+                                                                <td className="py-2 px-3 text-foreground">
+                                                                    {new Date(r.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                                                                </td>
+                                                                <td className="py-2 px-3 text-right font-bold text-foreground">{r.dau}</td>
+                                                                <td className="py-2 px-3 text-right text-muted-foreground">{r.prevDau ?? '—'}</td>
+                                                                <td className={`py-2 px-3 text-right font-semibold ${r.diffDau === null ? 'text-muted-foreground' :
+                                                                    r.diffDau > 0 ? 'text-green-400' :
+                                                                        r.diffDau < 0 ? 'text-red-400' : 'text-muted-foreground'
+                                                                    }`}>
+                                                                    {r.diffDau === null ? '—' : (r.diffDau > 0 ? '+' : '') + r.diffDau}
+                                                                </td>
+                                                                <td className="py-2 px-3 text-right text-foreground">{r.newUsers}</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        );
+                                    })()}
+                                </div>
+                            );
+                        })()}
+
                         {/* IG Classification + Retention + Pro Users side by side */}
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                             {/* IG User Classification */}
@@ -1306,29 +1482,53 @@ ORDER BY c1.created_at DESC;`}</pre>
                                 </div>
                             </div>
 
-                            {/* IG Retention */}
+                            {/* IG Retention - Cohort-based */}
                             <div>
                                 <h3 className="font-display text-lg font-semibold text-foreground mb-3">
                                     IG Retention
+                                    {analytics.cohortRetention && <span className="text-xs text-green-400 ml-2 font-normal">cohort</span>}
                                 </h3>
-                                <div className="space-y-2">
-                                    <div className="flex justify-between items-center p-3 rounded-lg bg-pink-500/5">
-                                        <span className="text-muted-foreground">D1 Retention</span>
-                                        <span className="font-bold text-foreground">{analytics.instagramMetrics.retention.d1}%</span>
+                                {/* Cohort retention if available */}
+                                {analytics.cohortRetention ? (
+                                    <div className="space-y-2">
+                                        {[
+                                            { label: 'D1', rate: analytics.cohortRetention.d1Rate, retained: analytics.cohortRetention.d1Retained, eligible: analytics.cohortRetention.d1Eligible },
+                                            { label: 'D2', rate: analytics.cohortRetention.d2Rate, retained: analytics.cohortRetention.d2Retained, eligible: analytics.cohortRetention.d2Eligible },
+                                            { label: 'D7', rate: analytics.cohortRetention.d7Rate, retained: analytics.cohortRetention.d7Retained, eligible: analytics.cohortRetention.d7Eligible },
+                                            { label: 'D30', rate: analytics.cohortRetention.d30Rate, retained: analytics.cohortRetention.d30Retained, eligible: analytics.cohortRetention.d30Eligible },
+                                        ].map(({ label, rate, retained, eligible }) => (
+                                            <div key={label} className="flex justify-between items-center p-3 rounded-lg bg-pink-500/5">
+                                                <div>
+                                                    <span className="text-muted-foreground">{label} Retention</span>
+                                                    <p className="text-[10px] text-muted-foreground">{retained}/{eligible} users</p>
+                                                </div>
+                                                <span className={`font-bold text-lg ${parseFloat(rate) >= 30 ? 'text-green-400' :
+                                                    parseFloat(rate) >= 15 ? 'text-yellow-400' : 'text-foreground'
+                                                    }`}>{rate}%</span>
+                                            </div>
+                                        ))}
                                     </div>
-                                    <div className="flex justify-between items-center p-3 rounded-lg bg-pink-500/5">
-                                        <span className="text-muted-foreground">D3 Retention</span>
-                                        <span className="font-bold text-foreground">{analytics.instagramMetrics.retention.d3 || '0'}%</span>
+                                ) : (
+                                    /* Fallback: approximate retention */
+                                    <div className="space-y-2">
+                                        <div className="flex justify-between items-center p-3 rounded-lg bg-pink-500/5">
+                                            <span className="text-muted-foreground">D1</span>
+                                            <span className="font-bold text-foreground">{analytics.instagramMetrics.retention.d1}%</span>
+                                        </div>
+                                        <div className="flex justify-between items-center p-3 rounded-lg bg-pink-500/5">
+                                            <span className="text-muted-foreground">D3</span>
+                                            <span className="font-bold text-foreground">{analytics.instagramMetrics.retention.d3 || '0'}%</span>
+                                        </div>
+                                        <div className="flex justify-between items-center p-3 rounded-lg bg-pink-500/5">
+                                            <span className="text-muted-foreground">D7</span>
+                                            <span className="font-bold text-foreground">{analytics.instagramMetrics.retention.d7}%</span>
+                                        </div>
+                                        <div className="flex justify-between items-center p-3 rounded-lg bg-pink-500/5">
+                                            <span className="text-muted-foreground">D30</span>
+                                            <span className="font-bold text-foreground">{analytics.instagramMetrics.retention.d30}%</span>
+                                        </div>
                                     </div>
-                                    <div className="flex justify-between items-center p-3 rounded-lg bg-pink-500/5">
-                                        <span className="text-muted-foreground">D7 Retention</span>
-                                        <span className="font-bold text-foreground">{analytics.instagramMetrics.retention.d7}%</span>
-                                    </div>
-                                    <div className="flex justify-between items-center p-3 rounded-lg bg-pink-500/5">
-                                        <span className="text-muted-foreground">D30 Retention</span>
-                                        <span className="font-bold text-foreground">{analytics.instagramMetrics.retention.d30}%</span>
-                                    </div>
-                                </div>
+                                )}
                             </div>
                         </div>
                     </motion.div>
