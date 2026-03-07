@@ -295,8 +295,8 @@ async function selectContextualImage(
         .select('id, filename, storage_path, blur_storage_path, description, category, is_premium, times_sent, created_at')
         .order('created_at', { ascending: false });
 
-    if (targetCategory === 'private_snaps') {
-        query = query.eq('category', 'private_snaps');
+    if (targetCategory === 'bold_frames') {
+        query = query.eq('category', 'bold_frames');
     } else if (targetCategory !== 'generic_selfie') {
         // Match category
         query = query.eq('category', targetCategory);
@@ -1849,7 +1849,7 @@ Pick based on what you're TALKING about, not just time!
   • study_grind: "kya kar rahi?", padhai, work discussion
   • cafe_food: food talk, "kya khaya?", hangout plans
   • night_casual: "sone ja rahi?", late night vibes, cozy talk
-  • private_snaps: ONLY when explicitly "hot pic", "spicy", "special"
+  • bold_frames: ONLY when explicitly "hot pic", "spicy", "special"
   • generic_selfie: Default when no specific context
   • happy: happy mood, smiling, laughing, cheerful
   • angry: angry mood, upset, annoyed, frustrated
@@ -1957,7 +1957,7 @@ NO plain text - JSON only!
           • study_grind: "what are you doing?", work talk
           • cafe_food: food, lunch, coffee talk
           • night_casual: evening wind-down, relaxing chat
-          • private_snaps: ONLY when explicitly requested
+          • bold_frames: ONLY when explicitly requested
           • generic_selfie: Default when no specific context
           • happy: happy mood, smiling, laughing, cheerful
           • angry: angry mood, upset, annoyed, frustrated
@@ -2050,7 +2050,7 @@ Choose based on conversation topic, not just time of day:
   • outfit_check: Getting ready, what am I wearing
   • cafe_food: Food, lunch, coffee discussion
   • night_casual: Evening, winding down topics
-  • private_snaps: Only when explicitly requested
+  • bold_frames: Only when explicitly requested
   • generic_selfie: Default for general requests
   • happy: happy mood, smiling, laughing, cheerful
   • angry: angry mood, upset, annoyed, frustrated

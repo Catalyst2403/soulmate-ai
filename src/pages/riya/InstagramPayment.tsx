@@ -57,8 +57,8 @@ const InstagramPayment = () => {
     // ... (rest of the component logic remains the same until the return statement)
     const content = {
         en: {
-            header: "Upgrade Riya",
-            tagline: "Don't let the conversation die... 💔",
+            header: "Continue the conversation",
+            tagline: "Riya has something to tell you... 👀",
             planName: "Riya Pro (Instagram)",
             badge: "Most Popular",
             price: "₹149",
@@ -70,7 +70,7 @@ const InstagramPayment = () => {
             unlimitedPhotosSub: "Unlock Her Private Gallery",
             unfilteredAccess: "Unfiltered Access",
             unfilteredAccessSub: "See private snaps & unfiltered chats",
-            cta: "Unlock for ₹149",
+            cta: "Resume for ₹149",
             footer: "Secured by Razorpay • Cancel anytime",
             privacy: "Privacy Policy",
             terms: "Terms of Service",
@@ -78,8 +78,8 @@ const InstagramPayment = () => {
             and: " and "
         },
         hi: {
-            header: "रिया को अपग्रेड करें",
-            tagline: "बातचीत रुकने न दें... 💔",
+            header: "बातचीत जारी रखें",
+            tagline: "रिया कुछ बताना चाहती थी... 👀",
             planName: "रिया प्रो (Instagram)",
             badge: "सबसे लोकप्रिय",
             price: "₹149",
@@ -91,7 +91,7 @@ const InstagramPayment = () => {
             unlimitedPhotosSub: "उसकी प्राइवेट गैलरी अनलॉक करें",
             unfilteredAccess: "बिना किसी रोक-टोक के",
             unfilteredAccessSub: "प्राइवेट स्नैप्स देखें और खुल के बातें करें",
-            cta: "सिर्फ ₹149 में अनलॉक करें",
+            cta: "₹149 में जारी रखें",
             footer: "Razorpay द्वारा सुरक्षित • कभी भी कैंसिल करें",
             privacy: "गोपनीयता नीति",
             terms: "सेवा की शर्तें",
