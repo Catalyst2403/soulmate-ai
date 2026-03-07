@@ -338,7 +338,7 @@ const InstagramPayment = () => {
 
                         <div className="flex flex-col">
                             <div className="flex items-baseline gap-2">
-                                <span className="text-lg text-gray-500 line-through decoration-gray-500">₹199</span>
+                                <span className="text-lg text-gray-500 line-through decoration-gray-500">₹399</span>
                                 <span className="text-4xl font-bold">{t.price}</span>
                                 <span className="text-gray-400">{t.period}</span>
                             </div>

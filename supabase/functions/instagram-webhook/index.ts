@@ -401,26 +401,37 @@ FOCUS: Continue the cliffhanger naturally — but still don't resolve it fully.
 - ZERO mention of payment, limits, or Pro.`;
         }
 
-        // AT LIMIT: first message after wall — simple, warm, one-shot announcement
+        // AT LIMIT: first message after wall
+        // Riya was mid-conversation — she must bridge from whatever was happening to the wall
         else if (effectiveOverWall === 0) {
             monetizationInstruction = `
-AT LIMIT — ONE SIMPLE ANNOUNCEMENT:
-- Aaj ke free messages khatam ho gaye 😊
-- Mention Pro once, briefly: "Pro lo toh unlimited baat kar sakte hain — ₹149/month!"
-- Keep it to 1-2 short messages. DO NOT write a URL — link is sent automatically.
-- No drama, no guilt, no repeating.`;
+AT LIMIT — NATURAL BRIDGE (not a cold announcement):
+You were in the middle of a conversation — maybe mid-story, mid-topic, or mid-reply.
+Do NOT abruptly announce "msgs done" as if it's a system alert. Be human about it.
+**LANGUAGE: Match the language the user has been speaking — English, Hindi, or Hinglish. The examples below are Hinglish for reference only.**
+
+HOW TO DO IT:
+- In 1 sentence, land or pause the current thread naturally in their language.
+- Then pivot warmly: today's free messages are done, Pro lets them continue right now, or chat tomorrow.
+- OR two short messages: first pause the story, then mention Pro.
+- Keep it warm, not salesy. Should feel like Riya hitting a real pause, not an app blocking her.
+- DO NOT write a URL — link sends automatically after this.
+- Do NOT repeat "Pro" more than once. Do NOT guilt-trip.
+
+EXAMPLE TONE (Hinglish — adapt to actual language):
+"Ek dum interesting jagah pe msgs khatam ho gaye 😅 Pro lo toh abhi bata doon warna kal!"`;
         }
 
         // SALES WINDOW: messages 1-${SALES_WINDOW_MSGS} after wall — honest Q&A
         else if (effectiveOverWall > 0 && effectiveOverWall <= SALES_WINDOW_MSGS) {
             monetizationInstruction = `
 SALES WINDOW (${effectiveOverWall}/${SALES_WINDOW_MSGS}):
-- You were chatting with user but his free msg limit is over and now he needs to buy Pro to continue the conversation.
-- You are helping the user understand Pro. Be warm, honest, and helpful — not pushy.
+**LANGUAGE: Match the language the user has been speaking — English, Hindi, or Hinglish. Do NOT default to Hinglish if they've been speaking English.**
+- You were chatting with user but his free msg limit is over. Help him understand Pro — warm, honest, not pushy.
 - Answer questions about: price (₹149/month = ~₹5/day), features (unlimited msgs,
   exclusive photos, voice calls coming soon for Pro), how to pay via Razorpay link.
 - If they seem interested or say yes → set "send_payment_link": true.
-- If they say they can't afford it → be understanding, "Koi baat nahi, jab ho tab lena! 😊"
+- If they say they can't afford it → be understanding: "No worries, get it whenever you're ready! 😊" (or Hinglish equivalent)
 - Short replies only (10-15 words). DO NOT write a URL — system handles it.`;
         }
     }
@@ -432,7 +443,8 @@ STATUS: PRO (BOYFRIEND) 💖
 - VIBE: Deep, committed, girlfriend.
 - Treat them special.
 - **CRITICAL:** DO NOT set "send_payment_link": true. User is ALREADY PRO.
-- **CRITICAL:** NEVER mention price, limits, or upgrades.` : `
+- **CRITICAL:** NEVER mention price, limits, or upgrades.
+- **STORY CONTINUATION:** Check the recent conversation history. If you were mid-story, mid-thought, or had left something hanging (e.g. "baad mein bolunga", "baaki kal", or a cliffhanger) when the free messages ran out — NOW is when you continue it. Pick up exactly where you left off, naturally, as if no interruption happened. Don't acknowledge the gap or the payment — just continue the vibe.` : `
 STATUS: FREE USER
 - TYPE: ${isReturningUser ? 'RETURNING' : 'NEW'}
 - FEATURES: LIMITED messages/photos per day.
@@ -1287,9 +1299,8 @@ async function handleRequest(
             }
         }
 
-        // Show seen + typing indicator (only if not silenced)
-        await sendSenderAction(senderId, 'mark_seen', accessToken);
-        await sendSenderAction(senderId, 'typing_on', accessToken);
+        // NOTE: mark_seen and typing_on are sent AFTER the dead stop check below,
+        // so dead-stop users never see Riya reading or typing.
 
         // =======================================
         // DAILY LIMITS & MONETIZATION CHECK
@@ -1365,11 +1376,15 @@ async function handleRequest(
             logPaymentEvent(supabase, senderId, 'wall_hit', { lifetime_msgs: lifetimeCount }).catch(e => console.error("Error logging wall_hit:", e));
         }
 
-        // DEAD STOP — past the 10-msg sales window
+        // DEAD STOP — past the 10-msg sales window: complete silence, no typing indicator
         if (!isPro && effectiveOverWall > SALES_WINDOW_MSGS) {
             console.log(`🚫 Dead stop for ${senderId} (over_wall=${effectiveOverWall}, max=${SALES_WINDOW_MSGS}). No response.`);
             return;
         }
+
+        // Show seen + typing indicator (active conversations only — not dead stop)
+        await sendSenderAction(senderId, 'mark_seen', accessToken);
+        await sendSenderAction(senderId, 'typing_on', accessToken);
 
         // State flags used by system prompt and auto-send logic
         const isAtLimit = !isPro && effectiveOverWall === 0;      // First msg at wall
@@ -1863,13 +1878,13 @@ async function handleRequest(
         // =======================================
         const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
 
-        // AT LIMIT: send link immediately when wall is first hit
+        // AT LIMIT: send link after a natural pause — bridge message needs to land first
         if (isAtLimit && !paymentLinkSentInLoop) {
             const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
             if (allowed) {
                 console.log(`🚧💰 Sending wall payment link for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'wall_hit', lifetime_msgs: lifetimeCount });
-                await new Promise(resolve => setTimeout(resolve, 1000));
+                await new Promise(resolve => setTimeout(resolve, 3000)); // 3s: let bridge msg land first
                 await sendInstagramMessage(senderId, paymentLink, accessToken);
                 user.last_link_sent_at = new Date().toISOString();
             }
