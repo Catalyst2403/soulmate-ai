@@ -56,6 +56,20 @@ const PAYMENT_LINK_BASE = "https://riya-ai-ten.vercel.app/riya/pay/instagram";
 // Minimum gap between payment link sends per user (6 hours)
 const PAYMENT_LINK_COOLDOWN_MS = 1 * 60 * 60 * 1000;
 
+// =======================================
+// RECHARGE / CREDIT PRICING MODEL
+// =======================================
+// Users purchase message credit packs. 1 message = 1 credit.
+// Legacy Pro users (is_pro=true) remain unlimited — credits are layered on top.
+const RECHARGE_PAGE_BASE = "https://riya-ai-ten.vercel.app/riya/recharge/instagram";
+
+// Pack definitions (mirrors riya_recharge_packs table — kept in sync)
+const RECHARGE_PACKS = [
+    { name: 'basic',    displayName: '🌿 Basic',    priceInr: 79,  credits: 600,  validityDays: 30 },
+    { name: 'romantic', displayName: '💖 Romantic', priceInr: 149, credits: 1500, validityDays: 30 },
+    { name: 'soulmate', displayName: '👑 Soulmate', priceInr: 249, credits: 3000, validityDays: 45 },
+] as const;
+
 // =============================================
 // PERSONALITY ROUTING
 // =============================================
@@ -155,6 +169,36 @@ function isLegacyPro(user: any): boolean {
     if (!user.is_pro) return false;
     if (!user.subscription_start_date) return false;
     return new Date(user.subscription_start_date) < LEGACY_PRO_CUTOFF;
+}
+
+/**
+ * Returns true if the user has purchased credits remaining.
+ * Credits don't hard-expire (they roll over), but we track validity_until
+ * purely for analytics/recharge prompting purposes.
+ * Legacy Pro (is_pro=true) users bypass the credit system entirely.
+ */
+function hasActiveCredits(user: any): boolean {
+    return typeof user.message_credits === 'number' && user.message_credits > 0;
+}
+
+/**
+ * Deducts 1 credit via the DB-level atomic RPC.
+ * Returns new balance, or -1 if no credits.
+ * Called AFTER a successful Gemini response (don't charge for failed calls).
+ */
+async function deductCredit(supabase: any, igUserId: string): Promise<number> {
+    try {
+        const { data, error } = await supabase.rpc('deduct_message_credit', { p_ig_user_id: igUserId });
+        if (error) {
+            console.error('❌ Credit deduction RPC failed:', error.message);
+            return -1;
+        }
+        console.log(`💳 Credit deducted for ${igUserId}. New balance: ${data}`);
+        return data as number;
+    } catch (e) {
+        console.error('❌ Credit deduction error (non-fatal):', e);
+        return -1;
+    }
 }
 
 // =======================================
@@ -576,10 +620,10 @@ function getInstagramSystemPrompt(
         // — EXCEPT the last 2 messages before the wall: she starts a cliffhanger.
         if (effectiveOverWall < -2) {
             monetizationInstruction = `
-FOCUS: Pure conversation. You have NO knowledge of limits, payment, or Pro plans.
-- NEVER mention price, Pro, limits, or subscriptions. Not even once.
-- PHOTOS: If user asks for an image/photo/selfie → set send_image:true as usual. Do NOT treat image requests as Pro inquiries.
-- IF user uses the EXACT words "Pro", "subscribe", "paid", "payment", "price", "₹149", or "upgrade" → ONLY then briefly describe Pro ("Haan, Pro mein unlimited baat aur photos milte hain — ₹149/month!"). Do NOT set send_payment_link:true — they still have free messages.
+FOCUS: Pure conversation. You have NO knowledge of limits, payment, or packs.
+- NEVER mention price, packs, limits, or top-ups. Not even once.
+- PHOTOS: If user asks for an image/photo/selfie → set send_image:true as usual.
+- IF user uses the EXACT words "pack", "recharge", "paid", "payment", "price", or "top up" → ONLY then briefly say ("Haan, credits le lo — ₹79 mein 600 msgs ya ₹149 mein 1500 msgs!"). Do NOT set send_payment_link:true — they still have free messages.
 - Otherwise: 100% focused on the conversation.`;
         }
 
@@ -611,32 +655,30 @@ FOCUS: Continue the cliffhanger naturally — but still don't resolve it fully.
 AT LIMIT — NATURAL BRIDGE (not a cold announcement):
 You were in the middle of a conversation — maybe mid-story, mid-topic, or mid-reply.
 Do NOT abruptly announce "msgs done" as if it's a system alert. Be human about it.
-**LANGUAGE: Match the language the user has been speaking — English, Hindi, or Hinglish. The examples below are Hinglish for reference only.**
+**LANGUAGE: Match the language the user has been speaking — English, Hindi, or Hinglish.**
 
 HOW TO DO IT:
-- EXCEPTION: If the user's message is an image/photo request → set send_image:true AND ALSO mention the limit warmly in the same response.
-- Otherwise: In 1 sentence, land or pause the current thread naturally in their language.
-- Then pivot warmly: today's free messages are done, Pro lets them continue right now, or chat tomorrow.
-- OR two short messages: first pause the story, then mention Pro.
-- Keep it warm, not salesy. Should feel like Riya hitting a real pause, not an app blocking her.
+- EXCEPTION: If the user's message is an image/photo request → set send_image:true AND ALSO mention the limit warmly.
+- Otherwise: In 1 sentence, land or pause the current thread naturally.
+- Then pivot warmly: free credits done, they can top up and keep chatting right now — or come back tomorrow.
+- Keep it warm, not salesy. Should feel like Riya hitting a real pause.
 - DO NOT write a URL — link sends automatically after this.
-- Do NOT repeat "Pro" more than once. Do NOT guilt-trip.
+- Do NOT guilt-trip.
 
 EXAMPLE TONE (Hinglish — adapt to actual language):
-"Ek dum interesting jagah pe msgs khatam ho gaye 😅 Pro lo toh abhi bata doon warna kal!"`;
+"Ek dum interesting jagah pe msgs khatam ho gaye 😅 Top up karo toh abhi bata doon warna kal!"`;
         }
 
-        // SALES WINDOW: messages 1-${SALES_WINDOW_MSGS} after wall — honest Q&A
+        // SALES WINDOW: messages 1-${SALES_WINDOW_MSGS} after wall — honest Q&A about top-up packs
         else if (effectiveOverWall > 0 && effectiveOverWall <= SALES_WINDOW_MSGS) {
             monetizationInstruction = `
 SALES WINDOW (${effectiveOverWall}/${SALES_WINDOW_MSGS}):
-**LANGUAGE: Match the language the user has been speaking — English, Hindi, or Hinglish. Do NOT default to Hinglish if they've been speaking English.**
-- You were chatting with user but his free msg limit is over. Help him understand Pro — warm, honest, not pushy.
-- PHOTOS: If user asks for an image/photo/selfie → STILL set send_image:true (system enforces their daily photo limit separately). Send the image AND gently mention Pro in the same message.
-- Answer questions about: price (₹149/month = ~₹5/day), features (unlimited msgs,
-  exclusive photos, voice calls coming soon for Pro), how to pay via Razorpay link.
+**LANGUAGE: Match the language the user has been speaking. Do NOT default to Hinglish if they've been speaking English.**
+- Free credits done. Help user understand the recharge packs — warm, honest, not pushy.
+- PHOTOS: Unlimited photos in every pack — set send_image:true freely. Images are a bonus of any pack.
+- Packs available: ₹79 (600 msgs, 30d) | ₹149 (1500 msgs, 30d — most popular) | ₹249 (3000 msgs, 45d)
 - If they seem interested or say yes → set "send_payment_link": true.
-- If they say they can't afford it → be understanding: "No worries, get it whenever you're ready! 😊" (or Hinglish equivalent)
+- If they can't afford it → "No worries, aana jab man kare! 😊" (or equivalent in their language)
 - Short replies only (10-15 words). DO NOT write a URL — system handles it.`;
         }
     }
@@ -2007,25 +2049,36 @@ async function handleRequest(
         const currentMsgCount = user.daily_message_count || 0;
         const currentImgCount = user.daily_image_count || 0;
 
-        // Lifetime free + daily cap model
+        // ============================================================
+        // CREDIT / LIMIT GATE
+        // Priority 1: Legacy Pro (is_pro=true) — unlimited
+        // Priority 2: Active purchased credits — bypass daily wall, deduct 1/response
+        // Priority 3: Free tier — 200 lifetime, then 50/day
+        // ============================================================
+        const creditsUser = hasActiveCredits(user);  // has purchased message credits
         const isFirstDay = new Date(user.created_at).toISOString().split('T')[0] === todayStr;
         const lifetimeCount = user.message_count || 0;
         const hasExhaustedFree = lifetimeCount >= LIFETIME_FREE_MSGS;
 
+        // Credit users bypass the daily wall — treat same as Pro for flow control
+        const effectivePro = isPro || creditsUser;
+
         // Before 200 lifetime msgs: effectively unlimited daily. After: 50/day.
         const FREE_BASE_MSGS = hasExhaustedFree ? POST_FREE_DAILY_BASE : 9999;
+        console.log(`💳 Credits: ${user.message_credits || 0} | isPro: ${isPro} | creditsUser: ${creditsUser} | effectivePro: ${effectivePro}`);
         console.log(`📏 Limits: lifetime=${lifetimeCount}/${LIFETIME_FREE_MSGS}, exhausted=${hasExhaustedFree}, daily_base=${FREE_BASE_MSGS}`);
 
         // How many messages past the daily wall (negative = still in free window)
         const effectiveOverWall = currentMsgCount - FREE_BASE_MSGS;
 
+
         // Track when user first hits the wall (for analytics)
-        if (hasExhaustedFree && currentMsgCount === FREE_BASE_MSGS) {
+        if (hasExhaustedFree && currentMsgCount === FREE_BASE_MSGS && !effectivePro) {
             logPaymentEvent(supabase, senderId, 'wall_hit', { lifetime_msgs: lifetimeCount }).catch(e => console.error("Error logging wall_hit:", e));
         }
 
-        // DEAD STOP — past the 10-msg sales window: complete silence, no typing indicator
-        if (!isPro && effectiveOverWall > SALES_WINDOW_MSGS) {
+        // DEAD STOP — past sales window AND no credits: complete silence, no typing indicator
+        if (!effectivePro && effectiveOverWall > SALES_WINDOW_MSGS) {
             console.log(`🚫 Dead stop for ${senderId} (over_wall=${effectiveOverWall}, max=${SALES_WINDOW_MSGS}). No response.`);
             return;
         }
@@ -2035,9 +2088,9 @@ async function handleRequest(
         await sendSenderAction(senderId, 'typing_on', accessToken);
 
         // State flags used by system prompt and auto-send logic
-        const isAtLimit = !isPro && effectiveOverWall === 0;      // First msg at wall
-        const isInSalesWindow = !isPro && effectiveOverWall > 0 && effectiveOverWall <= SALES_WINDOW_MSGS;
-        const isFinalSalesMsg = !isPro && effectiveOverWall === SALES_WINDOW_MSGS;
+        const isAtLimit = !effectivePro && effectiveOverWall === 0;      // First msg at wall
+        const isInSalesWindow = !effectivePro && effectiveOverWall > 0 && effectiveOverWall <= SALES_WINDOW_MSGS;
+        const isFinalSalesMsg = !effectivePro && effectiveOverWall === SALES_WINDOW_MSGS;
 
         if (isAtLimit) console.log(`🚧 AT LIMIT for ${senderId} — wall notification + payment link`);
         if (isInSalesWindow) console.log(`💬 Sales window for ${senderId} (${effectiveOverWall}/${SALES_WINDOW_MSGS})`);
@@ -2160,7 +2213,7 @@ async function handleRequest(
             ? getInstagramSystemPrompt(
                 userName,
                 user.user_age,
-                isPro,
+                effectivePro,
                 currentMsgCount,
                 FREE_BASE_MSGS,
                 silentReason,
@@ -2172,7 +2225,7 @@ async function handleRequest(
             : getNewRiyaSystemPrompt(
                 userName,
                 user.user_age,
-                isPro,
+                effectivePro,
                 currentMsgCount,
                 FREE_BASE_MSGS,
                 silentReason,
@@ -2478,25 +2531,25 @@ async function handleRequest(
                 console.log(`🖼️ Image requested: context="${msg.image_context || 'fallback'}"`);
 
                 // Check Image Limit
-                if (!isPro && currentImgCount >= LIMIT_DAILY_IMAGES_FREE) {
+                if (!effectivePro && currentImgCount >= LIMIT_DAILY_IMAGES_FREE) {
                     // Verbal CTA only — link is sent separately by the auto-send logic with cooldown
                     await sendInstagramMessage(
                         senderId,
-                        `Aaj ki photos ki limit khatam ho gayi 😊 Pro lo toh unlimited photos bhej sakti hoon — ₹149/month!`,
+                        `Aaj ki photos ki limit khatam ho gayi 😊 Pack lo toh unlimited photos milte hain — sirf ₹79 se!`,
                         accessToken
                     );
                     continue; // Skip sending image
                 }
 
                 // Block bold_frames for Free Users when over limit
-                if (!isPro && msg.image_context === 'bold_frames') {
+                if (!effectivePro && msg.image_context === 'bold_frames') {
                     if (currentImgCount < LIMIT_DAILY_IMAGES_FREE) {
                         console.log(`✅ Free user requested bold_frames and below limit. Allowing.`);
                     } else {
                         // Verbal CTA only — link handled by auto-send with cooldown
                         await sendInstagramMessage(
                             senderId,
-                            `Ye wali photos Pro users ke liye hain 😊 Pro lo toh unlimited access milega — ₹149/month!`,
+                            `Ye wali photos paid users ke liye hain 😊 Pack lo toh unlimited access milega!`,
                             accessToken
                         );
                         continue; // Skip sending image
@@ -2548,9 +2601,9 @@ async function handleRequest(
         }
 
         // =======================================
-        // AUTO-SEND PAYMENT LINK (with cooldown guard)
+        // AUTO-SEND RECHARGE LINK (with cooldown guard)
         // =======================================
-        const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
+        const paymentLink = `${RECHARGE_PAGE_BASE}?id=${senderId}`;
 
         // AT LIMIT: send link after a natural pause — bridge message needs to land first
         if (isAtLimit && !paymentLinkSentInLoop) {
@@ -2567,12 +2620,12 @@ async function handleRequest(
         else if (didGoSilent && !paymentLinkSentInLoop) {
             const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
             if (allowed) {
-                console.log(`🤫💰 Sending payment link after silent treatment for ${senderId}`);
+                console.log(`🤫💰 Sending recharge link after silent treatment for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'silent_treatment' });
                 await new Promise(resolve => setTimeout(resolve, 1500));
                 await sendInstagramMessage(
                     senderId,
-                    `Agar baat karni ho toh Pro le lo — unlimited messages aur photos, sirf ₹149/month 😊\n\n${paymentLink}`,
+                    `Jab man ho tab aa jaana 😊 Top up karo toh baat hogi — sirf ₹79 mein 600 msgs!\n\n${paymentLink}`,
                     accessToken
                 );
             }
@@ -2628,7 +2681,17 @@ async function handleRequest(
             })
             .eq('instagram_user_id', senderId);
 
-        console.log(`✅ Instagram conversation saved for ${senderId}`);
+        console.log(`✅ Conversation saved for ${senderId}`);
+
+        // =======================================
+        // DEDUCT MESSAGE CREDIT (after successful response)
+        // =======================================
+        if (creditsUser) {
+            // Fire-and-forget — non-fatal, don't block the response
+            deductCredit(supabase, senderId).then(newBal => {
+                if (newBal >= 0) console.log(`💳 Credit deducted. Balance: ${newBal}`);
+            }).catch(e => console.error('❌ Credit deduction failed:', e));
+        }
 
         // =======================================
         // TRIGGER SUMMARY GENERATION (Async)
