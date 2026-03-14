@@ -18,7 +18,7 @@ interface RiyaChatRequest {
 
 // Guest mode constants
 const GUEST_MESSAGE_LIMIT = 25;  // Max messages for guests before login wall
-const GUEST_DEFAULT_AGE = 23;    // Default age for guest personality
+const GUEST_DEFAULT_AGE = 21;    // Default age for guest personality
 
 
 /**
