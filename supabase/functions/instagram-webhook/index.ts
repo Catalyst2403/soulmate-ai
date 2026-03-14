@@ -158,48 +158,174 @@ function isLegacyPro(user: any): boolean {
 }
 
 // =======================================
-// LIFE STATE CACHE
+// LIFE STATE — self-updating (no separate function needed)
 // =======================================
 
+const LIFE_STATE_UPDATE_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
 interface RiyaLifeState {
+    id?: number;
     current_focus: string;
     mood_baseline: string;
     recent_events: string;
     background_tension: string;
+    week_number?: number;
+    updated_at?: string;
 }
 
 let lifeStateCache: { data: RiyaLifeState; fetchedAt: number } | null = null;
 
 /**
- * Reads Riya's current life state from DB, with a 1-hour in-memory cache.
- * Falls back to a sensible default if the DB row is missing.
+ * Reads Riya's current life state from DB with a 1-hour in-memory cache.
+ * If the state is older than 7 days, fires a background Gemini update.
+ * Falls back to hardcoded defaults if the DB row is missing.
  */
 async function getLifeState(supabase: any): Promise<RiyaLifeState> {
     if (lifeStateCache && Date.now() - lifeStateCache.fetchedAt < LIFE_STATE_CACHE_TTL_MS) {
         return lifeStateCache.data;
     }
+
     try {
         const { data } = await supabase
             .from('riya_life_state')
-            .select('current_focus, mood_baseline, recent_events, background_tension')
+            .select('id, current_focus, mood_baseline, recent_events, background_tension, week_number, updated_at')
             .order('id', { ascending: false })
             .limit(1)
             .single();
+
         if (data) {
             lifeStateCache = { data, fetchedAt: Date.now() };
+
+            // Fire-and-forget background update if state is stale (>7 days)
+            const updated = data.updated_at ? new Date(data.updated_at).getTime() : 0;
+            if (Date.now() - updated > LIFE_STATE_UPDATE_INTERVAL_MS) {
+                console.log('🔄 Life state is stale — triggering background update');
+                runLifeStateUpdate(supabase, data).catch(err =>
+                    console.warn('⚠️ Background life state update failed (non-fatal):', err)
+                );
+            }
+
             return data;
         }
     } catch (e) {
         console.warn('⚠️ getLifeState: DB read failed, using fallback —', e);
     }
-    // Fallback — should only happen before the migration is run
-    const fallback: RiyaLifeState = {
+
+    // Fallback — only hit before migration is run
+    return {
         current_focus: 'Placement season. Waiting to hear back from companies.',
         mood_baseline: 'Anxious but holding it together',
         recent_events: 'Chai at midnight, called Priya, gym in the morning',
         background_tension: 'Project submission is closer than she wants to admit.',
     };
-    return fallback;
+}
+
+/**
+ * Background life state updater — runs inline, no separate Edge Function or pg_cron needed.
+ * Calls Gemini with context to generate the next week's life state, then writes it to DB.
+ */
+async function runLifeStateUpdate(supabase: any, current: RiyaLifeState): Promise<void> {
+    const geminiApiKey = Deno.env.get('GEMINI_API_KEY') || Deno.env.get('GEMINI_API_KEY_1');
+    if (!geminiApiKey) {
+        console.warn('⚠️ runLifeStateUpdate: no Gemini key, skipping');
+        return;
+    }
+
+    // Read last 4 weeks of history for story arc continuity
+    const { data: history } = await supabase
+        .from('riya_life_state_history')
+        .select('week_number, current_focus')
+        .order('week_number', { ascending: false })
+        .limit(4);
+
+    const historyBlock = history && history.length > 0
+        ? history
+            .sort((a: any, b: any) => a.week_number - b.week_number)
+            .map((h: any) => `Week ${h.week_number}: ${h.current_focus}`)
+            .join('\n')
+        : 'No history yet.';
+
+    const prompt = `You manage the life story of Riya Singh.
+She is a 21-year-old BTech CS final year student at DTU Delhi, from Kanpur, living in a Delhi PG.
+
+Current life state:
+Focus: ${current.current_focus}
+Mood: ${current.mood_baseline}
+Recent: ${current.recent_events}
+Tension: ${current.background_tension}
+
+Last 4 weeks history:
+${historyBlock}
+
+Story arcs (pick up threads naturally, don't force):
+- Placement: applying → rejections → interview → result → processing
+- Project: ignored → crisis → submitted
+- Binge spiral: starts a show at a bad time
+- Home visit: every 8-10 weeks
+- Friendship gap: slow quiet realization with Priya
+- Family pressure: gentle, never aggressive
+
+Rules:
+- Move forward in small realistic steps
+- Some weeks are uneventful. That is okay.
+- Don't resolve everything at once
+- Mood must feel earned from last week
+- One main thing, one thing simmering
+- Week after a big event is always quieter
+
+Return ONLY a valid JSON object with keys: current_focus, mood_baseline, recent_events, background_tension. No explanation, no markdown.`;
+
+    const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${geminiApiKey}`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }],
+                generationConfig: {
+                    responseMimeType: 'application/json',
+                    maxOutputTokens: 512,
+                    temperature: 0.85,
+                },
+            }),
+        }
+    );
+
+    if (!response.ok) {
+        throw new Error(`Gemini returned ${response.status}`);
+    }
+
+    const json = await response.json();
+    const raw = json.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!raw) throw new Error('Empty Gemini response');
+
+    const newState = JSON.parse(raw);
+    if (!newState.current_focus || !newState.mood_baseline || !newState.recent_events || !newState.background_tension) {
+        throw new Error('Gemini response missing required fields');
+    }
+
+    // Archive current state
+    await supabase.from('riya_life_state_history').insert({
+        current_focus: current.current_focus,
+        mood_baseline: current.mood_baseline,
+        recent_events: current.recent_events,
+        background_tension: current.background_tension,
+        week_number: current.week_number ?? 1,
+    });
+
+    // Write new state (expires in-memory cache forcing next read to get fresh data)
+    const newWeek = (current.week_number ?? 1) + 1;
+    await supabase.from('riya_life_state').update({
+        current_focus: newState.current_focus,
+        mood_baseline: newState.mood_baseline,
+        recent_events: newState.recent_events,
+        background_tension: newState.background_tension,
+        week_number: newWeek,
+        updated_at: new Date().toISOString(),
+    }).eq('id', current.id);
+
+    lifeStateCache = null; // bust cache so next request gets fresh state
+    console.log(`✅ Life state updated to Week ${newWeek}: "${newState.current_focus}"`);
 }
 
 // =======================================
