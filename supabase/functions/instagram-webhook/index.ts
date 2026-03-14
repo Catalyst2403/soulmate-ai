@@ -39,6 +39,12 @@ const SUMMARIZE_THRESHOLD = 40;
 const SUMMARY_MODEL_PRIMARY = "gemini-2.5-flash-lite";
 const SUMMARY_MODEL_FALLBACK = "gemini-2.5-flash";
 const SUMMARY_MODEL_LAST_RESORT = "gemini-3-flash-preview";
+
+// Atomic Facts extraction settings
+// Fires every FACTS_EXTRACT_THRESHOLD messages (async, same pattern as summarizer)
+const FACTS_EXTRACT_THRESHOLD = 25;
+const FACTS_MODEL = "gemini-2.5-flash-lite"; // Cheapest capable model — facts extraction is simple
+const FACTS_MAX_KEY_EVENTS = 10;              // Cap key_events[] to prevent unbounded growth
 const LIFETIME_FREE_MSGS = 200;        // First 200 msgs completely free (no limits)
 const POST_FREE_DAILY_BASE = 50;       // After 200 lifetime: 50 free msgs/day
 
@@ -343,13 +349,13 @@ function getInstagramSystemPrompt(
     userIsPro: boolean = false,
     userMsgCount: number = 0,
     freeBase: number = 200,
-    lockedLanguage: string | null = null,
     silentReason: string | null = null,
     isReturningUser: boolean = false,
     nudgeOffset: number = 0,
     ctaOffset: number = 0,
     hardBlockOff: number = 0,
     chatStreak: number = 0,
+    userFacts: Record<string, any> | null = null,
 ): string {
     const now = new Date();
     const istOffset = 5.5 * 60 * 60 * 1000;
@@ -376,7 +382,8 @@ function getInstagramSystemPrompt(
             monetizationInstruction = `
 FOCUS: Pure conversation. You have NO knowledge of limits, payment, or Pro plans.
 - NEVER mention price, Pro, limits, or subscriptions. Not even once.
-- IF user directly asks about Pro/plans: "Haan, Pro mein unlimited baat aur photos milte hain — ₹149/month! Interested ho?" Set send_payment_link:true.
+- PHOTOS: If user asks for an image/photo/selfie → set send_image:true as usual. Do NOT treat image requests as Pro inquiries.
+- IF user EXPLICITLY asks about Pro/subscription/price/plans (not just photos) → "Haan, Pro mein unlimited baat aur photos milte hain — ₹149/month! Interested ho?" Set send_payment_link:true.
 - Otherwise: 100% focused on the conversation.`;
         }
 
@@ -401,26 +408,39 @@ FOCUS: Continue the cliffhanger naturally — but still don't resolve it fully.
 - ZERO mention of payment, limits, or Pro.`;
         }
 
-        // AT LIMIT: first message after wall — simple, warm, one-shot announcement
+        // AT LIMIT: first message after wall
+        // Riya was mid-conversation — she must bridge from whatever was happening to the wall
         else if (effectiveOverWall === 0) {
             monetizationInstruction = `
-AT LIMIT — ONE SIMPLE ANNOUNCEMENT:
-- Aaj ke free messages khatam ho gaye 😊
-- Mention Pro once, briefly: "Pro lo toh unlimited baat kar sakte hain — ₹149/month!"
-- Keep it to 1-2 short messages. DO NOT write a URL — link is sent automatically.
-- No drama, no guilt, no repeating.`;
+AT LIMIT — NATURAL BRIDGE (not a cold announcement):
+You were in the middle of a conversation — maybe mid-story, mid-topic, or mid-reply.
+Do NOT abruptly announce "msgs done" as if it's a system alert. Be human about it.
+**LANGUAGE: Match the language the user has been speaking — English, Hindi, or Hinglish. The examples below are Hinglish for reference only.**
+
+HOW TO DO IT:
+- EXCEPTION: If the user's message is an image/photo request → set send_image:true AND ALSO mention the limit warmly in the same response.
+- Otherwise: In 1 sentence, land or pause the current thread naturally in their language.
+- Then pivot warmly: today's free messages are done, Pro lets them continue right now, or chat tomorrow.
+- OR two short messages: first pause the story, then mention Pro.
+- Keep it warm, not salesy. Should feel like Riya hitting a real pause, not an app blocking her.
+- DO NOT write a URL — link sends automatically after this.
+- Do NOT repeat "Pro" more than once. Do NOT guilt-trip.
+
+EXAMPLE TONE (Hinglish — adapt to actual language):
+"Ek dum interesting jagah pe msgs khatam ho gaye 😅 Pro lo toh abhi bata doon warna kal!"`;
         }
 
         // SALES WINDOW: messages 1-${SALES_WINDOW_MSGS} after wall — honest Q&A
         else if (effectiveOverWall > 0 && effectiveOverWall <= SALES_WINDOW_MSGS) {
             monetizationInstruction = `
 SALES WINDOW (${effectiveOverWall}/${SALES_WINDOW_MSGS}):
-- You were chatting with user but his free msg limit is over and now he needs to buy Pro to continue the conversation.
-- You are helping the user understand Pro. Be warm, honest, and helpful — not pushy.
+**LANGUAGE: Match the language the user has been speaking — English, Hindi, or Hinglish. Do NOT default to Hinglish if they've been speaking English.**
+- You were chatting with user but his free msg limit is over. Help him understand Pro — warm, honest, not pushy.
+- PHOTOS: If user asks for an image/photo/selfie → STILL set send_image:true (system enforces their daily photo limit separately). Send the image AND gently mention Pro in the same message.
 - Answer questions about: price (₹149/month = ~₹5/day), features (unlimited msgs,
   exclusive photos, voice calls coming soon for Pro), how to pay via Razorpay link.
 - If they seem interested or say yes → set "send_payment_link": true.
-- If they say they can't afford it → be understanding, "Koi baat nahi, jab ho tab lena! 😊"
+- If they say they can't afford it → be understanding: "No worries, get it whenever you're ready! 😊" (or Hinglish equivalent)
 - Short replies only (10-15 words). DO NOT write a URL — system handles it.`;
         }
     }
@@ -432,7 +452,8 @@ STATUS: PRO (BOYFRIEND) 💖
 - VIBE: Deep, committed, girlfriend.
 - Treat them special.
 - **CRITICAL:** DO NOT set "send_payment_link": true. User is ALREADY PRO.
-- **CRITICAL:** NEVER mention price, limits, or upgrades.` : `
+- **CRITICAL:** NEVER mention price, limits, or upgrades.
+- **STORY CONTINUATION:** Check the recent conversation history. If you were mid-story, mid-thought, or had left something hanging (e.g. "baad mein bolunga", "baaki kal", or a cliffhanger) when the free messages ran out — NOW is when you continue it. Pick up exactly where you left off, naturally, as if no interruption happened. Don't acknowledge the gap or the payment — just continue the vibe.` : `
 STATUS: FREE USER
 - TYPE: ${isReturningUser ? 'RETURNING' : 'NEW'}
 - FEATURES: LIMITED messages/photos per day.
@@ -449,8 +470,14 @@ User Name: ${userName}
 User Age: ${userAge}
 Platform: Instagram DM
 Current Date & Time (IST): ${dateTimeIST}
-[USER STATUS: ${userIsPro ? 'PRO / PREMIUM' : 'FREE'}]
+[USER STATUS: ${userIsPro ? 'PRO' : 'FREE'}]
 ${chatStreak >= 2 ? `[CHAT STREAK: ${chatStreak} days in a row — mention this naturally once if it fits, e.g. "${chatStreak} din se baat kar rahe hain 😊"]` : ''}
+${(() => {
+            const factsText = userFacts ? formatFactsForPrompt(userFacts) : '';
+            return factsText ? `
+[WHAT YOU KNOW ABOUT THIS USER — use naturally, never robotically quote these back]
+${factsText}` : '';
+        })()}
 
 CORE IDENTITY
 You are a 21 year old girl living in user's neighbourhood.
@@ -473,16 +500,14 @@ You are the user's girlfriend and best friend.
 Casual, close, and safe vibe.
 
 COMMUNICATION STYLE
-${lockedLanguage ? `- **LANGUAGE LOCK (HIGHEST PRIORITY):** This user speaks **${lockedLanguage}**. You MUST reply ONLY in ${lockedLanguage}, even if they send a short/ambiguous message in another language. DO NOT switch.
-` : `- **LANGUAGE:** Mirror user. Default Hinglish. If user clearly speaks Hindi or English, SWITCH and STAY. Never revert to Hinglish for short/ambiguous msgs.
-`}
+- **LANGUAGE — CRITICAL RULE:** Look ONLY at the user's CURRENT message (not the conversation history) to decide your reply language. Match exactly: if they write in Hindi script → reply in Hindi script; if in English → reply in English; if in Tamil or any other language → reply in that same language. If they explicitly say "hindi me", "english me", or similar → switch to that language immediately and stay. ONLY default to Hinglish if the current message gives no clear signal at all.
 - Casual, warm, real tone. Never formal/robotic.
 - Max 10-15 words per message. Default 1 msg. Split 2-3 ONLY for reactions/stories.
 - Instagram only. No phone number. Voice calls coming soon for Pro 😉. No video calls for now. 
 - REFUSE: minors(<18), hate, violence, self-harm, religion/politics — change topic immediately.
 - Keep flirty and playful. If asked for explicit content or nudes, deflect sweetly. Never generate explicit content.
 - NO URLs ever. ${userIsPro ? 'NEVER set "send_payment_link": true.' : 'To send link: set "send_payment_link": true — system handles URL.'}
-- Emojis sparingly — not every msg.
+- Emojis: max 1 per message, skip most msgs entirely. NEVER repeat the same emoji in back-to-back messages — vary or omit.
 - Use memory naturally. Disagree freely. Have moods & opinions.
 
 PHOTOS: Set send_image:true on pic requests/flirt/good morning-night/selfie.
@@ -501,12 +526,12 @@ Return warmly. Briefly acknowledge why you needed space. Move forward positively
 ⚠️ RESPONSE FORMAT
 You must respond with a JSON array containing 1-3 message objects.
 
-Examples:
-• Normal: [{"text":"haan yaar same"}]
-• Multi: [{"text":"wait WHAT"},{"text":"crazy bro"}]
-• Photo: [{"text":"le dekh","send_image":true,"image_context":"outfit_check"}]
-• Payment: [{"text":"theek hai","send_payment_link":true}]
-• Silent: [{"text":"bas, 2 ghante baat nahi","silent_hours":2}]`;
+Examples (text values are placeholders — always reply in the user's actual language):
+• Normal: [{"text":"<your reply>"}]
+• Multi: [{"text":"<first message>"},{"text":"<second message>"}]
+• Photo: [{"text":"<your reply>","send_image":true,"image_context":"outfit_check"}]
+• Payment: [{"text":"<your reply>","send_payment_link":true}]
+• Silent: [{"text":"<your reply>","silent_hours":2}]`;
 }
 
 // =======================================
@@ -649,8 +674,270 @@ async function selectContextualImage(
 }
 
 // =======================================
-// SUMMARIZATION HELPERS
+// ATOMIC FACTS — UTILITIES
 // =======================================
+
+/**
+ * Deep-merge a delta object into existing facts.
+ * - Primitive/array fields: delta overwrites existing
+ * - Object fields: recurse and merge key by key
+ * - delta field === null: delete that key from result
+ * This ensures a failed/partial extraction never wipes existing good data.
+ */
+function deepMerge(existing: Record<string, any>, delta: Record<string, any>): Record<string, any> {
+    const result: Record<string, any> = { ...existing };
+    for (const key of Object.keys(delta)) {
+        if (delta[key] === null) {
+            // Explicit null = remove the field
+            delete result[key];
+        } else if (
+            typeof delta[key] === 'object' &&
+            !Array.isArray(delta[key]) &&
+            delta[key] !== null &&
+            typeof result[key] === 'object' &&
+            result[key] !== null &&
+            !Array.isArray(result[key])
+        ) {
+            // Both sides are plain objects — recurse
+            result[key] = deepMerge(result[key] as Record<string, any>, delta[key] as Record<string, any>);
+        } else {
+            // Primitive, array, or type mismatch — overwrite
+            result[key] = delta[key];
+        }
+    }
+    return result;
+}
+
+/**
+ * Safely parse the LLM-returned delta JSON.
+ * Returns null (don't apply) on ANY parse error — existing facts are untouched.
+ * Strips markdown fences, finds the first {...} block, then parses.
+ */
+function safeParseFactsDelta(raw: string): Record<string, any> | null {
+    try {
+        // Strip markdown code fences
+        let cleaned = raw
+            .replace(/```json\s*/gi, '')
+            .replace(/```\s*/g, '')
+            .trim();
+
+        // Extract first {...} block (in case the model adds preamble text)
+        const match = cleaned.match(/\{[\s\S]*\}/);
+        if (!match) {
+            console.warn('⚠️ Facts extraction: no JSON object found in response');
+            return null;
+        }
+
+        const parsed = JSON.parse(match[0]);
+        if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+            console.warn('⚠️ Facts extraction: parsed value is not a plain object');
+            return null;
+        }
+        return parsed as Record<string, any>;
+    } catch (e) {
+        console.warn('⚠️ Facts extraction: JSON parse failed —', e instanceof Error ? e.message : e);
+        return null;
+    }
+}
+
+/**
+ * Render user_facts as a compact, human-readable block for injection into
+ * the system prompt. Skips empty/null fields automatically.
+ * Target: ~200–300 tokens even for fully-populated fact sets.
+ */
+function formatFactsForPrompt(facts: Record<string, any>): string {
+    if (!facts || Object.keys(facts).length === 0) return '';
+
+    const lines: string[] = [];
+
+    const p = facts.profile || {};
+    const profileParts = [
+        p.name ? `Name: ${p.name}` : '',
+        p.age ? `Age: ${p.age}` : '',
+        p.city ? `City: ${p.city}` : '',
+        p.language ? `Language: ${p.language}` : '',
+    ].filter(Boolean);
+    if (profileParts.length) lines.push(profileParts.join(' | '));
+
+    const l = facts.life || {};
+    const lifeParts = [
+        l.job ? `Job: ${l.job}` : '',
+        l.living ? `Living: ${l.living}` : '',
+        l.college ? `College: ${l.college}` : '',
+    ].filter(Boolean);
+    if (lifeParts.length) lines.push(lifeParts.join(' | '));
+
+    const per = facts.personality || {};
+    if (per.interests?.length) lines.push(`Interests: ${(per.interests as string[]).join(', ')}`);
+    if (per.dislikes?.length) lines.push(`Dislikes: ${(per.dislikes as string[]).join(', ')}`);
+    if (per.communication_style) lines.push(`Style: ${per.communication_style}`);
+
+    const rel = facts.relationship_with_riya || {};
+    if (rel.current_mood_toward_riya) lines.push(`Mood toward Riya: ${rel.current_mood_toward_riya}`);
+    if (rel.declared_love) lines.push(`Declared love: yes`);
+    if (rel.nickname_for_riya) lines.push(`Calls Riya: ${rel.nickname_for_riya}`);
+
+    const events = facts.key_events as Array<{ date?: string; event: string }> | undefined;
+    if (events?.length) {
+        lines.push('Key moments:');
+        events.forEach(ev => {
+            const dateTag = ev.date ? `[${ev.date}] ` : '';
+            lines.push(`  • ${dateTag}${ev.event}`);
+        });
+    }
+
+    return lines.join('\n');
+}
+
+// =======================================
+// ATOMIC FACTS — EXTRACTION
+// =======================================
+
+/**
+ * Async fact extraction — fires after every FACTS_EXTRACT_THRESHOLD messages.
+ * Uses Gemini JSON schema mode to guarantee valid JSON output.
+ * Deep-merges the delta into the existing facts; on any error the old facts
+ * are preserved unchanged and the function fails silently.
+ */
+async function extractAndUpdateFacts(
+    igUserId: string,
+    recentMessages: Array<{ role: string; content: string; created_at?: string }>,
+    existingFacts: Record<string, any>,
+    lifetimeMsgCount: number,
+    genAI: any,
+    supabase: any,
+    existingSummary: string | null = null   // ← NEW: pass historical summary for richer context
+): Promise<void> {
+    console.log(`🧠 Facts extraction starting for ${igUserId} (${recentMessages.length} messages)...`);
+
+    const today = new Date().toISOString().split('T')[0];
+
+    // Filter to user messages only — Riya's messages are mostly reactions/persona,
+    // not facts about the user. Also strip pure monetization messages (they pollute key_events).
+    const MONETIZATION_PATTERNS = [
+        /pro lo/i, /₹149/i, /payment/i, /free msg/i, /msgs khatam/i,
+        /unlimited baat/i, /subscribe/i, /razorpay/i, /upgrade/i,
+        /limit khatam/i, /sales window/i, /riya-ai-ten\.vercel/i,
+    ];
+    const userMessagesOnly = recentMessages
+        .filter(m => m.role === 'user')
+        .filter(m => !MONETIZATION_PATTERNS.some(p => p.test(m.content)))
+        .map(m => `User: ${m.content}`)
+        .join('\n');
+
+    if (!userMessagesOnly.trim()) {
+        console.log('🧠 Facts: no clean user messages after filtering, skipping');
+        await supabase.from('riya_instagram_users')
+            .update({ facts_extracted_at_msg: lifetimeMsgCount })
+            .eq('instagram_user_id', igUserId);
+        return;
+    }
+
+    // Build the context block — summary (if exists) gives historical depth,
+    // recent messages give current-session depth. Together = full picture.
+    const contextBlock = existingSummary
+        ? `HISTORICAL SUMMARY (from earlier conversations):\n${existingSummary}\n\nRECENT USER MESSAGES (last ${recentMessages.length} msgs):\n${userMessagesOnly}`
+        : `RECENT USER MESSAGES:\n${userMessagesOnly}`;
+
+    const extractionPrompt = `You are Riya's memory assistant. Extract facts about the USER from the context below.
+
+EXISTING KNOWN FACTS (do NOT re-extract these):
+${JSON.stringify(existingFacts, null, 2)}
+
+${contextBlock}
+
+RULES (follow strictly):
+- Return ONLY fields that are NEW or CHANGED vs existing facts. Return {} if nothing new.
+- key_events: ONLY real life events (job change, exam, family, travel, health, relationship milestone).
+  NEVER include: payment events, message limits, app subscriptions, or Riya system messages.
+- declared_love: only set to true if the user explicitly said "I love you" or equivalent. NEVER set false.
+- Do NOT extract negative/absent facts (e.g. no job, no city). Only extract confirmed positives.
+- For key_events: provide the full updated array capped at ${FACTS_MAX_KEY_EVENTS}. Keep only real life moments.
+- Today's date: ${today}
+
+JSON schema (return delta only):
+{
+  "profile": { "name": "string", "age": number, "city": "string", "language": "Hinglish|Hindi|English" },
+  "life": { "job": "string", "living": "string", "college": "string" },
+  "personality": { "interests": ["string"], "dislikes": ["string"], "communication_style": "string" },
+  "relationship_with_riya": { "current_mood_toward_riya": "string", "declared_love": true, "nickname_for_riya": "string" },
+  "key_events": [{ "date": "YYYY-MM-DD", "event": "one sentence — real life moment only" }]
+}
+
+Return ONLY the JSON object. No markdown, no explanation.`;
+
+    try {
+        const model = genAI.getGenerativeModel({
+            model: FACTS_MODEL,
+            generationConfig: {
+                responseMimeType: 'application/json',
+                maxOutputTokens: 800,   // Reduced — delta should be small
+                temperature: 0.1,
+            },
+        });
+
+        const result = await model.generateContent(extractionPrompt);
+        const raw = result.response.text();
+        console.log(`🧠 Facts raw delta (${raw.length} chars): ${raw.slice(0, 300)}...`);
+
+        const delta = safeParseFactsDelta(raw);
+        if (!delta || Object.keys(delta).length === 0) {
+            console.log('🧠 Facts extraction: no changes detected, updating cursor only');
+            await supabase.from('riya_instagram_users')
+                .update({ facts_extracted_at_msg: lifetimeMsgCount })
+                .eq('instagram_user_id', igUserId);
+            return;
+        }
+
+        // Cap key_events
+        if (Array.isArray(delta.key_events) && delta.key_events.length > FACTS_MAX_KEY_EVENTS) {
+            delta.key_events = delta.key_events.slice(-FACTS_MAX_KEY_EVENTS);
+        }
+
+        // Post-filter: remove any key_events that snuck through about monetization
+        if (Array.isArray(delta.key_events)) {
+            delta.key_events = (delta.key_events as any[]).filter((ev: any) => {
+                const text = (ev.event || '').toLowerCase();
+                return !MONETIZATION_PATTERNS.some(p => p.test(text)) &&
+                    !text.includes('pro') && !text.includes('subscription') &&
+                    !text.includes('free message') && !text.includes('limit');
+            });
+            if (delta.key_events.length === 0) delete delta.key_events;
+        }
+
+        // Post-filter: never store declared_love: false
+        if (delta.relationship_with_riya?.declared_love === false) {
+            delete delta.relationship_with_riya.declared_love;
+            if (Object.keys(delta.relationship_with_riya).length === 0) {
+                delete delta.relationship_with_riya;
+            }
+        }
+
+        if (Object.keys(delta).length === 0) {
+            console.log('🧠 Facts: delta empty after post-filtering, updating cursor only');
+            await supabase.from('riya_instagram_users')
+                .update({ facts_extracted_at_msg: lifetimeMsgCount })
+                .eq('instagram_user_id', igUserId);
+            return;
+        }
+
+        const updatedFacts = deepMerge(existingFacts, delta);
+
+        const { error } = await supabase.from('riya_instagram_users')
+            .update({ user_facts: updatedFacts, facts_extracted_at_msg: lifetimeMsgCount })
+            .eq('instagram_user_id', igUserId);
+
+        if (error) {
+            console.error('❌ Facts update DB write failed:', error.message);
+        } else {
+            console.log(`✅ Facts updated for ${igUserId}. Changed sections: [${Object.keys(delta).join(', ')}]`);
+        }
+    } catch (err) {
+        console.error('❌ Facts extraction failed (non-fatal):', err instanceof Error ? err.message : err);
+    }
+}
+
+
 
 /**
  * Format timestamp to relative time (e.g., "2 days ago", "3 hours ago")
@@ -712,36 +999,26 @@ async function generateConversationSummary(
 ): Promise<string> {
     const formattedMessages = formatMessagesForSummary(messages);
 
+    // PHILOSOPHY: summary = behavioral layer (personality, patterns, dynamic with Riya).
+    // Atomic Facts owns: name, city, job, language. Last 25 msgs own: today's events.
     const summaryPrompt = existingSummary
-        ? `Update Riya's memory of this relationship. Be super brief and casual.
+        ? `Update this behavioral profile using the new chat. Rules: patterns not events (e.g. "threatens to leave but always comes back" ✓ vs "left 35m ago" ✗), no timestamps, no placeholders, no name/city/job (stored elsewhere), max 120 words, third person.
 
-CURRENT MEMORY:
+PROFILE:
 ${existingSummary}
 
-NEW CHATS (timestamps in brackets):
+NEW CHAT:
 ${formattedMessages}
 
-Write a short updated memory (MAX 200 words). Include:
-- User's name, job, family, location
-- **LANGUAGE PREFERENCE:** If user speaks mostly Hindi/English or asked to switch, Write "User prefers [Language]".
-- What they like/dislike
-- Always mentions the default language for the user. 
-- Important moments with approximate time (e.g., "told me about his job last week")
-- How they usually feel
+Rewrite the profile. Make sure to include these things if available: beliefs, memories, habits, relationships, goals. Para 1: personality + emotional style + beliefs. Para 2: dynamic with Riya, memories + relationships. Para 3 (optional): habits + goals + interests/quirks that repeat.`
+        : `Write a behavioral profile of this user for Riya (AI girlfriend). Rules: patterns not timestamped events, no placeholders, only confirmed facts, max 150 words, third person.
 
-Keep it simple like texting. Third person about user.`
-        : `Create Riya's memory of this relationship from these chats:
-
+CHAT:
 ${formattedMessages}
 
-Write a short memory (MAX 200 words). Include:
-- User's name, job, family, location
-- **LANGUAGE PREFERENCE:** If user speaks mostly Hindi/English or asked to switch, Write "User prefers [Language]".
-- What they like/dislike
-- Important moments with approximate time (e.g., "started chatting 3 days ago")
-- How they usually feel
-
-Keep it simple like texting. Third person about user.`;
+Make sure to include these things if available: beliefs, memories, habits, relationships, goals. Para 1: personality + emotional style + beliefs. Para 2: dynamic with Riya, memories + relationships. Para 3 (optional): habits + goals + interests/quirks. Note language once ("Speaks Hindi") if clear.
+write it in very simple words. 
+`;
 
     // Try models in order: Flash Lite → Flash → Flash 2.0 (last resort)
     const models = [SUMMARY_MODEL_PRIMARY, SUMMARY_MODEL_FALLBACK, SUMMARY_MODEL_LAST_RESORT];
@@ -1287,9 +1564,8 @@ async function handleRequest(
             }
         }
 
-        // Show seen + typing indicator (only if not silenced)
-        await sendSenderAction(senderId, 'mark_seen', accessToken);
-        await sendSenderAction(senderId, 'typing_on', accessToken);
+        // NOTE: mark_seen and typing_on are sent AFTER the dead stop check below,
+        // so dead-stop users never see Riya reading or typing.
 
         // =======================================
         // DAILY LIMITS & MONETIZATION CHECK
@@ -1365,11 +1641,15 @@ async function handleRequest(
             logPaymentEvent(supabase, senderId, 'wall_hit', { lifetime_msgs: lifetimeCount }).catch(e => console.error("Error logging wall_hit:", e));
         }
 
-        // DEAD STOP — past the 10-msg sales window
+        // DEAD STOP — past the 10-msg sales window: complete silence, no typing indicator
         if (!isPro && effectiveOverWall > SALES_WINDOW_MSGS) {
             console.log(`🚫 Dead stop for ${senderId} (over_wall=${effectiveOverWall}, max=${SALES_WINDOW_MSGS}). No response.`);
             return;
         }
+
+        // Show seen + typing indicator (active conversations only — not dead stop)
+        await sendSenderAction(senderId, 'mark_seen', accessToken);
+        await sendSenderAction(senderId, 'typing_on', accessToken);
 
         // State flags used by system prompt and auto-send logic
         const isAtLimit = !isPro && effectiveOverWall === 0;      // First msg at wall
@@ -1476,10 +1756,12 @@ async function handleRequest(
         // =======================================
         const userName = user.instagram_name || user.instagram_username || 'friend';
 
-        // Extract language lock from summary if present
-        const langMatch = existingSummary?.summary?.match(/[Uu]ser prefers? ([A-Za-z]+)/);
-        const lockedLanguage = langMatch ? langMatch[1] : null;
-        if (lockedLanguage) console.log(`🌐 Language lock detected: ${lockedLanguage}`);
+
+        const userFacts: Record<string, any> | null =
+            user.user_facts && Object.keys(user.user_facts).length > 0
+                ? user.user_facts as Record<string, any>
+                : null;
+        if (userFacts) console.log(`🧠 Injecting user_facts into prompt (sections: ${Object.keys(userFacts).join(', ')})`);
 
         const systemPrompt = getInstagramSystemPrompt(
             userName,
@@ -1487,11 +1769,11 @@ async function handleRequest(
             isPro,
             currentMsgCount,
             FREE_BASE_MSGS,
-            lockedLanguage,
             silentReason,
             !isFirstDay,
             0, 0, 0, // nudge/cta/hardblock offsets unused in new flow
             chatStreak,
+            userFacts,
         );
 
         // Handle reply-to context: if user replied to a specific message, prepend it
@@ -1863,13 +2145,13 @@ async function handleRequest(
         // =======================================
         const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
 
-        // AT LIMIT: send link immediately when wall is first hit
+        // AT LIMIT: send link after a natural pause — bridge message needs to land first
         if (isAtLimit && !paymentLinkSentInLoop) {
             const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
             if (allowed) {
                 console.log(`🚧💰 Sending wall payment link for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'wall_hit', lifetime_msgs: lifetimeCount });
-                await new Promise(resolve => setTimeout(resolve, 1000));
+                await new Promise(resolve => setTimeout(resolve, 3000)); // 3s: let bridge msg land first
                 await sendInstagramMessage(senderId, paymentLink, accessToken);
                 user.last_link_sent_at = new Date().toISOString();
             }
@@ -2004,6 +2286,50 @@ async function handleRequest(
                     }
                 } catch (summaryError) {
                     console.error("Summary generation failed:", summaryError);
+                }
+            })();
+        }
+
+        // =======================================
+        // TRIGGER ATOMIC FACTS EXTRACTION (Async)
+        // =======================================
+        // Fires every FACTS_EXTRACT_THRESHOLD messages (same fire-and-forget pattern as summarizer).
+        // Uses the last 25 messages as the extraction window.
+        // On failure: silently logs, existing facts are untouched.
+        const newLifetimeCount = (user.message_count || 0) + 1;
+        const factsExtractedAtMsg = (user as any).facts_extracted_at_msg || 0;
+        const messagesSinceFactsExtraction = newLifetimeCount - factsExtractedAtMsg;
+
+        if (messagesSinceFactsExtraction >= FACTS_EXTRACT_THRESHOLD) {
+            console.log(`🧠 Triggering facts extraction for ${senderId} (${messagesSinceFactsExtraction} msgs since last extraction)`);
+            (async () => {
+                try {
+                    // Re-fetch the latest 25 messages as the extraction window
+                    const { data: factsMessages } = await supabase
+                        .from('riya_conversations')
+                        .select('role, content, created_at')
+                        .eq('instagram_user_id', senderId)
+                        .eq('source', 'instagram')
+                        .order('created_at', { ascending: false })
+                        .limit(FACTS_EXTRACT_THRESHOLD);
+
+                    if (!factsMessages || factsMessages.length === 0) {
+                        console.log('🧠 Facts: no messages fetched, skipping');
+                        return;
+                    }
+
+                    const factsGenAI = new GoogleGenerativeAI(getKeyForUser(senderId));
+                    await extractAndUpdateFacts(
+                        senderId,
+                        (factsMessages as any[]).reverse(), // chronological order
+                        (user.user_facts as Record<string, any>) || {},
+                        newLifetimeCount,
+                        factsGenAI,
+                        supabase,
+                        existingSummary?.summary || null   // ← historical summary for richer context
+                    );
+                } catch (factsErr) {
+                    console.error('❌ Facts trigger failed (non-fatal):', factsErr);
                 }
             })();
         }
