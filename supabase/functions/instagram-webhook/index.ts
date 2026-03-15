@@ -61,8 +61,6 @@ const PAYMENT_LINK_COOLDOWN_MS = 1 * 60 * 60 * 1000;
 // =======================================
 // Users purchase message credit packs. 1 message = 1 credit.
 // Legacy Pro users (is_pro=true) remain unlimited — credits are layered on top.
-const RECHARGE_PAGE_BASE = "https://riya-ai-ten.vercel.app/riya/recharge/instagram";
-
 // Pack definitions (mirrors riya_recharge_packs table — kept in sync)
 const RECHARGE_PACKS = [
     { name: 'basic', displayName: '🌿 Basic', priceInr: 79, credits: 600, validityDays: 30 },
