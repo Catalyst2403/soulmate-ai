@@ -7,12 +7,7 @@ const corsHeaders = {
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-/**
- * Razorpay Payment Verification Edge Function
- * Verifies payment signature and activates subscription
- */
-
-// Plan durations
+// Legacy plan durations (non-credit plans)
 const PLAN_DURATIONS: Record<string, number> = {
     trial: 30,
     monthly: 30,
@@ -21,6 +16,9 @@ const PLAN_DURATIONS: Record<string, number> = {
     instagram_monthly: 30
 };
 
+// Credit pack names (must match pack_name in riya_recharge_packs)
+const CREDIT_PACK_NAMES = ['basic', 'romantic', 'soulmate'];
+
 interface VerifyPaymentRequest {
     userId?: string;
     instagramUserId?: string;
@@ -28,21 +26,19 @@ interface VerifyPaymentRequest {
     paymentId: string;
     signature: string;
     planType: string;
+    packName?: string; // For new credit system: 'basic' | 'romantic' | 'soulmate'
 }
 
-// Convert string to Uint8Array for crypto operations
 function stringToBytes(str: string): Uint8Array {
     return new TextEncoder().encode(str);
 }
 
-// Convert Uint8Array to hex string
 function bytesToHex(bytes: Uint8Array): string {
     return Array.from(bytes)
         .map(b => b.toString(16).padStart(2, '0'))
         .join('');
 }
 
-// HMAC SHA256 function
 async function hmacSha256(data: string, secret: string): Promise<string> {
     const key = await crypto.subtle.importKey(
         "raw",
@@ -51,13 +47,7 @@ async function hmacSha256(data: string, secret: string): Promise<string> {
         false,
         ["sign"]
     );
-
-    const signatureBytes = await crypto.subtle.sign(
-        "HMAC",
-        key,
-        stringToBytes(data)
-    );
-
+    const signatureBytes = await crypto.subtle.sign("HMAC", key, stringToBytes(data));
     return bytesToHex(new Uint8Array(signatureBytes));
 }
 
@@ -70,22 +60,18 @@ Deno.serve(async (req) => {
 
     try {
         const bodyText = await req.text();
-        console.log("📦 Raw request body:", bodyText);
-
-        let body;
+        let body: VerifyPaymentRequest;
         try {
             body = JSON.parse(bodyText);
-        } catch (e) {
-            console.error("❌ Failed to parse JSON body");
+        } catch {
             throw new Error("Invalid JSON body");
         }
 
-        const { userId, instagramUserId, orderId, paymentId, signature, planType }: VerifyPaymentRequest = body;
+        const { userId, instagramUserId, orderId, paymentId, signature, planType, packName } = body;
 
-        console.log(`🔐 Verifying payment: User=${userId || 'IG:' + instagramUserId}, Order=${orderId}, Payment=${paymentId}, Plan=${planType}`);
+        console.log(`🔐 Verifying: User=${userId || 'IG:' + instagramUserId}, Order=${orderId}, Pack=${packName || planType}`);
 
-        if (!orderId || !paymentId || !signature || !planType) {
-            console.error("❌ Missing required payment details");
+        if (!orderId || !paymentId || !signature || (!planType && !packName)) {
             throw new Error("Missing required payment details");
         }
 
@@ -96,55 +82,26 @@ Deno.serve(async (req) => {
             );
         }
 
-        // Initialize Supabase client
-        console.log("🔌 Initializing Supabase client...");
         const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
         const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
         const supabase = createClient(supabaseUrl, supabaseKey);
 
         const razorpayKeySecret = Deno.env.get('RAZORPAY_KEY_SECRET');
-
         if (!razorpayKeySecret) {
-            console.error("Razorpay secret not configured");
             return new Response(
                 JSON.stringify({ error: "Payment system not configured" }),
                 { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
             );
         }
 
-        // Verify signature using HMAC SHA256
-        // Razorpay signature = HMAC_SHA256(order_id + "|" + payment_id, secret)
-        const messageBody = `${orderId}|${paymentId}`;
+        // Verify signature
+        const expectedSig = await hmacSha256(`${orderId}|${paymentId}`, razorpayKeySecret);
 
-        const key = await crypto.subtle.importKey(
-            "raw",
-            stringToBytes(razorpayKeySecret),
-            { name: "HMAC", hash: "SHA-256" },
-            false,
-            ["sign"]
-        );
-
-        const signatureBytes = await crypto.subtle.sign(
-            "HMAC",
-            key,
-            stringToBytes(messageBody)
-        );
-
-        const expectedSignature = bytesToHex(new Uint8Array(signatureBytes));
-
-        if (expectedSignature !== signature) {
-            console.error("❌ Signature verification failed");
-            console.error(`Expected: ${expectedSignature}`);
-            console.error(`Received: ${signature}`);
-
-            // Update payment as failed
+        if (expectedSig !== signature) {
+            console.error("❌ Signature mismatch");
             await supabase
                 .from('riya_payments')
-                .update({
-                    status: 'failed',
-                    failure_reason: 'Signature verification failed',
-                    updated_at: new Date().toISOString()
-                })
+                .update({ status: 'failed', failure_reason: 'Signature verification failed', updated_at: new Date().toISOString() })
                 .eq('razorpay_order_id', orderId);
 
             return new Response(
@@ -153,9 +110,8 @@ Deno.serve(async (req) => {
             );
         }
 
-        console.log("✅ Signature verified successfully");
+        console.log("✅ Signature verified");
 
-        // Get payment record
         const { data: paymentRecord } = await supabase
             .from('riya_payments')
             .select('*')
@@ -163,41 +119,105 @@ Deno.serve(async (req) => {
             .single();
 
         if (!paymentRecord) {
-            console.error("Payment record not found for order:", orderId);
             return new Response(
                 JSON.stringify({ error: "Payment record not found" }),
                 { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
             );
         }
 
-        // Calculate subscription dates
         const now = new Date();
+        const isCreditPack = packName && CREDIT_PACK_NAMES.includes(packName);
+
+        // ============================================================
+        // CREDIT PACK ACTIVATION (new system)
+        // ============================================================
+        if (isCreditPack && instagramUserId) {
+            console.log(`💳 Credit pack: ${packName}`);
+
+            const { data: pack, error: packErr } = await supabase
+                .from('riya_recharge_packs')
+                .select('id, message_credits, validity_days, display_name')
+                .eq('pack_name', packName)
+                .eq('is_active', true)
+                .single();
+
+            if (packErr || !pack) {
+                throw new Error(`Pack not found: ${packName}`);
+            }
+
+            const { data: newBalance, error: rpcErr } = await supabase.rpc('add_message_credits', {
+                p_ig_user_id: instagramUserId,
+                p_pack_id: pack.id,
+                p_credits: pack.message_credits,
+                p_validity_days: pack.validity_days,
+            });
+
+            if (rpcErr) throw rpcErr;
+
+            console.log(`✅ Credits added: ${newBalance} remaining for ${instagramUserId}`);
+
+            await supabase
+                .from('riya_payments')
+                .update({
+                    razorpay_payment_id: paymentId,
+                    status: 'success',
+                    updated_at: now.toISOString()
+                })
+                .eq('razorpay_order_id', orderId);
+
+            // Inject system message for Riya
+            await supabase.from('riya_conversations').insert({
+                user_id: userId || null,
+                instagram_user_id: instagramUserId,
+                source: 'instagram',
+                role: 'user',
+                content: JSON.stringify([{
+                    text: `[SYSTEM EVENT: User just purchased the ${pack.display_name} pack (${pack.message_credits} messages). Warmly acknowledge — keep it brief, real, not salesy. Then pick up the conversation naturally.]`
+                }]),
+                model_used: 'system',
+                metadata: { type: 'system_event', event: 'credit_purchase', pack: packName }
+            });
+
+            // Analytics
+            try {
+                await supabase.from('riya_payment_events').insert({
+                    instagram_user_id: instagramUserId,
+                    event_type: 'payment_success',
+                    metadata: { orderId, paymentId, packName, credits: pack.message_credits, source: 'verify-razorpay-payment' },
+                });
+            } catch (e) {
+                console.warn('⚠️ analytics log failed:', e);
+            }
+
+            return new Response(
+                JSON.stringify({
+                    success: true,
+                    message: "Credits added successfully!",
+                    credits: { added: pack.message_credits, balance: newBalance, validityDays: pack.validity_days }
+                }),
+                { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+        }
+
+        // ============================================================
+        // LEGACY SUBSCRIPTION ACTIVATION (is_pro=true flow)
+        // ============================================================
+        console.log(`📋 Legacy plan: ${planType}`);
         const durationDays = PLAN_DURATIONS[planType] || 30;
         const expiresAt = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000);
 
-        // Check for existing subscription
         let existingSub: any = null;
-
         if (userId) {
-            const { data } = await supabase
-                .from('riya_subscriptions')
-                .select('*')
-                .eq('user_id', userId)
-                .single();
+            const { data } = await supabase.from('riya_subscriptions').select('*').eq('user_id', userId).single();
             existingSub = data;
         } else if (instagramUserId) {
-            const { data } = await supabase
-                .from('riya_subscriptions')
-                .select('*')
-                .eq('instagram_user_id', instagramUserId)
-                .single();
+            const { data } = await supabase.from('riya_subscriptions').select('*').eq('instagram_user_id', instagramUserId).single();
             existingSub = data;
         }
 
         let subscriptionId: string;
 
         if (existingSub) {
-            // Extend existing subscription
             const currentExpiry = new Date(existingSub.expires_at);
             const newExpiry = currentExpiry > now
                 ? new Date(currentExpiry.getTime() + durationDays * 24 * 60 * 60 * 1000)
@@ -214,21 +234,14 @@ Deno.serve(async (req) => {
                     razorpay_signature: signature,
                     expires_at: newExpiry.toISOString(),
                     is_first_subscription: false,
-                    updated_at: new Date().toISOString()
+                    updated_at: now.toISOString()
                 })
                 .eq('id', existingSub.id)
-                .select()
-                .single();
+                .select().single();
 
-            if (updateError) {
-                console.error("Error updating subscription:", updateError);
-                throw new Error("Failed to update subscription");
-            }
-
+            if (updateError) throw new Error("Failed to update subscription");
             subscriptionId = updatedSub.id;
-            console.log(`✅ Extended subscription ${subscriptionId} until ${newExpiry.toISOString()}`);
         } else {
-            // Create new subscription
             const { data: newSub, error: createError } = await supabase
                 .from('riya_subscriptions')
                 .insert({
@@ -244,103 +257,75 @@ Deno.serve(async (req) => {
                     expires_at: expiresAt.toISOString(),
                     is_first_subscription: planType === 'trial'
                 })
-                .select()
-                .single();
+                .select().single();
 
-            if (createError) {
-                console.error("Error creating subscription:", createError);
-                throw new Error("Failed to create subscription");
-            }
-
+            if (createError) throw new Error("Failed to create subscription");
             subscriptionId = newSub.id;
-            console.log(`✅ Created new subscription ${subscriptionId} until ${expiresAt.toISOString()}`);
         }
 
-        // Update payment record
         await supabase
             .from('riya_payments')
             .update({
                 subscription_id: subscriptionId,
                 razorpay_payment_id: paymentId,
                 status: 'success',
-                updated_at: new Date().toISOString()
+                updated_at: now.toISOString()
             })
             .eq('razorpay_order_id', orderId);
 
-        // If Instagram user, update the riya_instagram_users table flags
         if (instagramUserId) {
+            const finalExpiry = existingSub
+                ? (new Date(existingSub.expires_at) > now
+                    ? new Date(new Date(existingSub.expires_at).getTime() + durationDays * 24 * 60 * 60 * 1000)
+                    : expiresAt)
+                : expiresAt;
+
             await supabase
                 .from('riya_instagram_users')
                 .update({
                     is_pro: true,
-                    subscription_end_date: existingSub
-                        ? (new Date(new Date(existingSub.expires_at) > now
-                            ? new Date(existingSub.expires_at).getTime() + durationDays * 24 * 60 * 60 * 1000
-                            : expiresAt.getTime()).toISOString())
-                        : expiresAt.toISOString(),
+                    subscription_end_date: finalExpiry.toISOString(),
                     subscription_start_date: existingSub ? existingSub.starts_at : now.toISOString()
                 })
                 .eq('instagram_user_id', instagramUserId);
 
-            console.log(`✅ Updated Instagram user ${instagramUserId} status to PRO`);
+            await supabase.from('riya_conversations').insert({
+                user_id: userId || null,
+                instagram_user_id: instagramUserId,
+                source: 'instagram',
+                role: 'user',
+                content: JSON.stringify([{ text: "[SYSTEM EVENT: User has successfully upgraded to PRO plan. React excitedly and thank them for supporting you! You can now send unlimited images and messages.]" }]),
+                model_used: 'system',
+                metadata: { type: 'system_event', event: 'upgrade_success' }
+            });
 
-            // Inject SYSTEM message into conversation history so Riya knows immediately
-            console.log(`📝 Injecting 'User Upgraded' system message for ${instagramUserId}`);
-            const { error: msgError } = await supabase
-                .from('riya_conversations')
-                .insert({
-                    user_id: userId || null,
-                    instagram_user_id: instagramUserId,
-                    source: 'instagram',
-                    role: 'user',
-                    content: JSON.stringify([{ text: "[SYSTEM EVENT: User has successfully upgraded to PRO plan. React excitedly and thank them for supporting you! You can now send unlimited images and messages.]" }]),
-                    model_used: 'system',
-                    metadata: { type: 'system_event', event: 'upgrade_success' }
-                });
-
-            if (msgError) {
-                console.error("⚠️ Failed to inject system message:", msgError);
-            } else {
-                console.log("✅ System message injected successfully");
-            }
-        }
-
-        console.log(`✅ Payment ${paymentId} verified and subscription activated for user ${userId || instagramUserId}`);
-
-        // Log payment_success event for analytics funnel (never break payment flow)
-        try {
-            const igId = instagramUserId || null;
-            if (igId) {
+            try {
                 await supabase.from('riya_payment_events').insert({
-                    instagram_user_id: igId,
+                    instagram_user_id: instagramUserId,
                     event_type: 'payment_success',
                     metadata: { orderId, paymentId, planType, source: 'verify-razorpay-payment' },
                 });
-                console.log(`📊 payment_success event logged for ${igId}`);
+            } catch (e) {
+                console.warn('⚠️ analytics log failed:', e);
             }
-        } catch (e) {
-            console.warn('⚠️ payment_success event log failed (non-critical):', e);
+
+            return new Response(
+                JSON.stringify({
+                    success: true,
+                    message: "Subscription activated successfully!",
+                    subscription: { id: subscriptionId, planType, expiresAt: finalExpiry.toISOString() }
+                }),
+                { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
         }
 
         return new Response(
-            JSON.stringify({
-                success: true,
-                message: "Subscription activated successfully!",
-                subscription: {
-                    id: subscriptionId,
-                    planType,
-                    expiresAt: existingSub
-                        ? new Date(new Date(existingSub.expires_at) > now
-                            ? new Date(existingSub.expires_at).getTime() + durationDays * 24 * 60 * 60 * 1000
-                            : expiresAt.getTime()).toISOString()
-                        : expiresAt.toISOString()
-                }
-            }),
+            JSON.stringify({ success: true, message: "Subscription activated!", subscription: { id: subscriptionId } }),
             { headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
 
     } catch (error) {
-        console.error("Error verifying payment:", error);
+        console.error("❌ Error:", error);
         return new Response(
             JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
             { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }

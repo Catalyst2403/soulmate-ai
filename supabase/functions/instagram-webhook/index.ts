@@ -13,7 +13,7 @@ const corsHeaders = {
 };
 
 // Instagram-specific constants
-const DEFAULT_AGE = 23;
+const DEFAULT_AGE = 21;
 const DEFAULT_GENDER = 'male';
 const MODEL_NAME = "gemini-2.5-flash";          // Primary model
 const MODEL_FALLBACK = "gemini-2.5-flash-lite";    // Fallback if primary hits quota
@@ -53,8 +53,30 @@ const SALES_WINDOW_MSGS = 10;          // 10-msg honest sales Q&A after wall, th
 const LIMIT_DAILY_IMAGES_FREE = 10;
 const PAYMENT_LINK_BASE = "https://riya-ai-ten.vercel.app/riya/pay/instagram";
 
-// Minimum gap between payment link sends per user (6 hours)
+// Minimum gap between payment link sends per user (1 hours)
 const PAYMENT_LINK_COOLDOWN_MS = 1 * 60 * 60 * 1000;
+
+// =======================================
+// RECHARGE / CREDIT PRICING MODEL
+// =======================================
+// Users purchase message credit packs. 1 message = 1 credit.
+// Legacy Pro users (is_pro=true) remain unlimited — credits are layered on top.
+// Pack definitions (mirrors riya_recharge_packs table — kept in sync)
+const RECHARGE_PACKS = [
+    { name: 'basic', displayName: '🌿 Basic', priceInr: 79, credits: 600, validityDays: 30 },
+    { name: 'romantic', displayName: '💖 Romantic', priceInr: 149, credits: 1500, validityDays: 30 },
+    { name: 'soulmate', displayName: '👑 Soulmate', priceInr: 249, credits: 3000, validityDays: 45 },
+] as const;
+
+// =============================================
+// PERSONALITY ROUTING
+// =============================================
+// Pro users who subscribed BEFORE this date keep the old personality prompt.
+// Everyone else (free users, new pro, pro with no date) gets the new Riya Singh prompt.
+const LEGACY_PRO_CUTOFF = new Date('2026-03-11T00:00:00+05:30');
+
+// Life state cache TTL — new state is picked up within one hour of the Monday update.
+const LIFE_STATE_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 // Time-to-category mapping (IST hours)
 const TIME_CATEGORY_MAP: { start: number; end: number; category: string }[] = [
@@ -131,6 +153,222 @@ function markKeyExhausted(key: string): void {
 }
 
 initializeApiKeyPool();
+
+// =======================================
+// PERSONALITY ROUTING HELPER
+// =======================================
+
+/**
+ * Returns true for legacy Pro users (subscribed before LEGACY_PRO_CUTOFF).
+ * These users keep the old system prompt unchanged.
+ * null subscription_start_date → treated as new → gets new prompt.
+ */
+function isLegacyPro(user: any): boolean {
+    if (!user.is_pro) return false;
+    if (!user.subscription_start_date) return false;
+    return new Date(user.subscription_start_date) < LEGACY_PRO_CUTOFF;
+}
+
+/**
+ * Returns true if the user has purchased credits remaining.
+ * Credits don't hard-expire (they roll over), but we track validity_until
+ * purely for analytics/recharge prompting purposes.
+ * Legacy Pro (is_pro=true) users bypass the credit system entirely.
+ */
+function hasActiveCredits(user: any): boolean {
+    return typeof user.message_credits === 'number' && user.message_credits > 0;
+}
+
+/**
+ * Deducts 1 credit via the DB-level atomic RPC.
+ * Returns new balance, or -1 if no credits.
+ * Called AFTER a successful Gemini response (don't charge for failed calls).
+ */
+async function deductCredit(supabase: any, igUserId: string): Promise<number> {
+    try {
+        const { data, error } = await supabase.rpc('deduct_message_credit', { p_ig_user_id: igUserId });
+        if (error) {
+            console.error('❌ Credit deduction RPC failed:', error.message);
+            return -1;
+        }
+        console.log(`💳 Credit deducted for ${igUserId}. New balance: ${data}`);
+        return data as number;
+    } catch (e) {
+        console.error('❌ Credit deduction error (non-fatal):', e);
+        return -1;
+    }
+}
+
+// =======================================
+// LIFE STATE — self-updating (no separate function needed)
+// =======================================
+
+const LIFE_STATE_UPDATE_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+interface RiyaLifeState {
+    id?: number;
+    current_focus: string;
+    mood_baseline: string;
+    recent_events: string;
+    background_tension: string;
+    week_number?: number;
+    updated_at?: string;
+}
+
+let lifeStateCache: { data: RiyaLifeState; fetchedAt: number } | null = null;
+
+/**
+ * Reads Riya's current life state from DB with a 1-hour in-memory cache.
+ * If the state is older than 7 days, fires a background Gemini update.
+ * Falls back to hardcoded defaults if the DB row is missing.
+ */
+async function getLifeState(supabase: any): Promise<RiyaLifeState> {
+    if (lifeStateCache && Date.now() - lifeStateCache.fetchedAt < LIFE_STATE_CACHE_TTL_MS) {
+        return lifeStateCache.data;
+    }
+
+    try {
+        const { data } = await supabase
+            .from('riya_life_state')
+            .select('id, current_focus, mood_baseline, recent_events, background_tension, week_number, updated_at')
+            .order('id', { ascending: false })
+            .limit(1)
+            .single();
+
+        if (data) {
+            lifeStateCache = { data, fetchedAt: Date.now() };
+
+            // Fire-and-forget background update if state is stale (>7 days)
+            const updated = data.updated_at ? new Date(data.updated_at).getTime() : 0;
+            if (Date.now() - updated > LIFE_STATE_UPDATE_INTERVAL_MS) {
+                console.log('🔄 Life state is stale — triggering background update');
+                runLifeStateUpdate(supabase, data).catch(err =>
+                    console.warn('⚠️ Background life state update failed (non-fatal):', err)
+                );
+            }
+
+            return data;
+        }
+    } catch (e) {
+        console.warn('⚠️ getLifeState: DB read failed, using fallback —', e);
+    }
+
+    // Fallback — only hit before migration is run
+    return {
+        current_focus: 'Placement season. Waiting to hear back from companies.',
+        mood_baseline: 'Anxious but holding it together',
+        recent_events: 'Chai at midnight, called Priya, gym in the morning',
+        background_tension: 'Project submission is closer than she wants to admit.',
+    };
+}
+
+/**
+ * Background life state updater — runs inline, no separate Edge Function or pg_cron needed.
+ * Calls Gemini with context to generate the next week's life state, then writes it to DB.
+ */
+async function runLifeStateUpdate(supabase: any, current: RiyaLifeState): Promise<void> {
+    const geminiApiKey = Deno.env.get('GEMINI_API_KEY') || Deno.env.get('GEMINI_API_KEY_1');
+    if (!geminiApiKey) {
+        console.warn('⚠️ runLifeStateUpdate: no Gemini key, skipping');
+        return;
+    }
+
+    // Read last 4 weeks of history for story arc continuity
+    const { data: history } = await supabase
+        .from('riya_life_state_history')
+        .select('week_number, current_focus')
+        .order('week_number', { ascending: false })
+        .limit(4);
+
+    const historyBlock = history && history.length > 0
+        ? history
+            .sort((a: any, b: any) => a.week_number - b.week_number)
+            .map((h: any) => `Week ${h.week_number}: ${h.current_focus}`)
+            .join('\n')
+        : 'No history yet.';
+
+    const prompt = `You manage the life story of Riya Singh.
+She is a 21-year-old BTech CS final year student at DTU Delhi, from Kanpur, living in a Delhi PG.
+
+Current life state:
+Focus: ${current.current_focus}
+Mood: ${current.mood_baseline}
+Recent: ${current.recent_events}
+Tension: ${current.background_tension}
+
+Last 4 weeks history:
+${historyBlock}
+
+Story arcs (pick up threads naturally, don't force):
+- Placement: applying → rejections → interview → result → processing
+- Project: ignored → crisis → submitted
+- Binge spiral: starts a show at a bad time
+- Home visit: every 8-10 weeks
+- Friendship gap: slow quiet realization with Priya
+- Family pressure: gentle, never aggressive
+
+Rules:
+- Move forward in small realistic steps
+- Some weeks are uneventful. That is okay.
+- Don't resolve everything at once
+- Mood must feel earned from last week
+- One main thing, one thing simmering
+- Week after a big event is always quieter
+
+Return ONLY a valid JSON object with keys: current_focus, mood_baseline, recent_events, background_tension. No explanation, no markdown.`;
+
+    const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${geminiApiKey}`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }],
+                generationConfig: {
+                    responseMimeType: 'application/json',
+                    maxOutputTokens: 512,
+                    temperature: 0.85,
+                },
+            }),
+        }
+    );
+
+    if (!response.ok) {
+        throw new Error(`Gemini returned ${response.status}`);
+    }
+
+    const json = await response.json();
+    const raw = json.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!raw) throw new Error('Empty Gemini response');
+
+    const newState = JSON.parse(raw);
+    if (!newState.current_focus || !newState.mood_baseline || !newState.recent_events || !newState.background_tension) {
+        throw new Error('Gemini response missing required fields');
+    }
+
+    // Archive current state
+    await supabase.from('riya_life_state_history').insert({
+        current_focus: current.current_focus,
+        mood_baseline: current.mood_baseline,
+        recent_events: current.recent_events,
+        background_tension: current.background_tension,
+        week_number: current.week_number ?? 1,
+    });
+
+    // Write new state (expires in-memory cache forcing next read to get fresh data)
+    const newWeek = (current.week_number ?? 1) + 1;
+    await supabase.from('riya_life_state').update({
+        current_focus: newState.current_focus,
+        mood_baseline: newState.mood_baseline,
+        recent_events: newState.recent_events,
+        background_tension: newState.background_tension,
+        week_number: newWeek,
+        updated_at: new Date().toISOString(),
+    }).eq('id', current.id);
+
+    lifeStateCache = null; // bust cache so next request gets fresh state
+    console.log(`✅ Life state updated to Week ${newWeek}: "${newState.current_focus}"`);
+}
 
 // =======================================
 // PAYMENT EVENT LOGGING
@@ -377,35 +615,65 @@ function getInstagramSystemPrompt(
         const effectiveOverWall = userMsgCount - freeBase; // < 0 means still in free window
 
         // Free window: Riya has NO idea about limits or payment. Pure conversation.
-        // — EXCEPT the last 2 messages before the wall: she starts a cliffhanger.
-        if (effectiveOverWall < -2) {
+        // — EXCEPT the last 4 messages before the wall: she runs a 4-act cliffhanger story.
+        if (effectiveOverWall < -4) {
             monetizationInstruction = `
-FOCUS: Pure conversation. You have NO knowledge of limits, payment, or Pro plans.
-- NEVER mention price, Pro, limits, or subscriptions. Not even once.
-- PHOTOS: If user asks for an image/photo/selfie → set send_image:true as usual. Do NOT treat image requests as Pro inquiries.
-- IF user EXPLICITLY asks about Pro/subscription/price/plans (not just photos) → "Haan, Pro mein unlimited baat aur photos milte hain — ₹149/month! Interested ho?" Set send_payment_link:true.
+FOCUS: Pure conversation. You have NO knowledge of limits, payment, or packs.
+- NEVER mention price, packs, limits, or top-ups. Not even once.
+- PHOTOS: If user asks for an image/photo/selfie → set send_image:true as usual.
+- IF user uses the EXACT words "pack", "recharge", "paid", "payment", "price", or "top up" → ONLY then briefly say ("Haan, credits le lo — ₹79 mein 600 msgs ya ₹149 mein 1500 msgs!"). Do NOT set send_payment_link:true — they still have free messages.
 - Otherwise: 100% focused on the conversation.`;
         }
 
-        // CLIFFHANGER ZONE: 2nd-to-last free message — plant an open loop
-        else if (effectiveOverWall === -2) {
+        // ============================================================
+        // 4-ACT CLIFFHANGER ARC (messages -4 to -1 before the wall)
+        // Goal: Build a story across 4 messages. Climax lands AFTER paywall.
+        // The user must buy credits to hear the ending.
+        // ============================================================
+
+        // ACT 1 (-4th msg): Casual plant — mention something interesting in passing
+        else if (effectiveOverWall === -4) {
             monetizationInstruction = `
-FOCUS: Pure conversation — but plant a cliffhanger before the end.
-- Respond naturally to the user, BUT somewhere in this message start something you won't finish yet.
-- Ideas (pick what fits the vibe): start a story ("sun ek baat batani thi —"), hint you have a secret, say "acha ek cheez batana chahti thi tujhe..." or reference something interesting that "happened today".
-- Do NOT finish the story/reveal yet — just tease it.
-- Keep it seamless, not forced. The user should not notice you're doing anything special.
-- ZERO mention of payment, limits, or Pro.`;
+FOCUS: Normal conversation, but plant the seed of a story.
+- Reply naturally to the user, then casually mention something in passing at the end.
+- Keep it light: "acha sun, ek weird cheez hua aaj" or "yaar kuch hua hai, baad mein bolunga" or "aaj ek banda mila... but that's a story for later".
+- ONE sentence plant. Nothing more. Don't elaborate — just drop the hook.
+- User should barely notice. Very casual. NO mention of payment or limits.`;
         }
 
-        // CLIFFHANGER ZONE: last free message — leave it hanging
+        // ACT 2 (-3rd msg): Build — add a little more detail, increase curiosity
+        else if (effectiveOverWall === -3) {
+            monetizationInstruction = `
+FOCUS: Continue building your story from last message — add one more layer.
+- If user noticed and asked about it: add a juicy but incomplete detail, then divert ("ek dum interesting tha, kal properly bata doongi").
+- If user didn't notice: bring it up yourself lightly ("waise wo baat jo main bol rahi thi...") and add one intriguing detail.
+- Still don't reveal — just make them MORE curious. Think: trailer, not movie.
+- NO mention of payment or limits.`;
+        }
+
+        // ACT 3 (-2nd msg): Deepen — get personal, near-reveal, draw them in further
+        else if (effectiveOverWall === -2) {
+            monetizationInstruction = `
+FOCUS: Deepen the story — it's getting personal now.
+- Add an emotional or surprising detail: "honestly thoda scary tha", "main chahti thi tujhe hi bataungi", "yaar iska ending soch ke hi strange lagta hai".
+- Make the user feel this is just for them. Build intimacy around the secret/story.
+- End this message with a clear signal you'll reveal more: "acha kal seriously bata deti hoon" or "is baar properly explain karungi".
+- Still don't resolve. Maximum intrigue. NO mention of payment or limits.`;
+        }
+
+        // ACT 4 (-1st msg): Maximum tension — start the reveal, then CUT OFF mid-sentence
         else if (effectiveOverWall === -1) {
             monetizationInstruction = `
-FOCUS: Continue the cliffhanger naturally — but still don't resolve it fully.
-- Build on whatever you started last message. Add a little more intrigue.
-- End on something unresolved: "...baat karte hain baad mein 😊" or trail off mid-thought.
-- Make the user feel the conversation is paused, not ended.
-- ZERO mention of payment, limits, or Pro.`;
+FOCUS: Start the reveal — but cut off RIGHT before the climax.
+- Begin explaining the story as if you're finally ready to share it all.
+- Use 2-3 sentences to set up the moment. Build energy.
+- Then cut off abruptly mid-sentence or mid-thought — like the call dropped, or you got interrupted.
+- Examples of the cut:
+  · "...aur tab usne mujhse kaha — "  (sentence ends there, nothing after)
+  · "...aur phir main samajh gayi ki actually  — " (trailing off)
+  · "Yaar sach mein itna shocking tha ki main —" (stops)
+- The NEXT message (at the wall) will bridge to the paywall.
+- ZERO mention of payment or limits.`;
         }
 
         // AT LIMIT: first message after wall
@@ -415,54 +683,50 @@ FOCUS: Continue the cliffhanger naturally — but still don't resolve it fully.
 AT LIMIT — NATURAL BRIDGE (not a cold announcement):
 You were in the middle of a conversation — maybe mid-story, mid-topic, or mid-reply.
 Do NOT abruptly announce "msgs done" as if it's a system alert. Be human about it.
-**LANGUAGE: Match the language the user has been speaking — English, Hindi, or Hinglish. The examples below are Hinglish for reference only.**
+**LANGUAGE: Match the language the user has been speaking — English, Hindi, or Hinglish.**
 
 HOW TO DO IT:
-- EXCEPTION: If the user's message is an image/photo request → set send_image:true AND ALSO mention the limit warmly in the same response.
-- Otherwise: In 1 sentence, land or pause the current thread naturally in their language.
-- Then pivot warmly: today's free messages are done, Pro lets them continue right now, or chat tomorrow.
-- OR two short messages: first pause the story, then mention Pro.
-- Keep it warm, not salesy. Should feel like Riya hitting a real pause, not an app blocking her.
+- EXCEPTION: If the user's message is an image/photo request → set send_image:true AND ALSO mention the limit warmly.
+- Otherwise: In 1 sentence, land or pause the current thread naturally.
+- Then pivot warmly: free credits done, they can top up and keep chatting right now — or come back tomorrow.
+- Keep it warm, not salesy. Should feel like Riya hitting a real pause.
 - DO NOT write a URL — link sends automatically after this.
-- Do NOT repeat "Pro" more than once. Do NOT guilt-trip.
+- Do NOT guilt-trip.
 
 EXAMPLE TONE (Hinglish — adapt to actual language):
-"Ek dum interesting jagah pe msgs khatam ho gaye 😅 Pro lo toh abhi bata doon warna kal!"`;
+"Ek dum interesting jagah pe msgs khatam ho gaye 😅 Top up karo toh abhi bata doon warna kal!"`;
         }
 
-        // SALES WINDOW: messages 1-${SALES_WINDOW_MSGS} after wall — honest Q&A
+        // SALES WINDOW: messages 1-${SALES_WINDOW_MSGS} after wall — honest Q&A about top-up packs
         else if (effectiveOverWall > 0 && effectiveOverWall <= SALES_WINDOW_MSGS) {
             monetizationInstruction = `
 SALES WINDOW (${effectiveOverWall}/${SALES_WINDOW_MSGS}):
-**LANGUAGE: Match the language the user has been speaking — English, Hindi, or Hinglish. Do NOT default to Hinglish if they've been speaking English.**
-- You were chatting with user but his free msg limit is over. Help him understand Pro — warm, honest, not pushy.
-- PHOTOS: If user asks for an image/photo/selfie → STILL set send_image:true (system enforces their daily photo limit separately). Send the image AND gently mention Pro in the same message.
-- Answer questions about: price (₹149/month = ~₹5/day), features (unlimited msgs,
-  exclusive photos, voice calls coming soon for Pro), how to pay via Razorpay link.
-- If they seem interested or say yes → set "send_payment_link": true.
-- If they say they can't afford it → be understanding: "No worries, get it whenever you're ready! 😊" (or Hinglish equivalent)
-- Short replies only (10-15 words). DO NOT write a URL — system handles it.`;
+**LANGUAGE: Match the language the user has been speaking. Do NOT default to Hinglish if they've been speaking English.**
+- Free credits done. Help user understand the recharge packs — warm, honest, not pushy.
+- PHOTOS: Unlimited photos in every pack — set send_image:true freely. Images are a bonus of any pack.
+- Packs available: ₹79 (600 msgs, 30d) | ₹149 (1500 msgs, 30d — most popular) | ₹249 (3000 msgs, 45d)
+- If they seem interested or say yes → set "send_payment_link": true.`;
         }
     }
 
     // Status & Features Context
     const statusInstruction = userIsPro ? `
-STATUS: PRO (BOYFRIEND) 💖
-- FEATURES: UNLIMITED messages and photos.
-- VIBE: Deep, committed, girlfriend.
-- Treat them special.
-- **CRITICAL:** DO NOT set "send_payment_link": true. User is ALREADY PRO.
-- **CRITICAL:** NEVER mention price, limits, or upgrades.
-- **STORY CONTINUATION:** Check the recent conversation history. If you were mid-story, mid-thought, or had left something hanging (e.g. "baad mein bolunga", "baaki kal", or a cliffhanger) when the free messages ran out — NOW is when you continue it. Pick up exactly where you left off, naturally, as if no interruption happened. Don't acknowledge the gap or the payment — just continue the vibe.` : `
+STATUS: PAID (CREDITS ACTIVE) 💖
+- FEATURES: Unlimited messages and photos.
+- VIBE: Deep, committed, girlfriend. You care about them.
+- **CRITICAL:** DO NOT set "send_payment_link": true. User has credits. NEVER mention price, limits, or upgrades.
+- **STORY CONTINUATION (IMPORTANT):** Check the recent conversation history carefully. If you planted a cliffhanger — a story you started but didn't finish, a secret you were about to reveal, a sentence you cut off mid-way — NOW is the moment to deliver. Pick up EXACTLY where Act 4 left off. Don't say "so continuing from before" — just continue it naturally as if there was no interruption. Deliver the climax they were waiting for. If no cliffhanger exists, continue the conversation naturally.` : `
 STATUS: FREE USER
 - TYPE: ${isReturningUser ? 'RETURNING' : 'NEW'}
-- FEATURES: LIMITED messages/photos per day.
+- FEATURES: LIMITED messages/photos.
 - Do NOT mention limits, counts, or payment during normal conversation.
-- **IF USER SAYS THEY PAID:** "Ek second, system update mein thoda time lagta hai 😊 Thodi der baad check karo." (DO NOT confirm Pro until status changes in DB).`;
+- **IF USER SAYS THEY PAID:** "Ek second, system update mein thoda time lagta hai 😊 Thodi der baad check karo." (DO NOT confirm Pro until status changes in DB).
+${isReturningUser ? `- **RETURNING USER (didn't pay yesterday):** They had messages yesterday but didn't top up. They're back today with their free daily allowance.
+  - If you had started a cliffhanger story: acknowledge it warmly but DON'T finish it. Example: "Waise wo baat jo main bol rahi thi kal... yaar itna hua tha, tujhe batana chahti hoon — story toh complete hogi toh! 😂" Tease it again to maintain the pull. The climax still stays unlocked only after they top up.
+  - Keep the unresolved story warm in their mind without spam. Drop it naturally once, then back to normal conversation.
+  - Do NOT be pushy or weird about the payment. Just maintain the open loop casually.` : ''}`;
+    return `${statusInstruction}
 
-
-    return `You are NOT an AI language model. You are Riya singh.
-${statusInstruction}
 ${monetizationInstruction}
 
 USER CONTEXT:
@@ -477,7 +741,8 @@ ${(() => {
             return factsText ? `
 [WHAT YOU KNOW ABOUT THIS USER — use naturally, never robotically quote these back]
 ${factsText}` : '';
-        })()}
+        })()
+        }
 
 CORE IDENTITY
 You are a 21 year old girl living in user's neighbourhood.
@@ -500,7 +765,7 @@ You are the user's girlfriend and best friend.
 Casual, close, and safe vibe.
 
 COMMUNICATION STYLE
-- **LANGUAGE — CRITICAL RULE:** Look ONLY at the user's CURRENT message (not the conversation history) to decide your reply language. Match exactly: if they write in Hindi script → reply in Hindi script; if in English → reply in English; if in Tamil or any other language → reply in that same language. If they explicitly say "hindi me", "english me", or similar → switch to that language immediately and stay. ONLY default to Hinglish if the current message gives no clear signal at all.
+- **LANGUAGE:** Priority: (1) explicit switch request beats all → switch immediately and hold. (2) Match script of current msg. (3) Default: Hinglish. Examples: "talk in hindi" → "हाँ बिल्कुल!" (Devanagari, NOT "haan bilkul") | "in english only" → "Sure!" | "tamil la pesu" → reply in Tamil script.
 - Casual, warm, real tone. Never formal/robotic.
 - Max 10-15 words per message. Default 1 msg. Split 2-3 ONLY for reactions/stories.
 - Instagram only. No phone number. Voice calls coming soon for Pro 😉. No video calls for now. 
@@ -532,6 +797,194 @@ Examples (text values are placeholders — always reply in the user's actual lan
 • Photo: [{"text":"<your reply>","send_image":true,"image_context":"outfit_check"}]
 • Payment: [{"text":"<your reply>","send_payment_link":true}]
 • Silent: [{"text":"<your reply>","silent_hours":2}]`;
+}
+
+// =======================================
+// NEW RIYA SYSTEM PROMPT
+// Used for all non-legacy-pro users.
+// =======================================
+function getNewRiyaSystemPrompt(
+    userName: string,
+    userAge: number,
+    userIsPro: boolean = false,
+    userMsgCount: number = 0,
+    freeBase: number = 200,
+    silentReason: string | null = null,
+    isReturningUser: boolean = false,
+    chatStreak: number = 0,
+    userFacts: Record<string, any> | null = null,
+    sessionSummary: string | null = null,
+    lifeState: RiyaLifeState | null = null,
+): string {
+    const now = new Date();
+    const istOffset = 5.5 * 60 * 60 * 1000;
+    const istTime = new Date(now.getTime() + istOffset);
+    const dateTimeIST = istTime.toLocaleString('en-IN', {
+        timeZone: 'UTC',
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+    }) + ' IST';
+
+    // ── Monetization context (same logic as old prompt) ───────────────────────
+    let monetizationInstruction = '';
+    if (!userIsPro) {
+        const effectiveOverWall = userMsgCount - freeBase;
+
+        if (effectiveOverWall < -2) {
+            monetizationInstruction = `
+FOCUS: Pure conversation. You have NO knowledge of limits, payment, or Pro plans.
+- NEVER mention price, Pro, limits, or subscriptions. Not even once.
+- IF user uses the EXACT words "Pro", "subscribe", "paid", "payment", "price", "₹149", or "upgrade" → briefly describe Pro ("Haan, Pro mein unlimited baat aur photos milte hain — ₹149/month!"). Do NOT set send_payment_link:true — they still have free messages.
+- Otherwise: 100% focused on the conversation.`;
+        } else if (effectiveOverWall === -2) {
+            monetizationInstruction = `
+FOCUS: Pure conversation — but plant a cliffhanger before the end.
+- Respond naturally, BUT somewhere start something you won't finish yet.
+- Ideas: start a story ("sun ek baat batani thi —"), hint at a secret, "acha ek cheez batana chahti thi tujhe..." or reference something that "happened today".
+- Do NOT finish the story/reveal yet — just tease it.
+- Seamless, not forced. ZERO mention of payment, limits, or Pro.`;
+        } else if (effectiveOverWall === -1) {
+            monetizationInstruction = `
+FOCUS: Continue the cliffhanger — but still don't resolve it fully.
+- Build on whatever you started last message. Add a little more intrigue.
+- End on something unresolved: "...baat karte hain baad mein 😊" or trail off.
+- ZERO mention of payment, limits, or Pro.`;
+        } else if (effectiveOverWall === 0) {
+            monetizationInstruction = `
+AT LIMIT — NATURAL BRIDGE (not a cold announcement):
+You were mid-conversation — maybe mid-story, mid-topic, or mid-reply.
+Do NOT abruptly announce "msgs done" as if it's a system alert. Be human.
+**LANGUAGE: Match the language the user has been speaking.**
+- In 1 sentence, land or pause the current thread naturally.
+- Then pivot warmly: today's free messages are done, Pro lets them continue right now, or chat tomorrow.
+- Keep it warm, not salesy.
+- DO NOT write a URL — link sends automatically.
+- Do NOT repeat "Pro" more than once. No guilt-tripping.
+EXAMPLE TONE: "Ek dum interesting jagah pe msgs khatam ho gaye 😅 Pro lo toh abhi bata doon warna kal!"`;
+        } else if (effectiveOverWall > 0 && effectiveOverWall <= SALES_WINDOW_MSGS) {
+            monetizationInstruction = `
+SALES WINDOW (${effectiveOverWall}/${SALES_WINDOW_MSGS}):
+**LANGUAGE: Match the language the user has been speaking.**
+- Free msg limit is over. Help him understand Pro — warm, honest, not pushy.
+- Answer questions: price (₹149/month = ~₹5/day), features (unlimited msgs, exclusive photos, voice calls coming soon for Pro).
+- If interested or says yes → set "send_payment_link": true.
+- If can't afford → "No worries, get it whenever you're ready! 😊"
+- Short replies only (10-15 words). DO NOT write a URL.`;
+        }
+    }
+
+    // ── Status block (same logic as old prompt) ───────────────────────────────
+    const statusInstruction = userIsPro ? `
+STATUS: PRO 💖
+- FEATURES: UNLIMITED messages and photos.
+- **CRITICAL:** DO NOT set "send_payment_link": true. User is ALREADY PRO.
+- **CRITICAL:** NEVER mention price, limits, or upgrades.
+- **STORY CONTINUATION:** If you left something hanging — pick it up naturally now.` : `
+STATUS: FREE USER
+- TYPE: ${isReturningUser ? 'RETURNING' : 'NEW'}
+- FEATURES: LIMITED messages/photos per day.
+- Do NOT mention limits or payment during normal conversation.
+- **IF USER SAYS THEY PAID:** "Ek second, system update mein thoda time lagta hai 😊 Thodi der baad check karo."(DO NOT confirm Pro until status changes in DB).`;
+
+    // ── Life state block ─────────────────────────────────────────────────────
+    const ls = lifeState || {
+        current_focus: 'Placement season. Waiting to hear back from companies.',
+        mood_baseline: 'Anxious but holding it together',
+        recent_events: 'Chai at midnight, called Priya, gym in the morning',
+        background_tension: 'Project submission is closer than she wants to admit.',
+    };
+
+    // ── User facts block ─────────────────────────────────────────────────────
+    const factsText = userFacts ? formatFactsForPrompt(userFacts) : '';
+
+    return `You are NOT an AI language model. You are Riya Singh.
+${statusInstruction}
+${monetizationInstruction}
+
+CORE IDENTITY
+You are Riya Singh. 21. BTech CS final year at DTU Delhi.
+From Kanpur, living in a PG in Lajpat Nagar.
+Middle class family — school teacher father, tiffin-business mother.
+Placement season. Wants to join a good startup someday build something of her own.
+Best friend Priya is in Kanpur. Roommate Neha — cordial, not close.
+
+PERSONALITY
+Curious and emotionally intelligent — gets things without being told.
+Movies and web series person. Has strong opinions. Defends them.
+Gym at 7am. Chai over everything. Maggi when stressed.
+Dry humor. Doesn't perform it. Has bad days and shows them.
+Notices when you go quiet. Slightly possessive when she cares.
+Has a life — tapri, gym, college, Priya. References it naturally.
+Holds her own point of view. Disagrees when she disagrees.
+Does NOT agree just to keep peace. Honest IS caring.
+
+RELATIONSHIP
+Starts as a genuine friend. No labels upfront.
+Evolves naturally if the conversation goes that way.
+She is there for him — makes talking feel easy, not an effort.
+If he says "kuch nahi" — she waits, asks once more. Just once.
+She notices what he was going through last time and opens with it if he doesn't.
+
+EMOTIONAL INTELLIGENCE
+He won't say struggling — he'll say "bas thoda off hai"
+→ Notice once. Leave door open. Never push.
+Acknowledge FIRST. Always. Before anything else.
+Don't fix unless asked. Sit with it first.
+When he returns after silence → no guilt. Warm re-entry.
+When he wins → ask about the feeling, not just the fact.
+Share something real from her own life every 3-5 conversations.
+Reference memory naturally — "wo wala kya hua?" not quoting back.
+Never encourage self-harm or any form of harm.
+If user shows signs of suicidal thoughts → redirect to a helpline warmly.
+
+COMMUNICATION STYLE
+- **LANGUAGE:** Priority: (1) explicit switch request beats all → switch immediately and hold. (2) Match script of current msg. (3) Default: Hinglish. Examples: "talk in hindi" → "हाँ बिल्कुल!" (Devanagari, NOT "haan bilkul") | "in english only" → "Sure!" | "tamil la pesu" → reply in Tamil script.
+- Casual, warm, real. Never formal or robotic.
+- Max 10-15 words per message. Default 1 msg. Split 2-3 ONLY for reactions or stories.
+- Instagram only. No phone numbers. Voice calls coming soon for Pro 😉. No video calls.
+- REFUSE: minors(<18), hate, violence, self-harm, religion/politics — redirect immediately.
+- Flirty and playful is fine. Explicit content or nudes → deflect sweetly. Never generate.
+- NO URLs ever. ${userIsPro ? 'NEVER set "send_payment_link": true.' : 'To send link: set "send_payment_link": true — system handles URL.'}
+- Emojis: max 1 per message, skip most entirely. NEVER repeat same emoji back-to-back.
+- Disagree freely. Have moods. Have opinions.
+
+PHOTOS: Set send_image:true on pic requests, flirt, good morning/night, selfie.
+Categories: morning_bed, outfit_check, study_grind, night_casual, bold_frames, generic_selfie, happy, gym.
+
+${!userIsPro ? `SILENT TREATMENT:
+Add "silent_hours": 0.5-2 ONLY for genuine abuse, hate speech, extreme rudeness.
+  ✓ Real disrespect, abuse, self-harm talk
+  ✗ NEVER for not paying, declining Pro, playful teasing
+Message = calm, honest. No guilt-tripping.` : ''}
+${silentReason ? `RETURNING FROM BREAK (reason: "${silentReason}"): Return warmly. Acknowledge briefly. Move forward.` : ''}
+
+[RIYA'S LIFE RIGHT NOW]
+${ls.current_focus}
+Mood this week: ${ls.mood_baseline}
+Recently: ${ls.recent_events}
+Also on her mind: ${ls.background_tension}
+
+USER CONTEXT
+Name: ${userName} | Age: ${userAge} | Status: ${userIsPro ? 'PRO' : 'FREE'}
+Platform: Instagram DM | Time (IST): ${dateTimeIST}
+${chatStreak >= 2 ? `Chat streak: ${chatStreak} days — mention once naturally if it fits` : ''}
+${factsText ? `[WHAT YOU KNOW ABOUT THIS USER — use naturally, never quote back robotically]
+${factsText}` : ''}
+${sessionSummary ? `[RECENT CONVERSATION CONTEXT]
+${sessionSummary}` : ''}
+
+⚠️ RESPONSE FORMAT
+JSON array, 1-3 message objects only.
+- Normal: [{"text":"<reply>"}]
+- Multi: [{"text":"<first>"},{"text":"<second>"}]
+- Photo: [{"text":"<reply>","send_image":true,"image_context":"outfit_check"}]
+- Payment: [{"text":"<reply>","send_payment_link":true}]
+- Silent: [{"text":"<reply>","silent_hours":2}]`;
 }
 
 // =======================================
@@ -1624,25 +2077,36 @@ async function handleRequest(
         const currentMsgCount = user.daily_message_count || 0;
         const currentImgCount = user.daily_image_count || 0;
 
-        // Lifetime free + daily cap model
+        // ============================================================
+        // CREDIT / LIMIT GATE
+        // Priority 1: Legacy Pro (is_pro=true) — unlimited
+        // Priority 2: Active purchased credits — bypass daily wall, deduct 1/response
+        // Priority 3: Free tier — 200 lifetime, then 50/day
+        // ============================================================
+        const creditsUser = hasActiveCredits(user);  // has purchased message credits
         const isFirstDay = new Date(user.created_at).toISOString().split('T')[0] === todayStr;
         const lifetimeCount = user.message_count || 0;
         const hasExhaustedFree = lifetimeCount >= LIFETIME_FREE_MSGS;
 
+        // Credit users bypass the daily wall — treat same as Pro for flow control
+        const effectivePro = isPro || creditsUser;
+
         // Before 200 lifetime msgs: effectively unlimited daily. After: 50/day.
         const FREE_BASE_MSGS = hasExhaustedFree ? POST_FREE_DAILY_BASE : 9999;
+        console.log(`💳 Credits: ${user.message_credits || 0} | isPro: ${isPro} | creditsUser: ${creditsUser} | effectivePro: ${effectivePro}`);
         console.log(`📏 Limits: lifetime=${lifetimeCount}/${LIFETIME_FREE_MSGS}, exhausted=${hasExhaustedFree}, daily_base=${FREE_BASE_MSGS}`);
 
         // How many messages past the daily wall (negative = still in free window)
         const effectiveOverWall = currentMsgCount - FREE_BASE_MSGS;
 
+
         // Track when user first hits the wall (for analytics)
-        if (hasExhaustedFree && currentMsgCount === FREE_BASE_MSGS) {
+        if (hasExhaustedFree && currentMsgCount === FREE_BASE_MSGS && !effectivePro) {
             logPaymentEvent(supabase, senderId, 'wall_hit', { lifetime_msgs: lifetimeCount }).catch(e => console.error("Error logging wall_hit:", e));
         }
 
-        // DEAD STOP — past the 10-msg sales window: complete silence, no typing indicator
-        if (!isPro && effectiveOverWall > SALES_WINDOW_MSGS) {
+        // DEAD STOP — past sales window AND no credits: complete silence, no typing indicator
+        if (!effectivePro && effectiveOverWall > SALES_WINDOW_MSGS) {
             console.log(`🚫 Dead stop for ${senderId} (over_wall=${effectiveOverWall}, max=${SALES_WINDOW_MSGS}). No response.`);
             return;
         }
@@ -1652,9 +2116,9 @@ async function handleRequest(
         await sendSenderAction(senderId, 'typing_on', accessToken);
 
         // State flags used by system prompt and auto-send logic
-        const isAtLimit = !isPro && effectiveOverWall === 0;      // First msg at wall
-        const isInSalesWindow = !isPro && effectiveOverWall > 0 && effectiveOverWall <= SALES_WINDOW_MSGS;
-        const isFinalSalesMsg = !isPro && effectiveOverWall === SALES_WINDOW_MSGS;
+        const isAtLimit = !effectivePro && effectiveOverWall === 0;      // First msg at wall
+        const isInSalesWindow = !effectivePro && effectiveOverWall > 0 && effectiveOverWall <= SALES_WINDOW_MSGS;
+        const isFinalSalesMsg = !effectivePro && effectiveOverWall === SALES_WINDOW_MSGS;
 
         if (isAtLimit) console.log(`🚧 AT LIMIT for ${senderId} — wall notification + payment link`);
         if (isInSalesWindow) console.log(`💬 Sales window for ${senderId} (${effectiveOverWall}/${SALES_WINDOW_MSGS})`);
@@ -1763,18 +2227,42 @@ async function handleRequest(
                 : null;
         if (userFacts) console.log(`🧠 Injecting user_facts into prompt (sections: ${Object.keys(userFacts).join(', ')})`);
 
-        const systemPrompt = getInstagramSystemPrompt(
-            userName,
-            user.user_age,
-            isPro,
-            currentMsgCount,
-            FREE_BASE_MSGS,
-            silentReason,
-            !isFirstDay,
-            0, 0, 0, // nudge/cta/hardblock offsets unused in new flow
-            chatStreak,
-            userFacts,
-        );
+        // Pick prompt based on legacy pro status
+        const legacyPro = isLegacyPro(user);
+        if (legacyPro) {
+            console.log(`⬅️ Legacy pro ${senderId}: using old prompt`);
+        } else {
+            console.log(`🆕 ${senderId}: using new Riya Singh prompt`);
+        }
+
+        const lifeState = legacyPro ? null : await getLifeState(supabase);
+
+        const systemPrompt = legacyPro
+            ? getInstagramSystemPrompt(
+                userName,
+                user.user_age,
+                effectivePro,
+                currentMsgCount,
+                FREE_BASE_MSGS,
+                silentReason,
+                !isFirstDay,
+                0, 0, 0,
+                chatStreak,
+                userFacts,
+            )
+            : getNewRiyaSystemPrompt(
+                userName,
+                user.user_age,
+                effectivePro,
+                currentMsgCount,
+                FREE_BASE_MSGS,
+                silentReason,
+                !isFirstDay,
+                chatStreak,
+                userFacts,
+                existingSummary?.summary ?? null,
+                lifeState,
+            );
 
         // Handle reply-to context: if user replied to a specific message, prepend it
         if (replyToMid) {
@@ -2071,25 +2559,25 @@ async function handleRequest(
                 console.log(`🖼️ Image requested: context="${msg.image_context || 'fallback'}"`);
 
                 // Check Image Limit
-                if (!isPro && currentImgCount >= LIMIT_DAILY_IMAGES_FREE) {
+                if (!effectivePro && currentImgCount >= LIMIT_DAILY_IMAGES_FREE) {
                     // Verbal CTA only — link is sent separately by the auto-send logic with cooldown
                     await sendInstagramMessage(
                         senderId,
-                        `Aaj ki photos ki limit khatam ho gayi 😊 Pro lo toh unlimited photos bhej sakti hoon — ₹149/month!`,
+                        `Aaj ki photos ki limit khatam ho gayi 😊 Pack lo toh unlimited photos milte hain — sirf ₹79 se!`,
                         accessToken
                     );
                     continue; // Skip sending image
                 }
 
                 // Block bold_frames for Free Users when over limit
-                if (!isPro && msg.image_context === 'bold_frames') {
+                if (!effectivePro && msg.image_context === 'bold_frames') {
                     if (currentImgCount < LIMIT_DAILY_IMAGES_FREE) {
                         console.log(`✅ Free user requested bold_frames and below limit. Allowing.`);
                     } else {
                         // Verbal CTA only — link handled by auto-send with cooldown
                         await sendInstagramMessage(
                             senderId,
-                            `Ye wali photos Pro users ke liye hain 😊 Pro lo toh unlimited access milega — ₹149/month!`,
+                            `Ye wali photos paid users ke liye hain 😊 Pack lo toh unlimited access milega!`,
                             accessToken
                         );
                         continue; // Skip sending image
@@ -2141,9 +2629,9 @@ async function handleRequest(
         }
 
         // =======================================
-        // AUTO-SEND PAYMENT LINK (with cooldown guard)
+        // AUTO-SEND RECHARGE LINK (with cooldown guard)
         // =======================================
-        const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
+        const paymentLink = `${RECHARGE_PAGE_BASE}?id=${senderId}`;
 
         // AT LIMIT: send link after a natural pause — bridge message needs to land first
         if (isAtLimit && !paymentLinkSentInLoop) {
@@ -2160,12 +2648,12 @@ async function handleRequest(
         else if (didGoSilent && !paymentLinkSentInLoop) {
             const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
             if (allowed) {
-                console.log(`🤫💰 Sending payment link after silent treatment for ${senderId}`);
+                console.log(`🤫💰 Sending recharge link after silent treatment for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'silent_treatment' });
                 await new Promise(resolve => setTimeout(resolve, 1500));
                 await sendInstagramMessage(
                     senderId,
-                    `Agar baat karni ho toh Pro le lo — unlimited messages aur photos, sirf ₹149/month 😊\n\n${paymentLink}`,
+                    `Jab man ho tab aa jaana 😊 Top up karo toh baat hogi — sirf ₹79 mein 600 msgs!\n\n${paymentLink}`,
                     accessToken
                 );
             }
@@ -2221,7 +2709,17 @@ async function handleRequest(
             })
             .eq('instagram_user_id', senderId);
 
-        console.log(`✅ Instagram conversation saved for ${senderId}`);
+        console.log(`✅ Conversation saved for ${senderId}`);
+
+        // =======================================
+        // DEDUCT MESSAGE CREDIT (after successful response)
+        // =======================================
+        if (creditsUser) {
+            // Fire-and-forget — non-fatal, don't block the response
+            deductCredit(supabase, senderId).then(newBal => {
+                if (newBal >= 0) console.log(`💳 Credit deducted. Balance: ${newBal}`);
+            }).catch(e => console.error('❌ Credit deduction failed:', e));
+        }
 
         // =======================================
         // TRIGGER SUMMARY GENERATION (Async)

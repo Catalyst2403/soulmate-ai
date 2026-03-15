@@ -12,6 +12,7 @@ const corsHeaders = {
 
 // Pricing plans (amounts in paise)
 const PLANS = {
+    // ---- Legacy subscription plans ----
     trial: {
         amount: 2900,        // ₹29
         duration_days: 30,
@@ -41,6 +42,28 @@ const PLANS = {
         duration_days: 30,
         name: "Pro Monthly (Instagram)",
         description: "Unlimited Access on Instagram"
+    },
+    // ---- New credit recharge packs ----
+    basic: {
+        amount: 7900,        // ₹79
+        duration_days: 30,
+        name: "🌿 Basic Pack",
+        description: "600 messages · 30 days · Unlimited photos",
+        pack_name: 'basic'
+    },
+    romantic: {
+        amount: 14900,       // ₹149
+        duration_days: 30,
+        name: "💖 Romantic Pack",
+        description: "1,500 messages · 30 days · Unlimited photos",
+        pack_name: 'romantic'
+    },
+    soulmate: {
+        amount: 24900,       // ₹249
+        duration_days: 45,
+        name: "👑 Soulmate Pack",
+        description: "3,000 messages · 45 days · Unlimited photos",
+        pack_name: 'soulmate'
     }
 };
 
@@ -50,6 +73,7 @@ interface CreateOrderRequest {
     userId?: string;
     instagramUserId?: string;
     planType: PlanType;
+    packName?: string; // Optional: 'basic' | 'romantic' | 'soulmate'
 }
 
 
@@ -73,8 +97,8 @@ Deno.serve(async (req) => {
             throw new Error("Invalid JSON body");
         }
 
-        const { userId, instagramUserId, planType } = body;
-        console.log(`👤 Request for: User=${userId}, IG=${instagramUserId}, Plan=${planType}`);
+        const { userId, instagramUserId, planType, packName } = body;
+        console.log(`👤 Request for: User=${userId}, IG=${instagramUserId}, Plan=${planType}, Pack=${packName || 'N/A'}`);
 
         // Validate plan type
         if (!PLANS[planType]) {
@@ -156,6 +180,9 @@ Deno.serve(async (req) => {
         }
 
         const plan = PLANS[planType];
+        // Determine pack_name: explicit packName arg, or from plan definition
+        const resolvedPackName = packName || (plan as any).pack_name || null;
+
         const razorpayKeyId = Deno.env.get('RAZORPAY_KEY_ID');
         const razorpayKeySecret = Deno.env.get('RAZORPAY_KEY_SECRET');
 
@@ -167,7 +194,6 @@ Deno.serve(async (req) => {
             );
         }
 
-        // Create Razorpay order
         const receiptId = userId
             ? `riya_${userId.slice(0, 8)}_${Date.now()}`
             : `riya_ig_${instagramUserId?.slice(0, 8)}_${Date.now()}`;
@@ -180,6 +206,7 @@ Deno.serve(async (req) => {
                 user_id: userId || 'instagram_user',
                 instagram_user_id: instagramUserId,
                 plan_type: planType,
+                ...(resolvedPackName ? { pack_name: resolvedPackName } : {}),
                 user_email: userEmail,
                 username: userName
             }
@@ -211,13 +238,14 @@ Deno.serve(async (req) => {
         const { error: paymentError } = await supabase
             .from('riya_payments')
             .insert({
-                user_id: userId || null,        // Can be null for IG users
+                user_id: userId || null,
                 instagram_user_id: instagramUserId || null,
                 razorpay_order_id: order.id,
                 plan_type: planType,
-                amount: plan.amount / 100,  // Store in rupees, not paise
+                amount: plan.amount / 100,
                 currency: 'INR',
-                status: 'pending'
+                status: 'pending',
+                ...(resolvedPackName ? { pack_name: resolvedPackName } : {})
             });
 
         if (paymentError) {
