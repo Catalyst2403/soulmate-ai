@@ -59,7 +59,7 @@ const PACKS: Pack[] = [
         name: 'Basic', price: 79, originalPrice: 149,
         messages: '600 msgs', validity: '30 days',
         highlight: false,
-        features: ['600 messages', 'Unlimited photos', '30 days'],
+        features: ['600 messages', '30 days'],
     },
     {
         id: 'romantic', planType: 'romantic',
@@ -68,15 +68,15 @@ const PACKS: Pack[] = [
         messages: '1,500 msgs', validity: '30 days',
         tag: '💖 Most Popular',
         highlight: true,
-        features: ['1,500 messages', 'Unlimited photos', '30 days'],
+        features: ['1,500 messages', '30 days'],
     },
     {
         id: 'soulmate', planType: 'soulmate',
         icon: <Crown className="w-5 h-5 text-yellow-400" />,
         name: 'Soulmate', price: 249, originalPrice: 499,
-        messages: '3,000 msgs', validity: '45 days',
+        messages: '3,000 msgs', validity: '30 days',
         highlight: false,
-        features: ['3,000 messages', 'Unlimited photos', '45 days'],
+        features: ['3,000 messages', '30 days'],
     },
 ];
 
@@ -88,6 +88,41 @@ const InstagramPayment = () => {
     const [loadingPack, setLoadingPack] = useState<PackName | null>(null);
     const [isSuccess, setIsSuccess] = useState<{ pack: Pack } | null>(null);
     const [showFullImage, setShowFullImage] = useState(false);
+    const [lang, setLang] = useState<'en' | 'hi'>('en');
+
+    const copy = {
+        en: {
+            header: 'Continue the Conversation 💬',
+            tagline: "Riya was mid-story... 👀 Top up to hear the ending",
+            footer: 'Secured by Razorpay · No auto-renewal',
+            waiting: 'Riya is waiting for you 💭',
+            photoBadge: '📸 Unlimited photos included in all plans',
+            packNames: { basic: 'Basic', romantic: 'Romantic', soulmate: 'Soulmate' },
+            packFeatures: {
+                basic: ['600 messages', '30 days'],
+                romantic: ['1,500 messages', '30 days'],
+                soulmate: ['3,000 messages', '30 days'],
+            },
+            packTag: '💖 Most Popular',
+            getBtn: (name: string) => `Get ${name}`,
+        },
+        hi: {
+            header: 'बातचीत जारी रखें 💬',
+            tagline: 'रिया कुछ बताने वाली थी... 👀 सुनने के लिए top up करो',
+            footer: 'Razorpay द्वारा सुरक्षित · कोई auto-renewal नहीं',
+            waiting: 'रिया तुम्हारा इंतज़ार कर रही है 💭',
+            photoBadge: '📸 सभी plans में unlimited photos शामिल',
+            packNames: { basic: 'बेसिक', romantic: 'रोमांटिक', soulmate: 'सोलमेट' },
+            packFeatures: {
+                basic: ['600 संदेश', '30 दिन'],
+                romantic: ['1,500 संदेश', '30 दिन'],
+                soulmate: ['3,000 संदेश', '30 दिन'],
+            },
+            packTag: '💖 सबसे लोकप्रिय',
+            getBtn: (name: string) => `${name} लो`,
+        },
+    };
+    const t = copy[lang];
 
     useEffect(() => {
         const script = document.createElement('script');
@@ -212,6 +247,19 @@ const InstagramPayment = () => {
 
             <div className="relative z-10 max-w-lg mx-auto min-h-screen flex flex-col px-4 py-8">
 
+                {/* Language Toggle */}
+                <div className="flex justify-end mb-2">
+                    <div className="bg-white/5 border border-white/10 rounded-full p-1 flex text-xs">
+                        {(['en', 'hi'] as const).map(l => (
+                            <button key={l} onClick={() => setLang(l)}
+                                className={`px-3 py-1 rounded-full transition-all font-medium ${lang === l ? 'bg-white text-black' : 'text-gray-400 hover:text-white'
+                                    }`}>
+                                {l === 'en' ? 'EN' : 'हि'}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
                 {/* Header */}
                 <div className="text-center mb-6 space-y-3">
                     <div
@@ -223,18 +271,18 @@ const InstagramPayment = () => {
                         </div>
                     </div>
                     <div>
-                        <h1 className="text-xl font-bold">Continue the Conversation 💬</h1>
-                        <p className="text-sm text-gray-400 mt-1">
-                            Riya was mid-story... 👀 Top up to hear the ending
-                        </p>
+                        <h1 className="text-xl font-bold">{t.header}</h1>
+                        <p className="text-sm text-gray-400 mt-1">{t.tagline}</p>
                     </div>
                 </div>
 
                 {/* Horizontal Pack Cards */}
-                <div className="grid grid-cols-3 gap-3 mb-5">
+                <div className="grid grid-cols-3 gap-3 mb-2">
                     {PACKS.map((pack, i) => {
-                        const isSelected = selectedPack === pack.id;
                         const isLoadingThis = loadingPack === pack.id;
+                        const packName = t.packNames[pack.id];
+                        const features = t.packFeatures[pack.id];
+                        const tag = pack.id === 'romantic' ? t.packTag : undefined;
                         return (
                             <motion.div
                                 key={pack.id}
@@ -245,45 +293,44 @@ const InstagramPayment = () => {
                             >
                                 {/* Tag above card */}
                                 <div className="h-6 mb-1 flex items-center justify-center">
-                                    {pack.tag && (
+                                    {tag && (
                                         <span className="text-[10px] font-bold bg-gradient-to-r from-pink-500 to-rose-500 text-white px-2 py-0.5 rounded-full">
-                                            {pack.tag}
+                                            {tag}
                                         </span>
                                     )}
                                 </div>
 
                                 {/* Card */}
-                                <button
-                                    onClick={() => setSelectedPack(pack.id)}
-                                    className={`flex-1 rounded-2xl border p-3 text-left transition-all duration-200 ${isSelected
-                                        ? pack.highlight
+                                <div
+                                    className={`flex-1 rounded-2xl border p-3 text-left ${
+                                        pack.highlight
                                             ? 'border-pink-500 bg-pink-500/10 shadow-lg shadow-pink-500/20'
-                                            : 'border-white/50 bg-white/5'
-                                        : 'border-white/10 bg-white/2 hover:border-white/25'
-                                        }`}
+                                            : 'border-white/10 bg-white/2'
+                                    }`}
                                 >
                                     <div className="flex justify-center mb-2">{pack.icon}</div>
-                                    <p className="text-center font-bold text-sm mb-2">{pack.name}</p>
+                                    <p className="text-center font-bold text-sm mb-2">{packName}</p>
                                     <div className="text-center mb-2">
                                         <p className="text-[10px] text-gray-500 line-through">₹{pack.originalPrice}</p>
                                         <p className="text-2xl font-black">₹{pack.price}</p>
                                     </div>
                                     <ul className="space-y-1 mt-2">
-                                        {pack.features.map((f, fi) => (
+                                        {features.map((f, fi) => (
                                             <li key={fi} className="flex items-center gap-1 text-[10px] text-gray-300">
                                                 <Check className={`w-2.5 h-2.5 shrink-0 ${pack.highlight ? 'text-pink-400' : 'text-emerald-400'}`} />
                                                 {f}
                                             </li>
                                         ))}
                                     </ul>
-                                </button>
+                                </div>
 
                                 {/* Per-card CTA */}
                                 <Button
                                     className={`mt-2 w-full h-10 text-xs font-bold rounded-xl transition-all disabled:opacity-50
-                                        ${pack.highlight
-                                            ? 'bg-gradient-to-r from-[#833AB4] via-[#FD1D1D] to-[#F77737] hover:opacity-90'
-                                            : 'bg-white/10 border border-white/20 hover:bg-white/20'
+                                        ${
+                                            pack.highlight
+                                                ? 'bg-gradient-to-r from-[#833AB4] via-[#FD1D1D] to-[#F77737] hover:opacity-90'
+                                                : 'bg-white/10 border border-white/20 hover:bg-white/20'
                                         }`}
                                     onClick={() => handlePayment(pack)}
                                     disabled={loadingPack !== null}
@@ -311,7 +358,7 @@ const InstagramPayment = () => {
                 <div className="space-y-2 mt-auto">
                     <div className="flex items-center justify-center gap-1.5 text-gray-500">
                         <Shield className="w-3 h-3" />
-                        <p className="text-xs">Secured by Razorpay · No auto-renewal</p>
+                        <p className="text-xs">{t.footer}</p>
                     </div>
                     <p className="text-center text-xs text-gray-600">
                         By continuing you agree to our{' '}
@@ -323,7 +370,7 @@ const InstagramPayment = () => {
                     </p>
                     <div className="flex items-center justify-center gap-2 pt-2">
                         <Sparkles className="w-3 h-3 text-pink-500/50" />
-                        <p className="text-xs text-gray-600">Riya is waiting for you 💭</p>
+                        <p className="text-xs text-gray-600">{t.waiting}</p>
                         <Sparkles className="w-3 h-3 text-pink-500/50" />
                     </div>
                 </div>
