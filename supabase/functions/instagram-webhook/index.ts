@@ -2108,6 +2108,13 @@ async function handleRequest(
         // DEAD STOP — past sales window AND no credits: complete silence, no typing indicator
         if (!effectivePro && effectiveOverWall > SALES_WINDOW_MSGS) {
             console.log(`🚫 Dead stop for ${senderId} (over_wall=${effectiveOverWall}, max=${SALES_WINDOW_MSGS}). No response.`);
+            // Still update last_message_at so analytics (DAU/MAU) count this user as active
+            supabase.from('riya_instagram_users')
+                .update({ last_message_at: new Date().toISOString() })
+                .eq('instagram_user_id', senderId)
+                .then(({ error }: { error: any }) => {
+                    if (error) console.warn('⚠️ Dead stop last_message_at update failed:', error);
+                });
             return;
         }
 
@@ -2631,7 +2638,7 @@ async function handleRequest(
         // =======================================
         // AUTO-SEND RECHARGE LINK (with cooldown guard)
         // =======================================
-        const paymentLink = `${RECHARGE_PAGE_BASE}?id=${senderId}`;
+        const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
 
         // AT LIMIT: send link after a natural pause — bridge message needs to land first
         if (isAtLimit && !paymentLinkSentInLoop) {
