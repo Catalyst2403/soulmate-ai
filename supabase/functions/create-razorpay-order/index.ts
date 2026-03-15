@@ -60,9 +60,9 @@ const PLANS = {
     },
     soulmate: {
         amount: 24900,       // ₹249
-        duration_days: 45,
+        duration_days: 30,
         name: "👑 Soulmate Pack",
-        description: "3,000 messages · 45 days · Unlimited photos",
+        description: "3,000 messages · 30 days · Unlimited photos",
         pack_name: 'soulmate'
     }
 };
