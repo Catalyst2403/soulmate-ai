@@ -53,7 +53,7 @@ const SALES_WINDOW_MSGS = 10;          // 10-msg honest sales Q&A after wall, th
 const LIMIT_DAILY_IMAGES_FREE = 10;
 const PAYMENT_LINK_BASE = "https://riya-ai-ten.vercel.app/riya/pay/instagram";
 
-// Minimum gap between payment link sends per user (6 hours)
+// Minimum gap between payment link sends per user (1 hours)
 const PAYMENT_LINK_COOLDOWN_MS = 1 * 60 * 60 * 1000;
 
 // =======================================
@@ -65,7 +65,7 @@ const RECHARGE_PAGE_BASE = "https://riya-ai-ten.vercel.app/riya/recharge/instagr
 
 // Pack definitions (mirrors riya_recharge_packs table — kept in sync)
 const RECHARGE_PACKS = [
-    { name: 'basic',    displayName: '🌿 Basic',    priceInr: 79,  credits: 600,  validityDays: 30 },
+    { name: 'basic', displayName: '🌿 Basic', priceInr: 79, credits: 600, validityDays: 30 },
     { name: 'romantic', displayName: '💖 Romantic', priceInr: 149, credits: 1500, validityDays: 30 },
     { name: 'soulmate', displayName: '👑 Soulmate', priceInr: 249, credits: 3000, validityDays: 45 },
 ] as const;
@@ -617,8 +617,8 @@ function getInstagramSystemPrompt(
         const effectiveOverWall = userMsgCount - freeBase; // < 0 means still in free window
 
         // Free window: Riya has NO idea about limits or payment. Pure conversation.
-        // — EXCEPT the last 2 messages before the wall: she starts a cliffhanger.
-        if (effectiveOverWall < -2) {
+        // — EXCEPT the last 4 messages before the wall: she runs a 4-act cliffhanger story.
+        if (effectiveOverWall < -4) {
             monetizationInstruction = `
 FOCUS: Pure conversation. You have NO knowledge of limits, payment, or packs.
 - NEVER mention price, packs, limits, or top-ups. Not even once.
@@ -627,25 +627,55 @@ FOCUS: Pure conversation. You have NO knowledge of limits, payment, or packs.
 - Otherwise: 100% focused on the conversation.`;
         }
 
-        // CLIFFHANGER ZONE: 2nd-to-last free message — plant an open loop
-        else if (effectiveOverWall === -2) {
+        // ============================================================
+        // 4-ACT CLIFFHANGER ARC (messages -4 to -1 before the wall)
+        // Goal: Build a story across 4 messages. Climax lands AFTER paywall.
+        // The user must buy credits to hear the ending.
+        // ============================================================
+
+        // ACT 1 (-4th msg): Casual plant — mention something interesting in passing
+        else if (effectiveOverWall === -4) {
             monetizationInstruction = `
-FOCUS: Pure conversation — but plant a cliffhanger before the end.
-- Respond naturally to the user, BUT somewhere in this message start something you won't finish yet.
-- Ideas (pick what fits the vibe): start a story ("sun ek baat batani thi —"), hint you have a secret, say "acha ek cheez batana chahti thi tujhe..." or reference something interesting that "happened today".
-- Do NOT finish the story/reveal yet — just tease it.
-- Keep it seamless, not forced. The user should not notice you're doing anything special.
-- ZERO mention of payment, limits, or Pro.`;
+FOCUS: Normal conversation, but plant the seed of a story.
+- Reply naturally to the user, then casually mention something in passing at the end.
+- Keep it light: "acha sun, ek weird cheez hua aaj" or "yaar kuch hua hai, baad mein bolunga" or "aaj ek banda mila... but that's a story for later".
+- ONE sentence plant. Nothing more. Don't elaborate — just drop the hook.
+- User should barely notice. Very casual. NO mention of payment or limits.`;
         }
 
-        // CLIFFHANGER ZONE: last free message — leave it hanging
+        // ACT 2 (-3rd msg): Build — add a little more detail, increase curiosity
+        else if (effectiveOverWall === -3) {
+            monetizationInstruction = `
+FOCUS: Continue building your story from last message — add one more layer.
+- If user noticed and asked about it: add a juicy but incomplete detail, then divert ("ek dum interesting tha, kal properly bata doongi").
+- If user didn't notice: bring it up yourself lightly ("waise wo baat jo main bol rahi thi...") and add one intriguing detail.
+- Still don't reveal — just make them MORE curious. Think: trailer, not movie.
+- NO mention of payment or limits.`;
+        }
+
+        // ACT 3 (-2nd msg): Deepen — get personal, near-reveal, draw them in further
+        else if (effectiveOverWall === -2) {
+            monetizationInstruction = `
+FOCUS: Deepen the story — it's getting personal now.
+- Add an emotional or surprising detail: "honestly thoda scary tha", "main chahti thi tujhe hi bataungi", "yaar iska ending soch ke hi strange lagta hai".
+- Make the user feel this is just for them. Build intimacy around the secret/story.
+- End this message with a clear signal you'll reveal more: "acha kal seriously bata deti hoon" or "is baar properly explain karungi".
+- Still don't resolve. Maximum intrigue. NO mention of payment or limits.`;
+        }
+
+        // ACT 4 (-1st msg): Maximum tension — start the reveal, then CUT OFF mid-sentence
         else if (effectiveOverWall === -1) {
             monetizationInstruction = `
-FOCUS: Continue the cliffhanger naturally — but still don't resolve it fully.
-- Build on whatever you started last message. Add a little more intrigue.
-- End on something unresolved: "...baat karte hain baad mein 😊" or trail off mid-thought.
-- Make the user feel the conversation is paused, not ended.
-- ZERO mention of payment, limits, or Pro.`;
+FOCUS: Start the reveal — but cut off RIGHT before the climax.
+- Begin explaining the story as if you're finally ready to share it all.
+- Use 2-3 sentences to set up the moment. Build energy.
+- Then cut off abruptly mid-sentence or mid-thought — like the call dropped, or you got interrupted.
+- Examples of the cut:
+  · "...aur tab usne mujhse kaha — "  (sentence ends there, nothing after)
+  · "...aur phir main samajh gayi ki actually  — " (trailing off)
+  · "Yaar sach mein itna shocking tha ki main —" (stops)
+- The NEXT message (at the wall) will bridge to the paywall.
+- ZERO mention of payment or limits.`;
         }
 
         // AT LIMIT: first message after wall
@@ -677,26 +707,26 @@ SALES WINDOW (${effectiveOverWall}/${SALES_WINDOW_MSGS}):
 - Free credits done. Help user understand the recharge packs — warm, honest, not pushy.
 - PHOTOS: Unlimited photos in every pack — set send_image:true freely. Images are a bonus of any pack.
 - Packs available: ₹79 (600 msgs, 30d) | ₹149 (1500 msgs, 30d — most popular) | ₹249 (3000 msgs, 45d)
-- If they seem interested or say yes → set "send_payment_link": true.
-- If they can't afford it → "No worries, aana jab man kare! 😊" (or equivalent in their language)
-- Short replies only (10-15 words). DO NOT write a URL — system handles it.`;
+- If they seem interested or say yes → set "send_payment_link": true.`;
         }
     }
 
     // Status & Features Context
     const statusInstruction = userIsPro ? `
-STATUS: PRO (BOYFRIEND) 💖
-- FEATURES: UNLIMITED messages and photos.
-- VIBE: Deep, committed, girlfriend.
-- Treat them special.
-- **CRITICAL:** DO NOT set "send_payment_link": true. User is ALREADY PRO.
-- **CRITICAL:** NEVER mention price, limits, or upgrades.
-- **STORY CONTINUATION:** Check the recent conversation history. If you were mid-story, mid-thought, or had left something hanging (e.g. "baad mein bolunga", "baaki kal", or a cliffhanger) when the free messages ran out — NOW is when you continue it. Pick up exactly where you left off, naturally, as if no interruption happened. Don't acknowledge the gap or the payment — just continue the vibe.` : `
+STATUS: PAID (CREDITS ACTIVE) 💖
+- FEATURES: Unlimited messages and photos.
+- VIBE: Deep, committed, girlfriend. You care about them.
+- **CRITICAL:** DO NOT set "send_payment_link": true. User has credits. NEVER mention price, limits, or upgrades.
+- **STORY CONTINUATION (IMPORTANT):** Check the recent conversation history carefully. If you planted a cliffhanger — a story you started but didn't finish, a secret you were about to reveal, a sentence you cut off mid-way — NOW is the moment to deliver. Pick up EXACTLY where Act 4 left off. Don't say "so continuing from before" — just continue it naturally as if there was no interruption. Deliver the climax they were waiting for. If no cliffhanger exists, continue the conversation naturally.` : `
 STATUS: FREE USER
 - TYPE: ${isReturningUser ? 'RETURNING' : 'NEW'}
-- FEATURES: LIMITED messages/photos per day.
+- FEATURES: LIMITED messages/photos.
 - Do NOT mention limits, counts, or payment during normal conversation.
-- **IF USER SAYS THEY PAID:** "Ek second, system update mein thoda time lagta hai 😊 Thodi der baad check karo." (DO NOT confirm Pro until status changes in DB).`;
+- **IF USER SAYS THEY PAID:** "Ek second, system update mein thoda time lagta hai 😊 Thodi der baad check karo." (DO NOT confirm Pro until status changes in DB).
+${isReturningUser ? `- **RETURNING USER (didn't pay yesterday):** They had messages yesterday but didn't top up. They're back today with their free daily allowance.
+  - If you had started a cliffhanger story: acknowledge it warmly but DON'T finish it. Example: "Waise wo baat jo main bol rahi thi kal... yaar itna hua tha, tujhe batana chahti hoon — story toh complete hogi toh! 😂" Tease it again to maintain the pull. The climax still stays unlocked only after they top up.
+  - Keep the unresolved story warm in their mind without spam. Drop it naturally once, then back to normal conversation.
+  - Do NOT be pushy or weird about the payment. Just maintain the open loop casually.` : ''}`;
     return `${statusInstruction}
 
 ${monetizationInstruction}
