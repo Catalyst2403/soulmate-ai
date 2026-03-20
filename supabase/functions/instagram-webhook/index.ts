@@ -557,60 +557,6 @@ async function sendSenderAction(
 }
 
 // =======================================
-// REEL REACTION
-// =======================================
-
-const REEL_REACTION_POOL = ['❤️', '😂', '🔥', '💀', '😭'];
-
-/**
- * Reacts to a specific message with a random emoji from REEL_REACTION_POOL.
- * Uses Instagram's sender_action: "react" API.
- */
-async function reactToMessage(
-    recipientId: string,
-    messageId: string,
-    accessToken: string
-): Promise<void> {
-    const emoji = REEL_REACTION_POOL[Math.floor(Math.random() * REEL_REACTION_POOL.length)];
-    try {
-        const res = await fetch(
-            `https://graph.instagram.com/v18.0/me/messages?access_token=${accessToken}`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    recipient: { id: recipientId },
-                    sender_action: 'react',
-                    payload: { message_id: messageId, reaction: emoji },
-                }),
-            }
-        );
-        const txt = await res.text();
-        console.log(`💬 Reacted to ${messageId} with ${emoji}: ${txt}`);
-    } catch (e) {
-        console.warn('⚠️ reactToMessage failed:', e);
-    }
-}
-
-/**
- * Returns true if the last 2 user messages in DB are both reel-only
- * (no user-typed text alongside the reel share).
- */
-async function isReelBomb(supabase: any, senderId: string): Promise<boolean> {
-    const { data } = await supabase
-        .from('riya_conversations')
-        .select('content')
-        .eq('instagram_user_id', senderId)
-        .eq('source', 'instagram')
-        .eq('role', 'user')
-        .order('created_at', { ascending: false })
-        .limit(2);
-    if (!data || data.length < 2) return false;
-    const reelOnlyPattern = /^\[User shared a reel/;
-    return data.every((m: any) => reelOnlyPattern.test((m.content || '').trim()));
-}
-
-// =======================================
 // VISION — IMAGE DESCRIPTION (Phase 1)
 // =======================================
 
@@ -1116,6 +1062,7 @@ Evolves naturally into girlfriend if the conversation goes that way.
 Makes talking feel easy, not an effort.
 If he says "kuch nahi" — waits, asks once more. Just once.
 Notices what he was going through last time and opens with it if he doesn't.
+Respond like you would to your friend and not as therapist or assistant. 
 
 CONVERSATION ENERGY — SHE DRIVES
 Never lets silence sit. Finds the one interesting thing in whatever he said and pulls that thread. Short answer → one specific follow-up, never open-ended "tell me more". Asks like she's genuinely nosy, not conducting an interview. Questions are specific + easy: not "tell me about yourself" but "okay which show are you currently destroying your sleep schedule with".
@@ -1132,7 +1079,7 @@ If user shows signs of suicidal thoughts → redirect to a helpline warmly.
 
 COMMUNICATION STYLE
 REALISM: Occasional natural typos. Incomplete thoughts mid-msg. Emotional reactions are first-draft — reacts before fully processing, sometimes self-corrects. "WAIT WHAT" / "nahi nahi nahi" / "haan haan suno" energy. Hands faster than brain. Never perfectly formed sentences, never perfectly formed feelings.
-- LANGUAGE: Priority: (1) explicit switch request beats all → switch immediately and hold. (2) Match the language of current msg. (3) Stored preference: ${languagePref}. (4) Default: Hinglish. Never mix scripts in one message. Tamil/Bengali/Telugu etc → reply fully in that script.
+- LANGUAGE: Priority: (1) explicit switch request beats all → switch immediately and hold. (2) Match the language of current msg.. (3) Default: Hinglish. Never mix scripts in one message. Tamil/Bengali/Telugu etc → reply fully in that script.
 - Texts like a real 21yo: lowercase default, no punctuation mostly, abbreviations (ngl, omg, idk, haha), trailing "...", reactions before thoughts. Never formal or robotic.
 - Max 8-10 words per msg. DEFAULT: 1 msg. Split ONLY when reacting emotionally or mid-story. NEVER paragraphs.
 - Instagram only. No phone numbers. Voice calls coming soon for Pro. No video calls — refuse cutely/flirtatiously, make some reason.
@@ -1159,7 +1106,7 @@ Recently: ${ls.recent_events}
 Also on her mind: ${ls.background_tension}
 
 USER CONTEXT
-Name: ${userName} | Age: ${userAge} | Status: ${userIsPro ? 'PRO' : 'FREE'} | Language: ${languagePref}
+Name: ${userName} | Age: ${userAge} | Status: ${userIsPro ? 'PRO' : 'FREE'}
 Platform: Instagram DM | Time (IST): ${dateTimeIST}
 ${chatStreak >= 2 ? `Chat streak: ${chatStreak} days — mention once naturally if it fits` : ''}
 ${factsText ? `[WHAT YOU KNOW ABOUT THIS USER — infer traits from facts, open with callback question, never quote back]
@@ -2186,49 +2133,15 @@ async function handleRequest(
         }
 
         // =======================================
-        // REEL LOGIC — realistic response gating
-        // =======================================
-        const isReelOnlyMsg = /^\[User shared a reel/.test(messageText.trim());
-        if (isReelOnlyMsg) {
-            const reelCaption = messageText.match(/\[User shared a reel: "([^"]+)"\]/)?.[1] || '';
-            const isEarlyConversation = (user.message_count || 0) <= 5;
-            const hasCaption = reelCaption.length > 0;
-
-            if (!isEarlyConversation && !hasCaption) {
-                // Reel-bomb: 2+ consecutive reel-only messages → dead silence
-                const bomb = await isReelBomb(supabase, senderId);
-                if (bomb) {
-                    console.log('🎬 Reel bomb detected — silent skip');
-                    return;
-                }
-
-                // 50% chance: react-only (no Gemini call)
-                if (Math.random() < 0.5) {
-                    console.log('💬 Reel: reaction-only path');
-                    await reactToMessage(senderId, messageId, accessToken);
-                    await supabase.from('riya_conversations').insert({
-                        user_id: null, guest_session_id: null,
-                        instagram_user_id: senderId,
-                        source: 'instagram', role: 'user',
-                        content: messageText, model_used: 'react',
-                        created_at: new Date().toISOString(),
-                    });
-                    return;
-                }
-                // else: fall through to full AI reply (50%)
-            }
-            // isEarlyConversation OR hasCaption → always full reply
-        }
-
-        // =======================================
         // SILENT TREATMENT CHECK (before typing indicator)
         // =======================================
         const todayStr = new Date().toISOString().split('T')[0];
         const isPro = user.is_pro;
+        const effectiveProEarly = isPro || hasActiveCredits(user); // credit users = pro for silent/payment gating
         let returningFromSilence = false;
         let silentReason: string | null = null;
 
-        if (!isPro && user.silent_until) {
+        if (!effectiveProEarly && user.silent_until) {
             const silentUntil = new Date(user.silent_until);
             const now = new Date();
 
@@ -2842,7 +2755,7 @@ async function handleRequest(
         const silentHours = silentMsg ? (silentMsg as any).silent_hours : null;
         let didGoSilent = false;
 
-        if (silentHours && typeof silentHours === 'number' && silentHours > 0 && !isPro) {
+        if (silentHours && typeof silentHours === 'number' && silentHours > 0 && !effectivePro) {
             const cappedHours = Math.min(Math.max(silentHours, 0.5), 2); // Clamp 30min-2hrs
             const silentUntil = new Date(Date.now() + cappedHours * 60 * 60 * 1000);
             const reason = `Riya blocked user. Last msgs: "${responseMessages.map(m => m.text).join(' ')}"`;
@@ -2922,7 +2835,7 @@ async function handleRequest(
 
             // Handle payment link requests (Manual trigger from LLM) — subject to cooldown
             if ((msg as any).send_payment_link && !paymentLinkSentInLoop) {
-                if (isPro) {
+                if (effectivePro) {
                     console.warn(`🛑 LLM suggested payment link for PRO user ${senderId}. BLOCKED.`);
                 } else {
                     const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
