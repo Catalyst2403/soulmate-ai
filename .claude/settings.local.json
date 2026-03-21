@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:developers.facebook.com)",
+      "WebSearch",
+      "WebFetch(domain:help.instagram.com)",
+      "WebFetch(domain:www.spurnow.com)",
+      "WebFetch(domain:creatorflow.so)",
+      "WebFetch(domain:foursixty.com)",
+      "WebFetch(domain:linktodm.com)",
+      "WebFetch(domain:feedonomics.com)",
+      "WebFetch(domain:transparency.meta.com)",
+      "WebFetch(domain:www.facebook.com)",
+      "WebFetch(domain:www.replyrush.com)",
+      "WebFetch(domain:chatimize.com)",
+      "WebFetch(domain:sumgenius.ai)",
+      "WebFetch(domain:manychat.com)",
+      "WebFetch(domain:communipass.com)",
+      "WebFetch(domain:www.bot.space)",
+      "WebFetch(domain:aistudio.instagram.com)",
+      "WebFetch(domain:sybrid.com)",
+      "WebFetch(domain:www.nbcnews.com)",
+      "WebFetch(domain:www.dlapiper.com)",
+      "WebFetch(domain:www.cashfree.com)",
+      "WebFetch(domain:www.refrens.com)",
+      "WebFetch(domain:developer.phonepe.com)",
+      "WebFetch(domain:ssrana.in)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)"
+    ]
+  }
+}

@@ -45,21 +45,21 @@ const PLANS = {
     },
     // ---- New credit recharge packs ----
     basic: {
-        amount: 7900,        // ₹79
+        amount: 9900,        // ₹99
         duration_days: 30,
         name: "🌿 Basic Pack",
         description: "600 messages · 30 days · Unlimited photos",
         pack_name: 'basic'
     },
     romantic: {
-        amount: 14900,       // ₹149
+        amount: 19900,       // ₹199
         duration_days: 30,
         name: "💖 Romantic Pack",
         description: "1,500 messages · 30 days · Unlimited photos",
         pack_name: 'romantic'
     },
     soulmate: {
-        amount: 24900,       // ₹249
+        amount: 34900,       // ₹349
         duration_days: 30,
         name: "👑 Soulmate Pack",
         description: "3,000 messages · 30 days · Unlimited photos",
@@ -235,21 +235,27 @@ Deno.serve(async (req) => {
         const order = await razorpayResponse.json();
 
         // Create pending payment record (convert paise to rupees for storage)
+        // IMPORTANT: pack_name column must exist in riya_payments (migration: 20260317_add_pack_name_to_payments.sql)
+        const insertPayload: Record<string, any> = {
+            user_id: userId || null,
+            instagram_user_id: instagramUserId || null,
+            razorpay_order_id: order.id,
+            plan_type: planType,
+            amount: plan.amount / 100,
+            currency: 'INR',
+            status: 'pending',
+        };
+        if (resolvedPackName) insertPayload.pack_name = resolvedPackName;
+
         const { error: paymentError } = await supabase
             .from('riya_payments')
-            .insert({
-                user_id: userId || null,
-                instagram_user_id: instagramUserId || null,
-                razorpay_order_id: order.id,
-                plan_type: planType,
-                amount: plan.amount / 100,
-                currency: 'INR',
-                status: 'pending',
-                ...(resolvedPackName ? { pack_name: resolvedPackName } : {})
-            });
+            .insert(insertPayload);
 
         if (paymentError) {
             console.error("Error creating payment record:", paymentError);
+            // Throw so the frontend knows the order is broken before even opening Razorpay checkout.
+            // Without a payment record, verify-razorpay-payment will return 404 and credits will never be credited.
+            throw new Error(`Failed to save payment record: ${paymentError.message}`);
         }
 
         console.log(`✅ Created Razorpay order ${order.id} for user ${userId}, plan: ${planType}`);
