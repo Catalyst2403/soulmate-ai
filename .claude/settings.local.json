@@ -24,7 +24,9 @@
       "WebFetch(domain:www.cashfree.com)",
       "WebFetch(domain:www.refrens.com)",
       "WebFetch(domain:developer.phonepe.com)",
-      "WebFetch(domain:ssrana.in)"
+      "WebFetch(domain:ssrana.in)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)"
     ]
   }
 }
