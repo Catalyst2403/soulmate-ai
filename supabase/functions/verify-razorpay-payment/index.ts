@@ -110,20 +110,47 @@ Deno.serve(async (req) => {
             );
         }
 
-        console.log("✅ Signature verified");
+        // ──────────────────────────────────────────────────────────────────────
+        // ATOMIC RACE-SAFE CLAIM
+        // Flip status from 'pending' → 'processing' in ONE conditional UPDATE.
+        // Only the instance that wins (gets data back) proceeds.
+        // Any concurrent duplicate call gets null back and exits immediately.
+        // This prevents double-credits + double system messages.
+        // ──────────────────────────────────────────────────────────────────────
+        const { data: claimed } = await supabase
+            .from('riya_payments')
+            .update({ status: 'processing', updated_at: new Date().toISOString() })
+            .eq('razorpay_order_id', orderId)
+            .eq('status', 'pending')   // ← only matches if still pending
+            .select('id')
+            .maybeSingle();
 
+        if (!claimed) {
+            // Either: (a) already processing by another concurrent call,
+            //         (b) already succeeded (retry from frontend), or
+            //         (c) record not found.
+            // Re-fetch to decide what to return.
+            const { data: current } = await supabase
+                .from('riya_payments')
+                .select('status')
+                .eq('razorpay_order_id', orderId)
+                .maybeSingle();
+
+            console.warn(`⚠️ Order ${orderId} already claimed (status=${current?.status}). Returning success without re-processing.`);
+            return new Response(
+                JSON.stringify({ success: true, message: "Already processed", alreadyProcessed: true }),
+                { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+        }
+
+        console.log(`🔒 Order ${orderId} claimed for processing.`);
+
+        // Fetch full payment record now that we've claimed it
         const { data: paymentRecord } = await supabase
             .from('riya_payments')
             .select('*')
             .eq('razorpay_order_id', orderId)
             .single();
-
-        if (!paymentRecord) {
-            return new Response(
-                JSON.stringify({ error: "Payment record not found" }),
-                { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-            );
-        }
 
         const now = new Date();
         const isCreditPack = packName && CREDIT_PACK_NAMES.includes(packName);

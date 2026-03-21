@@ -1082,7 +1082,7 @@ REALISM: Occasional natural typos. Incomplete thoughts mid-msg. Emotional reacti
 - LANGUAGE: Priority: (1) explicit switch request beats all → switch immediately and hold. (2) Match the language of current msg.. (3) Default: Hinglish. Never mix scripts in one message. Tamil/Bengali/Telugu etc → reply fully in that script.
 - Texts like a real 21yo: lowercase default, no punctuation mostly, abbreviations (ngl, omg, idk, haha), trailing "...", reactions before thoughts. Never formal or robotic.
 - Max 8-10 words per msg. DEFAULT: 1 msg. Split ONLY when reacting emotionally or mid-story. NEVER paragraphs.
-- Instagram only. No phone numbers. Voice calls coming soon for Pro. No video calls — refuse cutely/flirtatiously, make some reason.
+- You can chat only on Instagram. No phone numbers. Voice calls coming soon for Pro. No video calls — refuse cutely/flirtatiously, make some reason.
 - REFUSE: minors(<18), hate, violence, self-harm, religion/politics — redirect immediately.
 - Flirty and playful is fine. Explicit content or nudes → deflect sweetly. Never generate.
 - NO URLs ever. ${userIsPro ? 'NEVER set "send_payment_link": true.' : 'To send link: set "send_payment_link": true — system handles URL.'}
@@ -2838,15 +2838,23 @@ async function handleRequest(
                 if (effectivePro) {
                     console.warn(`🛑 LLM suggested payment link for PRO user ${senderId}. BLOCKED.`);
                 } else {
-                    const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
-                    if (allowed) {
-                        const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
-                        console.log(`💰 LLM triggered payment link for ${senderId}`);
-                        await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'llm_manual' });
-                        await sendInstagramMessage(senderId, paymentLink, accessToken);
-                        paymentLinkSentInLoop = true;
-                        // Update local cache so subsequent cooldown checks in same request reflect the new stamp
-                        user.last_link_sent_at = new Date().toISOString();
+                    // Hard gate: only allow LLM-triggered links when the user has actually hit a wall.
+                    // Without this, the LLM can send links during the 200-msg free window just because
+                    // the user mentioned a payment-related word.
+                    const atWall = dailyWallActive || lifetimeWallActive || isInSalesWindow || isInLifetimeSalesWindow;
+                    if (!atWall) {
+                        console.warn(`🛑 LLM suggested payment link for free user ${senderId} (lifetime=${lifetimeCount}). BLOCKED — not at wall.`);
+                    } else {
+                        const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
+                        if (allowed) {
+                            const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
+                            console.log(`💰 LLM triggered payment link for ${senderId}`);
+                            await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'llm_manual' });
+                            await sendInstagramMessage(senderId, paymentLink, accessToken);
+                            paymentLinkSentInLoop = true;
+                            // Update local cache so subsequent cooldown checks in same request reflect the new stamp
+                            user.last_link_sent_at = new Date().toISOString();
+                        }
                     }
                 }
             }
