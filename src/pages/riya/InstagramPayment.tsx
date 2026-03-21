@@ -1,26 +1,43 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import QRCode from 'react-qr-code';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/hooks/use-toast';
 import {
     Heart, Sparkles, Check, Shield, Crown, Leaf,
-    Search, ChevronRight, ArrowLeft, Loader2, Smartphone
+    Search, ChevronRight, ArrowLeft, Loader2,
 } from 'lucide-react';
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-const MERCHANT_VPA = import.meta.env.VITE_MERCHANT_UPI_VPA as string | undefined;
-
-// Poll Razorpay order status every N ms, give up after TIMEOUT ms
-const POLL_INTERVAL_MS = 3_000;
-const POLL_TIMEOUT_MS  = 5 * 60_000; // 5 minutes
+// ─── Razorpay types ────────────────────────────────────────────────────────────
+declare global {
+    interface Window {
+        Razorpay: new (options: RazorpayOptions) => RazorpayInstance;
+    }
+}
+interface RazorpayOptions {
+    key: string;
+    amount: number;
+    currency: string;
+    name: string;
+    description: string;
+    order_id: string;
+    handler: (response: RazorpayResponse) => void;
+    prefill: { name: string; contact: string };
+    theme: { color: string };
+    config?: object;
+    modal?: { ondismiss?: () => void };
+}
+interface RazorpayInstance { open: () => void; }
+interface RazorpayResponse {
+    razorpay_payment_id: string;
+    razorpay_order_id: string;
+    razorpay_signature: string;
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Step = 'plans' | 'username' | 'payment' | 'waiting' | 'success';
+type Step = 'plans' | 'username' | 'payment' | 'success';
 type PackId = 'basic' | 'romantic' | 'soulmate';
 
 interface Pack {
@@ -45,104 +62,92 @@ interface IgUser {
     instagram_name: string | null;
 }
 
-// ─── Pack Definitions ─────────────────────────────────────────────────────────
+// ─── Pack definitions ──────────────────────────────────────────────────────────
 
 const PACKS: Pack[] = [
     {
         id: 'basic',
         icon: <Leaf className="w-5 h-5 text-emerald-400" />,
-        name: 'Basic', nameHi: 'बेसिक',
-        price: 79, originalPrice: 149,
-        messages: '600 msgs', messagesHi: '600 संदेश',
-        validity: '30 days', validityHi: '30 दिन',
+        name: 'Basic',     nameHi: 'बेसिक',
+        price: 79,         originalPrice: 149,
+        messages: '600 msgs',   messagesHi: '600 संदेश',
+        validity: '30 days',    validityHi: '30 दिन',
         highlight: false,
     },
     {
         id: 'romantic',
         icon: <Heart className="w-5 h-5 text-pink-400 fill-pink-400" />,
-        name: 'Romantic', nameHi: 'रोमांटिक',
-        price: 149, originalPrice: 299,
+        name: 'Romantic',  nameHi: 'रोमांटिक',
+        price: 149,        originalPrice: 299,
         messages: '1,500 msgs', messagesHi: '1,500 संदेश',
-        validity: '30 days', validityHi: '30 दिन',
+        validity: '30 days',    validityHi: '30 दिन',
         tag: '💖 Most Popular', tagHi: '💖 सबसे लोकप्रिय',
         highlight: true,
     },
     {
         id: 'soulmate',
         icon: <Crown className="w-5 h-5 text-yellow-400" />,
-        name: 'Soulmate', nameHi: 'सोलमेट',
-        price: 249, originalPrice: 499,
+        name: 'Soulmate',  nameHi: 'सोलमेट',
+        price: 249,        originalPrice: 499,
         messages: '3,000 msgs', messagesHi: '3,000 संदेश',
-        validity: '30 days', validityHi: '30 दिन',
-        tag: '👑 Best Value', tagHi: '👑 सबसे अच्छा',
+        validity: '30 days',    validityHi: '30 दिन',
+        tag: '👑 Best Value',   tagHi: '👑 सबसे अच्छा',
         highlight: false,
     },
 ];
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Helpers ───────────────────────────────────────────────────────────────────
 
 const logEvent = (igUserId: string, eventType: string, metadata?: object) => {
     (supabase as any)
         .from('riya_payment_events')
         .insert({ instagram_user_id: igUserId, event_type: eventType, ...(metadata ? { metadata } : {}) })
         .then(({ error }: { error: any }) => {
-            if (error) console.warn(`⚠️ Failed to log ${eventType}:`, error);
+            if (error) console.warn(`⚠️ logEvent failed (${eventType}):`, error);
         });
 };
 
-const isAndroid = () => /android/i.test(navigator.userAgent);
-
-const buildUpiUrl = (vpa: string, amount: number, description: string, orderId: string) => {
-    const amountRupees = (amount / 100).toFixed(2); // Razorpay stores in paise
-    const params = new URLSearchParams({
-        pa: vpa,
-        pn: 'Riya AI',
-        am: amountRupees,
-        cu: 'INR',
-        tn: description,
-        tr: orderId,
-    });
-    return `upi://pay?${params.toString()}`;
-};
-
-// ─── Component ────────────────────────────────────────────────────────────────
+// ─── Component ─────────────────────────────────────────────────────────────────
 
 const InstagramPayment = () => {
     const [searchParams] = useSearchParams();
-    // ?id param: pre-identified user (backward-compat with old DM links)
+    // ?id= param: pre-identified user (backward-compat with old DM links)
     const prefilledId = searchParams.get('id');
 
-    const [step, setStep]                 = useState<Step>('plans');
-    const [lang, setLang]                 = useState<'en' | 'hi'>('en');
-    const [selectedPack, setSelectedPack] = useState<Pack | null>(null);
-    const [igUser, setIgUser]             = useState<IgUser | null>(
-        prefilledId ? { instagram_user_id: prefilledId, instagram_username: null, instagram_name: null } : null
+    const [step, setStep]                  = useState<Step>('plans');
+    const [lang, setLang]                  = useState<'en' | 'hi'>('en');
+    const [selectedPack, setSelectedPack]  = useState<Pack | null>(null);
+    const [igUser, setIgUser]              = useState<IgUser | null>(
+        prefilledId
+            ? { instagram_user_id: prefilledId, instagram_username: null, instagram_name: null }
+            : null
     );
 
-    // Username search
-    const [query, setQuery]               = useState('');
-    const [results, setResults]           = useState<IgUser[]>([]);
-    const [searching, setSearching]       = useState(false);
-    const [confirmed, setConfirmed]       = useState<IgUser | null>(null);
-    const debounceRef                     = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // Username search state
+    const [query, setQuery]        = useState('');
+    const [results, setResults]    = useState<IgUser[]>([]);
+    const [searching, setSearching] = useState(false);
+    const [confirmed, setConfirmed] = useState<IgUser | null>(null);
+    const debounceRef              = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    // Payment
-    const [orderData, setOrderData]       = useState<{ orderId: string; amount: number; upiUrl: string } | null>(null);
-    const [creatingOrder, setCreatingOrder] = useState(false);
-    const pollRef                         = useRef<ReturnType<typeof setInterval> | null>(null);
-    const pollStartRef                    = useRef<number>(0);
+    // Payment state
+    const [paying, setPaying]       = useState(false);
+    const [successPack, setSuccessPack] = useState<Pack | null>(null);
 
-    // Success
-    const [successPack, setSuccessPack]   = useState<Pack | null>(null);
-
-    // ── Effects ─────────────────────────────────────────────────────────────
-
+    // ── Load Razorpay script once ──────────────────────────────────────────────
     useEffect(() => {
-        if (prefilledId) logEvent(prefilledId, 'page_visit', { page: 'recharge', source: 'dm_link' });
-        else             logEvent('anonymous', 'page_visit', { page: 'recharge', source: 'bio_link' });
+        const script = document.createElement('script');
+        script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+        script.async = true;
+        document.body.appendChild(script);
+
+        if (prefilledId) logEvent(prefilledId, 'page_visit', { source: 'dm_link' });
+        else             logEvent('anonymous',  'page_visit', { source: 'bio_link' });
+
+        return () => { try { document.body.removeChild(script); } catch { } };
     }, []);
 
-    // Debounced username search
+    // ── Debounced username search ──────────────────────────────────────────────
     useEffect(() => {
         if (debounceRef.current) clearTimeout(debounceRef.current);
         if (query.trim().length < 2) { setResults([]); return; }
@@ -152,41 +157,35 @@ const InstagramPayment = () => {
             try {
                 const { data, error } = await supabase.rpc('search_ig_users_by_username', { p_query: query.trim() });
                 if (!error && data) setResults(data as IgUser[]);
-            } catch { /* silently ignore */ }
+            } catch { /* ignore */ }
             finally { setSearching(false); }
         }, 300);
 
         return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
     }, [query]);
 
-    // Stop polling on unmount
-    useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
-
-    // ── Handlers ─────────────────────────────────────────────────────────────
-
+    // ── Plan selected ──────────────────────────────────────────────────────────
     const handleSelectPlan = (pack: Pack) => {
         setSelectedPack(pack);
         if (prefilledId) {
-            // Pre-identified user (old DM link) — skip username step
-            startPayment(pack, { instagram_user_id: prefilledId, instagram_username: null, instagram_name: null });
+            // Old DM link — user already identified, go straight to payment
+            openRazorpay(pack, { instagram_user_id: prefilledId, instagram_username: null, instagram_name: null });
         } else {
             setStep('username');
         }
     };
 
-    const handleSelectUser = (user: IgUser) => {
-        setConfirmed(user);
-        setResults([]);
-    };
-
+    // ── Username confirmed → open payment ──────────────────────────────────────
     const handleConfirmUser = () => {
         if (!confirmed || !selectedPack) return;
-        setIgUser(confirmed);
-        startPayment(selectedPack, confirmed);
+        const user = confirmed;
+        setIgUser(user);
+        openRazorpay(selectedPack, user);
     };
 
-    const startPayment = async (pack: Pack, user: IgUser) => {
-        setCreatingOrder(true);
+    // ── Open Razorpay checkout (UPI-only config) ───────────────────────────────
+    const openRazorpay = async (pack: Pack, user: IgUser) => {
+        setPaying(true);
         setStep('payment');
 
         try {
@@ -196,78 +195,100 @@ const InstagramPayment = () => {
 
             if (error || data?.error) throw new Error(data?.error || error?.message || 'Failed to create order');
 
-            if (!MERCHANT_VPA) {
-                throw new Error('Payment not configured. Please contact support.');
-            }
-
-            const upiUrl = buildUpiUrl(MERCHANT_VPA, data.amount, `${pack.name} Pack`, data.orderId);
-
-            setOrderData({ orderId: data.orderId, amount: data.amount, upiUrl });
             logEvent(user.instagram_user_id, 'upgrade_click', { pack: pack.id, orderId: data.orderId });
+
+            const options: RazorpayOptions = {
+                key: data.keyId,
+                amount: data.amount,
+                currency: 'INR',
+                name: 'Riya AI',
+                description: `${pack.name} Pack — ${pack.messages}`,
+                order_id: data.orderId,
+                handler: async (response: RazorpayResponse) => {
+                    await verifyPayment(response, pack, user);
+                },
+                prefill: {
+                    name: user.instagram_name || user.instagram_username || '',
+                    contact: '',
+                },
+                theme: { color: '#E1306C' },
+                // Show only UPI — no cards, net banking, wallets.
+                // Razorpay natively renders intent buttons (PhonePe/GPay) on Android
+                // and QR code + UPI ID entry on iOS/desktop.
+                config: {
+                    display: {
+                        blocks: {
+                            upi: {
+                                name: 'Pay via UPI',
+                                instruments: [
+                                    { method: 'upi', flows: ['intent', 'qr', 'collect'] }
+                                ],
+                            },
+                        },
+                        sequence: ['block.upi'],
+                        preferences: { show_default_blocks: false },
+                    },
+                },
+                modal: {
+                    ondismiss: () => {
+                        setPaying(false);
+                        // Don't reset step — let user retry without going back through username
+                    },
+                },
+            };
+
+            new window.Razorpay(options).open();
         } catch (err) {
-            console.error('Order creation error:', err);
+            console.error('Payment initiation error:', err);
             toast({
                 title: 'Error',
-                description: err instanceof Error ? err.message : 'Could not start payment. Try again.',
+                description: err instanceof Error ? err.message : 'Could not start payment. Please try again.',
                 variant: 'destructive',
             });
+            setPaying(false);
             setStep(prefilledId ? 'plans' : 'username');
-        } finally {
-            setCreatingOrder(false);
         }
     };
 
-    const startPolling = useCallback((orderId: string, pack: Pack, userId: string) => {
-        if (pollRef.current) clearInterval(pollRef.current);
-        pollStartRef.current = Date.now();
-        setStep('waiting');
+    // ── Called by Razorpay handler after successful payment ────────────────────
+    const verifyPayment = async (response: RazorpayResponse, pack: Pack, user: IgUser) => {
+        try {
+            const { data, error } = await supabase.functions.invoke('verify-razorpay-payment', {
+                body: {
+                    instagramUserId: user.instagram_user_id,
+                    orderId: response.razorpay_order_id,
+                    paymentId: response.razorpay_payment_id,
+                    signature: response.razorpay_signature,
+                    planType: pack.id,
+                    packName: pack.id,
+                },
+            });
 
-        pollRef.current = setInterval(async () => {
-            // Timeout guard
-            if (Date.now() - pollStartRef.current > POLL_TIMEOUT_MS) {
-                clearInterval(pollRef.current!);
-                pollRef.current = null;
-                toast({
-                    title: 'Payment not detected',
-                    description: 'If you paid, credits will appear within 2 minutes. Otherwise try again.',
-                    variant: 'destructive',
-                });
-                setStep('payment');
-                return;
-            }
+            if (error || !data?.success) throw new Error(data?.error || 'Verification failed');
 
-            try {
-                const { data, error } = await supabase.functions.invoke('check-razorpay-order', {
-                    body: { orderId }
-                });
-
-                if (!error && data?.paid) {
-                    clearInterval(pollRef.current!);
-                    pollRef.current = null;
-                    logEvent(userId, 'payment_success', { pack: pack.id, orderId, source: 'polling' });
-                    setSuccessPack(pack);
-                    setStep('success');
-                }
-            } catch { /* keep polling on transient errors */ }
-        }, POLL_INTERVAL_MS);
-    }, []);
-
-    const handleUpiTap = () => {
-        if (!orderData || !selectedPack || !igUser) return;
-        startPolling(orderData.orderId, selectedPack, igUser.instagram_user_id);
-        // Open UPI intent (Android) — opens app chooser
-        window.location.href = orderData.upiUrl;
+            setSuccessPack(pack);
+            setStep('success');
+        } catch (err) {
+            console.error('Verify error:', err);
+            toast({
+                title: 'Activation Pending',
+                description: 'Payment received. Credits will appear within 2 minutes.',
+                variant: 'destructive',
+            });
+        } finally {
+            setPaying(false);
+        }
     };
 
-    // ── Language helpers ──────────────────────────────────────────────────────
+    // ── Language helpers ───────────────────────────────────────────────────────
     const t = {
+        name:     (p: Pack) => lang === 'hi' ? p.nameHi     : p.name,
         messages: (p: Pack) => lang === 'hi' ? p.messagesHi : p.messages,
-        validity:  (p: Pack) => lang === 'hi' ? p.validityHi : p.validity,
-        name:      (p: Pack) => lang === 'hi' ? p.nameHi     : p.name,
-        tag:       (p: Pack) => lang === 'hi' ? (p.tagHi || p.tag) : p.tag,
+        validity: (p: Pack) => lang === 'hi' ? p.validityHi : p.validity,
+        tag:      (p: Pack) => lang === 'hi' ? (p.tagHi || p.tag) : p.tag,
     };
 
-    // ── Shared UI Fragments ───────────────────────────────────────────────────
+    // ── Shared fragments ───────────────────────────────────────────────────────
 
     const LangToggle = () => (
         <div className="flex justify-end mb-2">
@@ -288,8 +309,8 @@ const InstagramPayment = () => {
     );
 
     const ProfileHeader = () => (
-        <div className="text-center mb-6 space-y-3">
-            <div className="mx-auto w-16 h-16 rounded-full p-[2px] bg-gradient-to-tr from-yellow-400 via-pink-500 to-purple-600">
+        <div className="flex justify-center mb-5">
+            <div className="w-16 h-16 rounded-full p-[2px] bg-gradient-to-tr from-yellow-400 via-pink-500 to-purple-600">
                 <div className="w-full h-full rounded-full overflow-hidden border-2 border-black">
                     <img src="/riya-payment-dp.jpg" alt="Riya" className="w-full h-full object-cover" />
                 </div>
@@ -297,7 +318,7 @@ const InstagramPayment = () => {
         </div>
     );
 
-    const FooterTrust = () => (
+    const FooterTrust = ({ igUserId }: { igUserId?: string }) => (
         <div className="space-y-2 mt-auto pt-6">
             <div className="flex items-center justify-center gap-1.5 text-gray-500">
                 <Shield className="w-3 h-3" />
@@ -305,7 +326,7 @@ const InstagramPayment = () => {
                     {lang === 'hi' ? 'Razorpay द्वारा सुरक्षित · कोई auto-renewal नहीं' : 'Secured by Razorpay · No auto-renewal'}
                 </p>
             </div>
-            {igUser && (
+            {igUserId && (
                 <p className="text-center text-xs text-gray-600">
                     {lang === 'hi' ? 'जारी रखकर आप हमारी' : 'By continuing you agree to our'}{' '}
                     <Link to="/riya/privacy-policy" className="text-pink-400 underline">
@@ -320,7 +341,9 @@ const InstagramPayment = () => {
         </div>
     );
 
-    // ── Step: Plans ───────────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+    // STEP: PLANS
+    // ══════════════════════════════════════════════════════════════════════════
 
     const StepPlans = () => (
         <motion.div
@@ -340,7 +363,7 @@ const InstagramPayment = () => {
                 <p className="text-sm text-gray-400 mt-1">
                     {lang === 'hi'
                         ? 'रिया कुछ बताने वाली थी... 👀 plan चुनो'
-                        : 'Riya was mid-story... 👀 Choose a plan to continue'}
+                        : "Riya was mid-story... 👀 Choose a plan to continue"}
                 </p>
             </div>
 
@@ -353,7 +376,7 @@ const InstagramPayment = () => {
                         transition={{ delay: i * 0.07 }}
                         className="flex flex-col"
                     >
-                        {/* Tag row — fixed height so cards align */}
+                        {/* Fixed-height tag row so all cards align */}
                         <div className="h-6 mb-1 flex items-center justify-center">
                             {t.tag(pack) && (
                                 <span className="text-[10px] font-bold bg-gradient-to-r from-pink-500 to-rose-500 text-white px-2 py-0.5 rounded-full whitespace-nowrap">
@@ -362,7 +385,6 @@ const InstagramPayment = () => {
                             )}
                         </div>
 
-                        {/* Card */}
                         <div
                             className={`flex-1 rounded-2xl border p-3 cursor-pointer transition-all active:scale-95 ${
                                 pack.highlight
@@ -409,7 +431,9 @@ const InstagramPayment = () => {
         </motion.div>
     );
 
-    // ── Step: Username ─────────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+    // STEP: USERNAME SEARCH
+    // ══════════════════════════════════════════════════════════════════════════
 
     const StepUsername = () => (
         <motion.div
@@ -421,7 +445,6 @@ const InstagramPayment = () => {
         >
             <LangToggle />
 
-            {/* Back */}
             <button
                 onClick={() => { setStep('plans'); setConfirmed(null); setQuery(''); setResults([]); }}
                 className="flex items-center gap-1 text-gray-400 hover:text-white text-sm mb-6 self-start"
@@ -434,7 +457,7 @@ const InstagramPayment = () => {
 
             {/* Selected plan badge */}
             {selectedPack && (
-                <div className="flex justify-center mb-4">
+                <div className="flex justify-center mb-5">
                     <div className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-full px-4 py-2 text-sm">
                         {selectedPack.icon}
                         <span className="font-semibold">{t.name(selectedPack)} Pack</span>
@@ -444,284 +467,174 @@ const InstagramPayment = () => {
                 </div>
             )}
 
-            <div className="space-y-4">
-                <div>
-                    <h2 className="text-lg font-bold text-center mb-1">
-                        {lang === 'hi' ? 'आप Instagram पर कौन हैं?' : 'Who are you on Instagram?'}
-                    </h2>
-                    <p className="text-xs text-gray-400 text-center mb-4">
-                        {lang === 'hi'
-                            ? 'अपना username type करें — हम आपका account खोज लेंगे'
-                            : 'Type your username — we\'ll find your account'}
-                    </p>
+            <h2 className="text-lg font-bold text-center mb-1">
+                {lang === 'hi' ? 'आप Instagram पर कौन हैं?' : 'Who are you on Instagram?'}
+            </h2>
+            <p className="text-xs text-gray-400 text-center mb-5">
+                {lang === 'hi'
+                    ? 'अपना username type करें — हम आपका account खोज लेंगे'
+                    : "Type your username — we'll find your account"}
+            </p>
 
-                    {/* Search input */}
-                    <div className="relative">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
-                        <input
-                            type="text"
-                            value={query}
-                            onChange={e => { setQuery(e.target.value); setConfirmed(null); }}
-                            placeholder={lang === 'hi' ? 'username लिखें...' : 'Type your username...'}
-                            className="w-full bg-white/5 border border-white/15 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-pink-500 transition-colors"
-                            autoFocus
-                            autoCapitalize="none"
-                            autoCorrect="off"
-                        />
-                        {searching && (
-                            <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 animate-spin" />
-                        )}
-                    </div>
-
-                    {/* Results */}
-                    <AnimatePresence>
-                        {results.length > 0 && !confirmed && (
-                            <motion.div
-                                initial={{ opacity: 0, y: -4 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                exit={{ opacity: 0 }}
-                                className="mt-2 rounded-xl border border-white/10 bg-white/[0.03] overflow-hidden"
-                            >
-                                {results.map(u => (
-                                    <button
-                                        key={u.instagram_user_id}
-                                        onClick={() => handleSelectUser(u)}
-                                        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 active:bg-white/10 transition-colors text-left border-b border-white/5 last:border-0"
-                                    >
-                                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-pink-500/30 to-purple-500/30 border border-white/10 flex items-center justify-center text-xs font-bold text-pink-300 shrink-0">
-                                            {(u.instagram_username?.[0] || '?').toUpperCase()}
-                                        </div>
-                                        <div className="min-w-0">
-                                            <p className="text-sm font-semibold truncate">@{u.instagram_username}</p>
-                                            {u.instagram_name && (
-                                                <p className="text-xs text-gray-400 truncate">{u.instagram_name}</p>
-                                            )}
-                                        </div>
-                                        <ChevronRight className="w-4 h-4 text-gray-600 ml-auto shrink-0" />
-                                    </button>
-                                ))}
-                            </motion.div>
-                        )}
-
-                        {/* No results hint */}
-                        {query.trim().length >= 2 && !searching && results.length === 0 && !confirmed && (
-                            <motion.p
-                                initial={{ opacity: 0 }}
-                                animate={{ opacity: 1 }}
-                                exit={{ opacity: 0 }}
-                                className="mt-3 text-center text-xs text-gray-500"
-                            >
-                                {lang === 'hi'
-                                    ? 'कोई account नहीं मिला। पहले Riya को DM करें, फिर यहाँ आएं!'
-                                    : "No account found. DM Riya first, then come back here!"}
-                            </motion.p>
-                        )}
-                    </AnimatePresence>
-
-                    {/* Confirmed user card */}
-                    <AnimatePresence>
-                        {confirmed && (
-                            <motion.div
-                                initial={{ opacity: 0, scale: 0.97 }}
-                                animate={{ opacity: 1, scale: 1 }}
-                                className="mt-3 rounded-xl border border-pink-500/40 bg-pink-500/10 p-4"
-                            >
-                                <div className="flex items-center gap-3">
-                                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-pink-500/40 to-purple-500/40 border border-pink-500/30 flex items-center justify-center text-sm font-bold text-pink-300 shrink-0">
-                                        {(confirmed.instagram_username?.[0] || '?').toUpperCase()}
-                                    </div>
-                                    <div className="min-w-0">
-                                        <p className="font-semibold">@{confirmed.instagram_username}</p>
-                                        {confirmed.instagram_name && (
-                                            <p className="text-xs text-gray-400">{confirmed.instagram_name}</p>
-                                        )}
-                                    </div>
-                                    <Check className="w-5 h-5 text-pink-400 ml-auto shrink-0" />
-                                </div>
-                            </motion.div>
-                        )}
-                    </AnimatePresence>
-                </div>
-
-                {/* Proceed button */}
-                <Button
-                    className="w-full h-12 bg-gradient-to-r from-[#833AB4] via-[#FD1D1D] to-[#F77737] font-bold text-sm disabled:opacity-40"
-                    disabled={!confirmed || creatingOrder}
-                    onClick={handleConfirmUser}
-                >
-                    {creatingOrder ? (
-                        <span className="flex items-center gap-2">
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                            {lang === 'hi' ? 'तैयारी हो रही है...' : 'Setting up...'}
-                        </span>
-                    ) : (
-                        lang === 'hi' ? 'आगे बढ़ें →' : 'Continue →'
-                    )}
-                </Button>
+            {/* Search input */}
+            <div className="relative mb-2">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+                <input
+                    type="text"
+                    value={query}
+                    onChange={e => { setQuery(e.target.value); setConfirmed(null); }}
+                    placeholder={lang === 'hi' ? 'username लिखें...' : 'Type your username...'}
+                    className="w-full bg-white/5 border border-white/15 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-pink-500 transition-colors"
+                    autoFocus
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                />
+                {searching && (
+                    <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 animate-spin" />
+                )}
             </div>
+
+            {/* Search results */}
+            <AnimatePresence>
+                {results.length > 0 && !confirmed && (
+                    <motion.div
+                        initial={{ opacity: 0, y: -4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0 }}
+                        className="rounded-xl border border-white/10 bg-white/[0.03] overflow-hidden mb-4"
+                    >
+                        {results.map(u => (
+                            <button
+                                key={u.instagram_user_id}
+                                onClick={() => { setConfirmed(u); setResults([]); }}
+                                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 active:bg-white/10 transition-colors text-left border-b border-white/5 last:border-0"
+                            >
+                                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-pink-500/30 to-purple-500/30 border border-white/10 flex items-center justify-center text-xs font-bold text-pink-300 shrink-0">
+                                    {(u.instagram_username?.[0] || '?').toUpperCase()}
+                                </div>
+                                <div className="min-w-0">
+                                    <p className="text-sm font-semibold truncate">@{u.instagram_username}</p>
+                                    {u.instagram_name && (
+                                        <p className="text-xs text-gray-400 truncate">{u.instagram_name}</p>
+                                    )}
+                                </div>
+                                <ChevronRight className="w-4 h-4 text-gray-600 ml-auto shrink-0" />
+                            </button>
+                        ))}
+                    </motion.div>
+                )}
+
+                {/* No results */}
+                {query.trim().length >= 2 && !searching && results.length === 0 && !confirmed && (
+                    <motion.p
+                        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        className="text-center text-xs text-gray-500 mt-2 mb-4"
+                    >
+                        {lang === 'hi'
+                            ? 'कोई account नहीं मिला। पहले Riya को DM करें, फिर यहाँ आएं!'
+                            : "No account found. DM Riya first on Instagram, then come back!"}
+                    </motion.p>
+                )}
+            </AnimatePresence>
+
+            {/* Confirmed user card */}
+            <AnimatePresence>
+                {confirmed && (
+                    <motion.div
+                        initial={{ opacity: 0, scale: 0.97 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className="rounded-xl border border-pink-500/40 bg-pink-500/10 p-4 mb-4"
+                    >
+                        <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-pink-500/40 to-purple-500/40 border border-pink-500/30 flex items-center justify-center text-sm font-bold text-pink-300 shrink-0">
+                                {(confirmed.instagram_username?.[0] || '?').toUpperCase()}
+                            </div>
+                            <div className="min-w-0">
+                                <p className="font-semibold">@{confirmed.instagram_username}</p>
+                                {confirmed.instagram_name && (
+                                    <p className="text-xs text-gray-400">{confirmed.instagram_name}</p>
+                                )}
+                            </div>
+                            <Check className="w-5 h-5 text-pink-400 ml-auto shrink-0" />
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            <Button
+                className="w-full h-12 bg-gradient-to-r from-[#833AB4] via-[#FD1D1D] to-[#F77737] font-bold text-sm disabled:opacity-40"
+                disabled={!confirmed || paying}
+                onClick={handleConfirmUser}
+            >
+                {lang === 'hi' ? 'आगे बढ़ें →' : 'Continue →'}
+            </Button>
 
             <FooterTrust />
         </motion.div>
     );
 
-    // ── Step: Payment ─────────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+    // STEP: PAYMENT  (Razorpay UPI modal opens immediately; this screen is a
+    //                 brief loader shown while the order is being created)
+    // ══════════════════════════════════════════════════════════════════════════
 
     const StepPayment = () => {
-        const android = isAndroid();
-
-        if (creatingOrder || !orderData) {
+        // If paying is false here, the user dismissed the modal — show retry UI
+        if (!paying) {
             return (
-                <div className="flex flex-col items-center justify-center min-h-screen gap-4">
-                    <Loader2 className="w-8 h-8 text-pink-400 animate-spin" />
-                    <p className="text-sm text-gray-400">
-                        {lang === 'hi' ? 'Payment तैयार हो रही है...' : 'Setting up payment...'}
-                    </p>
-                </div>
+                <motion.div
+                    key="payment-retry"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="flex flex-col items-center justify-center min-h-screen px-6 gap-6 text-center"
+                >
+                    <ProfileHeader />
+                    {selectedPack && igUser && (
+                        <>
+                            <div className="space-y-2">
+                                <div className="flex items-center justify-center gap-2">
+                                    {selectedPack.icon}
+                                    <span className="text-lg font-bold">{t.name(selectedPack)} Pack — ₹{selectedPack.price}</span>
+                                </div>
+                                {igUser.instagram_username && (
+                                    <p className="text-xs text-gray-400">@{igUser.instagram_username}</p>
+                                )}
+                            </div>
+
+                            <Button
+                                className="w-full max-w-xs h-12 bg-gradient-to-r from-[#833AB4] via-[#FD1D1D] to-[#F77737] font-bold"
+                                onClick={() => openRazorpay(selectedPack, igUser)}
+                            >
+                                {lang === 'hi' ? 'UPI से Pay करें' : 'Pay via UPI'}
+                            </Button>
+
+                            <button
+                                onClick={() => setStep(prefilledId ? 'plans' : 'username')}
+                                className="text-xs text-gray-500 hover:text-gray-300 underline"
+                            >
+                                {lang === 'hi' ? 'वापस जाएं' : 'Go back'}
+                            </button>
+                        </>
+                    )}
+                    <FooterTrust igUserId={igUser?.instagram_user_id} />
+                </motion.div>
             );
         }
 
+        // Modal is open — show a neutral backdrop
         return (
-            <motion.div
-                key="payment"
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-                className="flex flex-col min-h-screen px-4 py-8 max-w-lg mx-auto"
-            >
-                <LangToggle />
-
-                <button
-                    onClick={() => { setStep(prefilledId ? 'plans' : 'username'); setOrderData(null); }}
-                    className="flex items-center gap-1 text-gray-400 hover:text-white text-sm mb-6 self-start"
-                >
-                    <ArrowLeft className="w-4 h-4" />
-                    {lang === 'hi' ? 'वापस' : 'Back'}
-                </button>
-
-                <ProfileHeader />
-
-                {/* Order summary */}
-                {selectedPack && (
-                    <div className="text-center mb-6">
-                        <div className="flex items-center justify-center gap-2 mb-1">
-                            {selectedPack.icon}
-                            <span className="text-lg font-bold">{t.name(selectedPack)} Pack</span>
-                        </div>
-                        <p className="text-3xl font-black text-white">₹{selectedPack.price}</p>
-                        <p className="text-xs text-gray-400 mt-1">
-                            {t.messages(selectedPack)} · {t.validity(selectedPack)}
-                        </p>
-                        {igUser?.instagram_username && (
-                            <p className="text-xs text-gray-500 mt-1">@{igUser.instagram_username}</p>
-                        )}
-                    </div>
-                )}
-
-                {android ? (
-                    /* ── Android: UPI intent button ── */
-                    <div className="space-y-4">
-                        <p className="text-center text-sm text-gray-400">
-                            {lang === 'hi' ? 'नीचे tap करें और अपने UPI app में pay करें' : 'Tap below and pay in your UPI app'}
-                        </p>
-
-                        <button
-                            onClick={handleUpiTap}
-                            className="w-full h-14 rounded-2xl bg-gradient-to-r from-[#833AB4] via-[#FD1D1D] to-[#F77737] font-bold text-base flex items-center justify-center gap-3 active:scale-95 transition-all"
-                        >
-                            <Smartphone className="w-5 h-5" />
-                            {lang === 'hi' ? 'UPI से Pay करें' : 'Pay via UPI'}
-                        </button>
-
-                        <p className="text-center text-xs text-gray-500">
-                            {lang === 'hi'
-                                ? 'PhonePe, Google Pay, Paytm — कोई भी UPI app'
-                                : 'PhonePe, Google Pay, Paytm — any UPI app'}
-                        </p>
-                    </div>
-                ) : (
-                    /* ── iOS / Desktop: QR code ── */
-                    <div className="space-y-4">
-                        <p className="text-center text-sm text-gray-400">
-                            {lang === 'hi'
-                                ? 'अपने phone से QR scan करें'
-                                : 'Scan the QR code with your UPI app'}
-                        </p>
-
-                        <div className="flex justify-center">
-                            <div className="bg-white p-4 rounded-2xl">
-                                <QRCode
-                                    value={orderData.upiUrl}
-                                    size={220}
-                                    bgColor="#ffffff"
-                                    fgColor="#000000"
-                                    level="M"
-                                />
-                            </div>
-                        </div>
-
-                        <p className="text-center text-xs text-gray-500">
-                            {lang === 'hi'
-                                ? 'PhonePe / Google Pay → Scan & Pay'
-                                : 'PhonePe / Google Pay → Scan & Pay'}
-                        </p>
-
-                        <Button
-                            className="w-full h-11 bg-white/10 border border-white/20 hover:bg-white/20 text-sm font-semibold"
-                            onClick={() => startPolling(orderData.orderId, selectedPack!, igUser!.instagram_user_id)}
-                        >
-                            {lang === 'hi' ? "मैंने pay कर दिया ✓" : "I've paid ✓"}
-                        </Button>
-                    </div>
-                )}
-
-                <FooterTrust />
-            </motion.div>
+            <div className="flex flex-col items-center justify-center min-h-screen gap-4">
+                <Loader2 className="w-8 h-8 text-pink-400 animate-spin" />
+                <p className="text-sm text-gray-400">
+                    {lang === 'hi' ? 'Payment खुल रही है...' : 'Opening payment...'}
+                </p>
+            </div>
         );
     };
 
-    // ── Step: Waiting ─────────────────────────────────────────────────────────
-
-    const StepWaiting = () => (
-        <motion.div
-            key="waiting"
-            initial={{ opacity: 0, scale: 0.97 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="flex flex-col items-center justify-center min-h-screen px-4 gap-6 text-center"
-        >
-            <div className="w-20 h-20 rounded-full bg-pink-500/20 border border-pink-500/40 flex items-center justify-center">
-                <Loader2 className="w-10 h-10 text-pink-400 animate-spin" />
-            </div>
-            <div className="space-y-2">
-                <h2 className="text-2xl font-bold">
-                    {lang === 'hi' ? 'Payment का इंतज़ार...' : 'Waiting for payment...'}
-                </h2>
-                <p className="text-gray-400 text-sm max-w-xs">
-                    {lang === 'hi'
-                        ? 'अपने UPI app में payment complete करें — यह page अपने आप update हो जाएगा'
-                        : 'Complete the payment in your UPI app — this page will update automatically'}
-                </p>
-                <p className="text-xs text-yellow-400 animate-pulse mt-2">
-                    {lang === 'hi' ? '⚠️ यह window बंद मत करें' : '⚠️ Do not close this window'}
-                </p>
-            </div>
-
-            {/* Manual "I've paid" fallback for iOS after QR scan */}
-            {!isAndroid() && (
-                <button
-                    onClick={() => {
-                        if (orderData && selectedPack && igUser) {
-                            // Already polling; just a re-assurance tap — nothing needed
-                        }
-                    }}
-                    className="text-xs text-gray-600 underline mt-2"
-                >
-                    {lang === 'hi' ? 'Payment अटकी हुई है? Support से संपर्क करें' : 'Payment stuck? Contact support'}
-                </button>
-            )}
-        </motion.div>
-    );
-
-    // ── Step: Success ─────────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+    // STEP: SUCCESS
+    // ══════════════════════════════════════════════════════════════════════════
 
     const StepSuccess = () => (
         <motion.div
@@ -773,19 +686,16 @@ const InstagramPayment = () => {
         </motion.div>
     );
 
-    // ── Root render ───────────────────────────────────────────────────────────
+    // ── Root ───────────────────────────────────────────────────────────────────
 
     return (
         <div className="min-h-screen bg-black text-white font-sans relative overflow-hidden">
-            {/* Background glow */}
             <div className="absolute top-0 left-1/2 -translate-x-1/2 w-96 h-96 bg-pink-600/15 rounded-full blur-3xl pointer-events-none" />
-
             <div className="relative z-10">
                 <AnimatePresence mode="wait">
                     {step === 'plans'    && <StepPlans    key="plans" />}
                     {step === 'username' && <StepUsername  key="username" />}
                     {step === 'payment'  && <StepPayment   key="payment" />}
-                    {step === 'waiting'  && <StepWaiting   key="waiting" />}
                     {step === 'success'  && <StepSuccess   key="success" />}
                 </AnimatePresence>
             </div>
