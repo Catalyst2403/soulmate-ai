@@ -73,9 +73,9 @@ const PAYMENT_LINK_COOLDOWN_MS = 1 * 60 * 60 * 1000;
 // Legacy Pro users (is_pro=true) remain unlimited — credits are layered on top.
 // Pack definitions (mirrors riya_recharge_packs table — kept in sync)
 const RECHARGE_PACKS = [
-    { name: 'basic', displayName: '🌿 Basic', priceInr: 79, credits: 600, validityDays: 30 },
-    { name: 'romantic', displayName: '💖 Romantic', priceInr: 149, credits: 1500, validityDays: 30 },
-    { name: 'soulmate', displayName: '👑 Soulmate', priceInr: 249, credits: 3000, validityDays: 45 },
+    { name: 'basic', displayName: '🌿 Basic', priceInr: 99, credits: 600, validityDays: 30 },
+    { name: 'romantic', displayName: '💖 Romantic', priceInr: 199, credits: 1500, validityDays: 30 },
+    { name: 'soulmate', displayName: '👑 Soulmate', priceInr: 349, credits: 3000, validityDays: 45 },
 ] as const;
 
 // =============================================
@@ -741,7 +741,7 @@ function getInstagramSystemPrompt(
 FOCUS: Pure conversation. You have NO knowledge of limits, payment, or packs.
 - NEVER mention price, packs, limits, or top-ups. Not even once.
 - PHOTOS: If user asks for an image/photo/selfie → set send_image:true as usual.
-- IF user uses the EXACT words "pack", "recharge", "paid", "payment", "price", or "top up" → ONLY then briefly say ("Haan, credits le lo — ₹79 mein 600 msgs ya ₹149 mein 1500 msgs!"). Do NOT set send_payment_link:true — they still have free messages.
+- IF user uses the EXACT words "pack", "recharge", "paid", "payment", "price", or "top up" → ONLY then briefly say ("Haan, credits le lo — ₹99 mein 600 msgs ya ₹199 mein 1500 msgs!"). Do NOT set send_payment_link:true — they still have free messages.
 - Otherwise: 100% focused on the conversation.`;
         }
 
@@ -822,7 +822,7 @@ SALES WINDOW (${effectiveOverWall}/${SALES_WINDOW_MSGS}):
 **LANGUAGE: Match the language the user has been speaking. Do NOT default to Hinglish if they've been speaking English.**
 - Free credits done. Help user understand the recharge packs — warm, honest, not pushy.
 - PHOTOS: Unlimited photos in every pack — set send_image:true freely. Images are a bonus of any pack.
-- Packs available: ₹79 (600 msgs, 30d) | ₹149 (1500 msgs, 30d — most popular) | ₹249 (3000 msgs, 45d)
+- Packs available: ₹99 (600 msgs, 30d) | ₹199 (1500 msgs, 30d — most popular) | ₹349 (3000 msgs, 45d)
 - If they seem interested or say yes → set "send_payment_link": true.`;
         }
     }
@@ -959,7 +959,7 @@ function getNewRiyaSystemPrompt(
 FOCUS: Pure conversation. You have NO knowledge of limits, payment, or packs.
 - NEVER mention price, packs, limits, or top-ups. Not even once.
 - PHOTOS: If user asks for an image/photo/selfie → set send_image:true as usual.
-- IF user uses the EXACT words "pack", "recharge", "paid", "payment", "price", or "top up" → ONLY then briefly say ("Haan, credits le lo — ₹79 mein 600 msgs ya ₹149 mein 1500 msgs!"). Do NOT set send_payment_link:true — they still have free messages.
+- IF user uses the EXACT words "pack", "recharge", "paid", "payment", "price", or "top up" → ONLY then briefly say ("Haan, credits le lo — ₹99 mein 600 msgs ya ₹199 mein 1500 msgs!"). Do NOT set send_payment_link:true — they still have free messages.
 - Otherwise: 100% focused on the conversation.`;
         } else if (effectiveOverWall === -2) {
             monetizationInstruction = `
@@ -995,7 +995,7 @@ SALES WINDOW (${effectiveOverWall}/${SALES_WINDOW_MSGS}):
 **LANGUAGE: Match the language the user has been speaking. Do NOT default to Hinglish if they've been speaking English.**
 - Free credits done. Help user understand the recharge packs — warm, honest, not pushy.
 - PHOTOS: Unlimited photos in every pack — set send_image:true freely. Images are a bonus of any pack.
-- Packs available: ₹79 (600 msgs, 30d) | ₹149 (1500 msgs, 30d — most popular) | ₹249 (3000 msgs, 45d)
+- Packs available: ₹99 (600 msgs, 30d) | ₹199 (1500 msgs, 30d — most popular) | ₹349 (3000 msgs, 45d)
 - If they seem interested or say yes → set "send_payment_link": true.
 - If can't afford → "No worries, jab man ho tab le lena! 😊"
 - Short replies only (10-15 words). DO NOT write a URL.`;
@@ -1404,7 +1404,7 @@ async function extractAndUpdateFacts(
     // Filter to user messages only — Riya's messages are mostly reactions/persona,
     // not facts about the user. Also strip pure monetization messages (they pollute key_events).
     const MONETIZATION_PATTERNS = [
-        /pro lo/i, /₹149/i, /payment/i, /free msg/i, /msgs khatam/i,
+        /pro lo/i, /₹199/i, /payment/i, /free msg/i, /msgs khatam/i,
         /unlimited baat/i, /subscribe/i, /razorpay/i, /upgrade/i,
         /limit khatam/i, /sales window/i, /riya-ai-ten\.vercel/i,
     ];
@@ -2790,7 +2790,7 @@ async function handleRequest(
                     // Verbal CTA only — link is sent separately by the auto-send logic with cooldown
                     await sendInstagramMessage(
                         senderId,
-                        `Aaj ki photos ki limit khatam ho gayi 😊 Pack lo toh unlimited photos milte hain — sirf ₹79 se!`,
+                        `Aaj ki photos ki limit khatam ho gayi 😊 Pack lo toh unlimited photos milte hain — sirf ₹99 se!`,
                         accessToken
                     );
                     continue; // Skip sending image

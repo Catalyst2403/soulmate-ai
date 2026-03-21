@@ -45,21 +45,21 @@ const PLANS = {
     },
     // ---- New credit recharge packs ----
     basic: {
-        amount: 7900,        // ₹79
+        amount: 9900,        // ₹99
         duration_days: 30,
         name: "🌿 Basic Pack",
         description: "600 messages · 30 days · Unlimited photos",
         pack_name: 'basic'
     },
     romantic: {
-        amount: 14900,       // ₹149
+        amount: 19900,       // ₹199
         duration_days: 30,
         name: "💖 Romantic Pack",
         description: "1,500 messages · 30 days · Unlimited photos",
         pack_name: 'romantic'
     },
     soulmate: {
-        amount: 24900,       // ₹249
+        amount: 34900,       // ₹349
         duration_days: 30,
         name: "👑 Soulmate Pack",
         description: "3,000 messages · 30 days · Unlimited photos",
