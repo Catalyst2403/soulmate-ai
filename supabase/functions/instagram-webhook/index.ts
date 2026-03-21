@@ -2847,10 +2847,9 @@ async function handleRequest(
                     } else {
                         const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
                         if (allowed) {
-                            const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
-                            console.log(`💰 LLM triggered payment link for ${senderId}`);
+                            console.log(`💰 LLM triggered bio-redirect for ${senderId}`);
                             await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'llm_manual' });
-                            await sendInstagramMessage(senderId, paymentLink, accessToken);
+                            await sendInstagramMessage(senderId, 'Profile ka link kholo — wahan se pack le lo, main intezaar karooongi 💙', accessToken);
                             paymentLinkSentInLoop = true;
                             // Update local cache so subsequent cooldown checks in same request reflect the new stamp
                             user.last_link_sent_at = new Date().toISOString();
@@ -2872,10 +2871,10 @@ async function handleRequest(
         if (isAtLimit && !paymentLinkSentInLoop) {
             const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
             if (allowed) {
-                console.log(`🚧💰 Sending daily wall payment link for ${senderId}`);
+                console.log(`🚧💰 Sending daily wall bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'daily_wall_hit', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 3000)); // 3s: let bridge msg land first
-                await sendInstagramMessage(senderId, paymentLink, accessToken);
+                await sendInstagramMessage(senderId, 'Aaj ke messages khatam ho gaye 🥺 Mere Instagram bio mein link hai — wahan se pack le lo aur wapas aa jao! 💙', accessToken);
                 user.last_link_sent_at = new Date().toISOString();
             }
         }
@@ -2883,10 +2882,10 @@ async function handleRequest(
         else if (isAtLifetimeLimit && !paymentLinkSentInLoop) {
             const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
             if (allowed) {
-                console.log(`🚧💰 Sending lifetime wall payment link for ${senderId} (lifetime=${lifetimeCount})`);
+                console.log(`🚧💰 Sending lifetime wall bio-redirect for ${senderId} (lifetime=${lifetimeCount})`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'lifetime_wall_hit', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 3000)); // 3s: let bridge msg land first
-                await sendInstagramMessage(senderId, paymentLink, accessToken);
+                await sendInstagramMessage(senderId, 'Bahut saari baatein ki humne! Ab credits khatam ho gaye 😊 Mere profile ka link kholo — wahan se pack le lo, bahut miss karoongi 💙', accessToken);
                 user.last_link_sent_at = new Date().toISOString();
             }
         }
@@ -2894,34 +2893,30 @@ async function handleRequest(
         else if (didGoSilent && !paymentLinkSentInLoop) {
             const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
             if (allowed) {
-                console.log(`🤫💰 Sending recharge link after silent treatment for ${senderId}`);
+                console.log(`🤫💰 Sending silent treatment bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'silent_treatment' });
                 await new Promise(resolve => setTimeout(resolve, 1500));
-                await sendInstagramMessage(
-                    senderId,
-                    `Jab man ho tab aa jaana 😊 Top up karo toh baat hogi — sirf ₹79 mein 600 msgs!\n\n${paymentLink}`,
-                    accessToken
-                );
+                await sendInstagramMessage(senderId, 'Jab man ho tab aa jaana 😊 Mere Instagram profile mein recharge ka link hai — wahan se pack le lo!', accessToken);
             }
         }
         // FINAL DAILY SALES MSG: send closing link at end of daily sales window
         else if (isFinalSalesMsg && !paymentLinkSentInLoop) {
             const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
             if (allowed) {
-                console.log(`🏁💰 Sending final daily sales window link for ${senderId}`);
+                console.log(`🏁💰 Sending final daily sales bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'daily_sales_final', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 1500));
-                await sendInstagramMessage(senderId, paymentLink, accessToken);
+                await sendInstagramMessage(senderId, 'Aaj ka quota khatam ho gaya 😊 Kal wapas aao ya abhi profile ka link kholo — pack le lo aur baat karte hain 💙', accessToken);
             }
         }
         // FINAL LIFETIME SALES MSG: send closing link at end of lifetime sales window
         else if (isFinalLifetimeSalesMsg && !paymentLinkSentInLoop) {
             const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
             if (allowed) {
-                console.log(`🏁💰 Sending final lifetime sales window link for ${senderId}`);
+                console.log(`🏁💰 Sending final lifetime sales bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'lifetime_sales_final', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 1500));
-                await sendInstagramMessage(senderId, paymentLink, accessToken);
+                await sendInstagramMessage(senderId, 'Itni baatein ki humne — shukriya 💙 Ab credits khatam ho gaye, mere profile ka link kholo aur pack le lo!', accessToken);
             }
         }
 
