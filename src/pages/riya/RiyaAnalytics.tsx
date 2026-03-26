@@ -153,6 +153,7 @@ const RiyaAnalytics = () => {
     const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [activeUsersInterval, setActiveUsersInterval] = useState('7 days');
+    const [sinceDate, setSinceDate] = useState(''); // '' = all time; 'YYYY-MM-DD' = filter
     const [analyticsView, setAnalyticsView] = useState<'combined' | 'web' | 'instagram' | 'logs'>('instagram');
 
     // Log viewer state
@@ -336,8 +337,10 @@ const RiyaAnalytics = () => {
             const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
             const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
+            const params = new URLSearchParams({ interval: activeUsersInterval });
+            if (sinceDate) params.set('since', sinceDate);
             const response = await fetch(
-                `${supabaseUrl}/functions/v1/riya-analytics?interval=${encodeURIComponent(activeUsersInterval)}`,
+                `${supabaseUrl}/functions/v1/riya-analytics?${params.toString()}`,
                 {
                     headers: {
                         'apikey': supabaseAnonKey,
@@ -365,12 +368,12 @@ const RiyaAnalytics = () => {
         }
     };
 
-    // Reload when interval changes
+    // Reload when interval or since-date changes
     useEffect(() => {
         if (isAuthenticated) {
             loadAnalytics();
         }
-    }, [activeUsersInterval]);
+    }, [activeUsersInterval, sinceDate]);
 
     if (!isAuthenticated) {
         return (
@@ -451,6 +454,43 @@ const RiyaAnalytics = () => {
                         <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
                         Refresh
                     </Button>
+                </motion.div>
+
+                {/* Date Filter Bar */}
+                <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.01 }}
+                    className="flex flex-wrap items-center gap-3 mb-4"
+                >
+                    <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground font-medium">Show data after:</span>
+                        <input
+                            type="date"
+                            value={sinceDate}
+                            onChange={e => setSinceDate(e.target.value)}
+                            className="text-sm bg-muted/20 border border-border rounded-lg px-3 py-1.5 text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                        />
+                    </div>
+                    <button
+                        onClick={() => setSinceDate('2026-03-03')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${sinceDate === '2026-03-03' ? 'bg-pink-500/20 text-pink-400 ring-1 ring-pink-500/40' : 'bg-muted/10 text-muted-foreground hover:bg-muted/20'}`}
+                    >
+                        After Mar 3 (New Personality)
+                    </button>
+                    {sinceDate && (
+                        <button
+                            onClick={() => setSinceDate('')}
+                            className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-muted/10 text-muted-foreground hover:bg-muted/20 transition-all"
+                        >
+                            All time
+                        </button>
+                    )}
+                    {sinceDate && (
+                        <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-amber-500/15 text-amber-400 ring-1 ring-amber-500/30">
+                            Showing data after {sinceDate}
+                        </span>
+                    )}
                 </motion.div>
 
                 {/* View Toggle */}
