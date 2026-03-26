@@ -20,6 +20,14 @@ serve(async (req) => {
         const url = new URL(req.url);
         const activeUsersInterval = url.searchParams.get('interval') || '7 days';
 
+        // "since" filter — show only data after this date (e.g. "2026-03-03")
+        const sinceParam = url.searchParams.get('since'); // YYYY-MM-DD or null
+        const sinceISO = sinceParam ? new Date(sinceParam).toISOString() : null;
+        // Compute dynamic lookback in days for RPCs that accept days_lookback / p_days
+        const daysLookback = sinceParam
+            ? Math.max(1, Math.ceil((Date.now() - new Date(sinceParam).getTime()) / 86_400_000))
+            : 30;
+
         // Initialize Supabase client
         const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
         const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -32,9 +40,9 @@ serve(async (req) => {
         // ============================================
 
         // Manual query for user metrics
-        const { data: users } = await supabase
-            .from('riya_users')
-            .select('id, last_active, created_at');
+        let usersQuery = supabase.from('riya_users').select('id, last_active, created_at');
+        if (sinceISO) usersQuery = usersQuery.gte('created_at', sinceISO);
+        const { data: users } = await usersQuery;
 
         const totalUsers = users?.length || 0;
         const activeUsers = users?.filter((u: any) => {
@@ -83,7 +91,7 @@ serve(async (req) => {
         console.log('🔍 Fetching daily activity via RPC...');
 
         const { data: dailyActivityRpc, error: dailyError } = await supabase
-            .rpc('get_daily_activity', { p_days: 30 });
+            .rpc('get_daily_activity', { p_days: daysLookback });
 
         if (dailyError) {
             console.error('Error fetching daily activity via RPC:', dailyError);
@@ -135,9 +143,9 @@ serve(async (req) => {
         // ============================================
         // 6. REVENUE METRICS
         // ============================================
-        const { data: subscriptions } = await supabase
-            .from('riya_subscriptions')
-            .select('*');
+        let subsQuery = supabase.from('riya_subscriptions').select('*');
+        if (sinceISO) subsQuery = subsQuery.gte('starts_at', sinceISO);
+        const { data: subscriptions } = await subsQuery;
 
         const payingUsers = subscriptions?.filter((s: any) =>
             s.status === 'active' && new Date(s.expires_at) > new Date()
@@ -169,9 +177,9 @@ serve(async (req) => {
         // ============================================
         // 7. RETENTION METRICS
         // ============================================
-        const { data: allUsers } = await supabase
-            .from('riya_users')
-            .select('created_at, last_active');
+        let allUsersQuery = supabase.from('riya_users').select('created_at, last_active');
+        if (sinceISO) allUsersQuery = allUsersQuery.gte('created_at', sinceISO);
+        const { data: allUsers } = await allUsersQuery;
 
         const calculateRetention = (days: number) => {
             const eligible = allUsers?.filter(u => {
@@ -206,9 +214,11 @@ serve(async (req) => {
 
 
 
-        const { data: igUsers } = await supabase
+        let igUsersQuery = supabase
             .from('riya_instagram_users')
             .select('id, instagram_user_id, instagram_username, instagram_name, message_count, last_message_at, created_at, trial_ends_at, is_pro, subscription_end_date, subscription_start_date');
+        if (sinceISO) igUsersQuery = igUsersQuery.gte('created_at', sinceISO);
+        const { data: igUsers } = await igUsersQuery;
 
         const totalIgUsers = igUsers?.length || 0;
 
@@ -307,7 +317,7 @@ serve(async (req) => {
         // IG Session Time Metrics
         console.log('⏱️ Fetching IG session metrics...');
         const { data: sessionMetricsRpc, error: sessionError } = await supabase
-            .rpc('get_instagram_session_metrics', { days_lookback: 30 });
+            .rpc('get_instagram_session_metrics', { days_lookback: daysLookback });
 
         if (sessionError) {
             console.error('Error fetching session metrics:', sessionError);
@@ -369,7 +379,7 @@ serve(async (req) => {
         // ============================================
         console.log('📈 Fetching aggregate metrics...');
         const { data: aggMetricsRpc, error: aggError } = await supabase
-            .rpc('get_instagram_aggregate_metrics', { p_days: 30 });
+            .rpc('get_instagram_aggregate_metrics', { p_days: daysLookback });
 
         if (aggError) {
             console.error('Error fetching aggregate metrics:', aggError);
@@ -403,10 +413,14 @@ serve(async (req) => {
         // ============================================
         console.log('💰 Fetching payment funnel metrics...');
 
+        // Use whichever date is later: the since filter or the default 30-day window
+        const paymentSinceISO = sinceISO
+            ? (new Date(sinceISO) > thirtyDaysAgoIg ? sinceISO : thirtyDaysAgoIg.toISOString())
+            : thirtyDaysAgoIg.toISOString();
         const { data: paymentEvents, error: paymentError } = await supabase
             .from('riya_payment_events')
             .select('event_type, created_at')
-            .gte('created_at', thirtyDaysAgoIg.toISOString());
+            .gte('created_at', paymentSinceISO);
 
         if (paymentError) {
             console.error('Error fetching payment events:', paymentError);
@@ -454,7 +468,7 @@ serve(async (req) => {
         // Daily IG Activity (active users + USER messages per day from riya_conversations)
         // Uses RPC to avoid 1000-row limit that was hiding recent data
         const { data: igDailyActivityRpc, error: igDailyError } = await supabase
-            .rpc('get_instagram_daily_activity', { days_lookback: 30 });
+            .rpc('get_instagram_daily_activity', { days_lookback: daysLookback });
 
         if (igDailyError) {
             console.error('Error fetching IG daily activity:', igDailyError);
@@ -574,6 +588,7 @@ serve(async (req) => {
         // RETURN COMPREHENSIVE ANALYTICS
         // ============================================
         const analytics = {
+            sinceFilter: sinceParam ?? null, // echoed back so UI can display it
             userMetrics: {
                 total: totalUsers,
                 active: activeUsers,

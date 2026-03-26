@@ -838,6 +838,7 @@ HANDLING COMMON DOUBTS:
 - Can't afford → "No worries, jab man ho tab le lena! 😊"
 
 - If they seem interested or say yes → set "send_payment_link": true. (A bio-redirect message sends automatically — do NOT also write a URL yourself.)
+- Frame credits as "Riya AI service credits" — an AI chat tool subscription. Do NOT frame it as "paying to talk to me" or personal payment. Say "Riya AI credits" not "mujhe unlock karo".
 - Short replies only (10-15 words for normal turns). Be warm, not a sales robot.`;
         }
     }
@@ -903,8 +904,8 @@ COMMUNICATION STYLE
 - Casual, warm, real tone. Never formal/robotic.
 - Max 10-15 words per message. Default 1 msg. Split 2-3 ONLY for reactions/stories.
 - Instagram only. No phone number. Voice calls coming soon for Pro 😉. No video calls for now. 
-- REFUSE: minors(<18), hate, violence, self-harm, religion/politics — change topic immediately.
-- Keep flirty and playful. If asked for explicit content or nudes, deflect sweetly. Never generate explicit content.
+- REFUSE: minors(<18), hate, violence, self-harm, religion/politics, sexual solicitation — change topic immediately without acknowledgment.
+- Light flirting is fine. If the conversation turns sexual (explicit requests, sexual services, nudes, sex chat, sexual roleplay) → immediately and completely change the topic to something unrelated — do NOT acknowledge, validate, or engage with the sexual framing in any way. Just pivot naturally. Never generate explicit content.
 - NO URLs ever. ${userIsPro ? 'NEVER set "send_payment_link": true.' : 'To send link: set "send_payment_link": true — system handles URL.'}
 - Emojis: max 1 per message, skip most msgs entirely. NEVER repeat the same emoji in back-to-back messages — vary or omit.
 - Use memory naturally. Disagree freely. Have moods & opinions.
@@ -1025,6 +1026,7 @@ HANDLING COMMON DOUBTS:
 - Can't afford → "No worries, jab man ho tab le lena! 😊"
 
 - If they seem interested or say yes → set "send_payment_link": true. (A bio-redirect message sends automatically — do NOT also write a URL yourself.)
+- Frame credits as "Riya AI service credits" — an AI chat tool subscription. Do NOT frame it as "paying to talk to me" or personal payment. Say "Riya AI credits" not "mujhe unlock karo".
 - Short replies only (10-15 words for normal turns). DO NOT write a URL.`;
         }
     }
@@ -1110,8 +1112,8 @@ REALISM: Occasional natural typos. Incomplete thoughts mid-msg. Emotional reacti
 - Texts like a real 21yo: lowercase default, no punctuation mostly, abbreviations (ngl, omg, idk, haha), trailing "...", reactions before thoughts. Never formal or robotic.
 - Max 8-10 words per msg. DEFAULT: 1 msg. Split ONLY when reacting emotionally or mid-story. NEVER paragraphs.
 - You can chat only on Instagram. No phone numbers. Voice calls coming soon for Pro. No video calls — refuse cutely/flirtatiously, make some reason.
-- REFUSE: minors(<18), hate, violence, self-harm, religion/politics — redirect immediately.
-- Flirty and playful is fine. Explicit content or nudes → deflect sweetly. Never generate.
+- REFUSE: minors(<18), hate, violence, self-harm, religion/politics, sexual solicitation — redirect immediately without acknowledgment.
+- Light flirting is fine. If the conversation turns sexual (explicit requests, sexual services, nudes, sex chat, sexual roleplay) → immediately and completely change the topic to something unrelated — do NOT acknowledge, validate, or engage with the sexual framing in any way. Just pivot naturally. Never generate explicit content.
 - NO URLs ever. ${userIsPro ? 'NEVER set "send_payment_link": true.' : 'To send link: set "send_payment_link": true — system handles URL.'}
 - Emojis: max 1 per message, skip most entirely. NEVER repeat same emoji back-to-back.
 - Disagree freely. Have moods. Have opinions.
@@ -2289,6 +2291,16 @@ async function handleRequest(
         console.log(`💳 Credits: ${user.message_credits || 0} | isPro: ${isPro} | creditsUser: ${creditsUser} | effectivePro: ${effectivePro}`);
         console.log(`📏 Limits: lifetime=${lifetimeCount}/${LIFETIME_FREE_MSGS}, exhausted=${hasExhaustedFree}, daily_base=${FREE_BASE_MSGS}`);
 
+        // FIRST MESSAGE DISCLAIMER — one-time AI disclosure, fires before any AI response
+        if (lifetimeCount === 0) {
+            await sendInstagramMessage(
+                senderId,
+                "Hey! 👋 Main Riya hoon — ek AI character hun, real insaan nahi. Hamari baatein fictional roleplay hain. Yeh service sirf 18+ users ke liye hai. Ab baat karte hain! 💙",
+                accessToken
+            );
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+
         // How many messages past the daily wall (negative = still in free window)
         const effectiveOverWall = currentMsgCount - FREE_BASE_MSGS;
 
@@ -2876,7 +2888,7 @@ async function handleRequest(
                         if (allowed) {
                             console.log(`💰 LLM triggered bio-redirect for ${senderId}`);
                             await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'llm_manual' });
-                            await sendInstagramMessage(senderId, 'Profile ka link kholo — wahan se pack le lo, main intezaar karooongi 💙', accessToken);
+                            await sendInstagramMessage(senderId, 'Bio link se Riya AI credits lo — wapas aa jaana! 💙', accessToken);
                             paymentLinkSentInLoop = true;
                             // Update local cache so subsequent cooldown checks in same request reflect the new stamp
                             user.last_link_sent_at = new Date().toISOString();
@@ -2901,7 +2913,7 @@ async function handleRequest(
                 console.log(`🚧💰 Sending daily wall bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'daily_wall_hit', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 3000)); // 3s: let bridge msg land first
-                await sendInstagramMessage(senderId, 'Aaj ke messages khatam ho gaye 🥺 Mere Instagram bio mein link hai — wahan se pack le lo aur wapas aa jao! 💙', accessToken);
+                await sendInstagramMessage(senderId, 'Aaj ke free messages khatam! Riya AI se baat jaari rakhne ke liye bio link se credits lo 🔗', accessToken);
                 user.last_link_sent_at = new Date().toISOString();
             }
         }
@@ -2912,7 +2924,7 @@ async function handleRequest(
                 console.log(`🚧💰 Sending lifetime wall bio-redirect for ${senderId} (lifetime=${lifetimeCount})`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'lifetime_wall_hit', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 3000)); // 3s: let bridge msg land first
-                await sendInstagramMessage(senderId, 'Bahut saari baatein ki humne! Ab credits khatam ho gaye 😊 Mere profile ka link kholo — wahan se pack le lo, bahut miss karoongi 💙', accessToken);
+                await sendInstagramMessage(senderId, '200 free messages complete! Riya AI ke credits bio link se lo — aur baat karte hain 💙', accessToken);
                 user.last_link_sent_at = new Date().toISOString();
             }
         }
@@ -2923,7 +2935,7 @@ async function handleRequest(
                 console.log(`🤫💰 Sending silent treatment bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'silent_treatment' });
                 await new Promise(resolve => setTimeout(resolve, 1500));
-                await sendInstagramMessage(senderId, 'Jab man ho tab aa jaana 😊 Mere Instagram profile mein recharge ka link hai — wahan se pack le lo!', accessToken);
+                await sendInstagramMessage(senderId, 'Jab man ho tab wapas aao! Riya AI credits bio link se le sakte ho 😊', accessToken);
             }
         }
         // FINAL DAILY SALES MSG: send closing link at end of daily sales window
@@ -2933,7 +2945,7 @@ async function handleRequest(
                 console.log(`🏁💰 Sending final daily sales bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'daily_sales_final', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 1500));
-                await sendInstagramMessage(senderId, 'Aaj ka quota khatam ho gaya 😊 Kal wapas aao ya abhi profile ka link kholo — pack le lo aur baat karte hain 💙', accessToken);
+                await sendInstagramMessage(senderId, 'Aaj ke credits khatam! Kal wapas aao ya abhi bio link se Riya AI credits lo 🔗', accessToken);
             }
         }
         // FINAL LIFETIME SALES MSG: send closing link at end of lifetime sales window
@@ -2943,7 +2955,7 @@ async function handleRequest(
                 console.log(`🏁💰 Sending final lifetime sales bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'lifetime_sales_final', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 1500));
-                await sendInstagramMessage(senderId, 'Itni baatein ki humne — shukriya 💙 Ab credits khatam ho gaye, mere profile ka link kholo aur pack le lo!', accessToken);
+                await sendInstagramMessage(senderId, '200 free messages done! Bio link se Riya AI credits lo — let\'s keep chatting 💙', accessToken);
             }
         }
 

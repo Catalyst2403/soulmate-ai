@@ -1,32 +1,16 @@
 {
   "permissions": {
     "allow": [
-      "WebFetch(domain:developers.facebook.com)",
       "WebSearch",
+      "WebFetch(domain:ai.google.dev)",
+      "WebFetch(domain:developers.facebook.com)",
       "WebFetch(domain:help.instagram.com)",
+      "Bash(find /c/Users/vrsol/OneDrive/Desktop/AI Companion/soulmate-ai/supabase/functions -type f -name *.ts)",
+      "Bash(xargs grep:*)",
+      "Bash(find /c/Users/vrsol/OneDrive/Desktop/AI Companion/soulmate-ai -type f \\\\\\(-name *.ts -o -name *.tsx \\\\\\))",
       "WebFetch(domain:www.spurnow.com)",
-      "WebFetch(domain:creatorflow.so)",
-      "WebFetch(domain:foursixty.com)",
-      "WebFetch(domain:linktodm.com)",
-      "WebFetch(domain:feedonomics.com)",
       "WebFetch(domain:transparency.meta.com)",
-      "WebFetch(domain:www.facebook.com)",
-      "WebFetch(domain:www.replyrush.com)",
-      "WebFetch(domain:chatimize.com)",
-      "WebFetch(domain:sumgenius.ai)",
-      "WebFetch(domain:manychat.com)",
-      "WebFetch(domain:communipass.com)",
-      "WebFetch(domain:www.bot.space)",
-      "WebFetch(domain:aistudio.instagram.com)",
-      "WebFetch(domain:sybrid.com)",
-      "WebFetch(domain:www.nbcnews.com)",
-      "WebFetch(domain:www.dlapiper.com)",
-      "WebFetch(domain:www.cashfree.com)",
-      "WebFetch(domain:www.refrens.com)",
-      "WebFetch(domain:developer.phonepe.com)",
-      "WebFetch(domain:ssrana.in)",
-      "Bash(npm install:*)",
-      "Bash(npx tsc:*)"
+      "Bash(grep -l riya_instagram_users /c/Users/vrsol/OneDrive/Desktop/AI Companion/soulmate-ai/supabase/migrations/*.sql)"
     ]
   }
 }

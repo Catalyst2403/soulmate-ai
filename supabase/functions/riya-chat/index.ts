@@ -42,10 +42,10 @@ const SUMMARY_MODEL_LAST_RESORT = "gemini-3-flash-preview";
 
 // Tiered model settings
 const PRO_MODEL = "gemini-3-pro-preview";     // Best quality model for Pro subscribers only
-const FREE_MODEL_FIRST_20 = "gemini-3-flash-preview"; // Free users first 20 msgs
-const FREE_MODEL = "gemini-2.5-flash-lite";   // Cost-effective model after 20 msgs
+const FREE_MODEL_HOOK = "gemini-3.1-pro";     // Hook model for first 15 total msgs (non-pro users)
+const FREE_MODEL = "gemini-3.1-flash-lite";   // Cost-effective model after 15 total msgs
 const GUEST_MODEL = "gemini-3-flash-preview"; // Best experience for guest user acquisition
-const PRO_MODEL_LIMIT = 20;                   // First 20 messages use premium free model
+const HOOK_MESSAGE_LIMIT = 15;                // First 15 total messages use hook model
 const DAILY_MESSAGE_LIMIT_FREE = 200;        // Soft cap: 200 msgs/day for free users (DDoS protection)
 
 // Rate limiting (per-user, per-minute)
@@ -856,7 +856,7 @@ DO NOT set send_image: true for guests. Just playfully redirect to login.`;
         let currentCount = 0;
 
         if (!isPro) {
-            // Get today's message count for free user
+            // Get today's message count for free user (for daily soft cap)
             const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
 
             const { data: dailyUsage } = await supabase
@@ -868,15 +868,24 @@ DO NOT set send_image: true for guests. Just playfully redirect to login.`;
 
             currentCount = dailyUsage?.message_count || 0;
 
-            // Calculate remaining Pro-quality messages
-            remainingProMessages = Math.max(0, PRO_MODEL_LIMIT - currentCount);
+            // Get total lifetime message count for hook model selection
+            const { count: totalMsgCount } = await supabase
+                .from('riya_conversations')
+                .select('*', { count: 'exact', head: true })
+                .eq('user_id', userId)
+                .eq('role', 'user');
 
-            // Check if using free model (after first 20 messages)
-            if (currentCount >= PRO_MODEL_LIMIT) {
+            const totalMessages = totalMsgCount || 0;
+
+            // Calculate remaining hook-quality messages (based on total lifetime msgs)
+            remainingProMessages = Math.max(0, HOOK_MESSAGE_LIMIT - totalMessages);
+
+            // Check if past hook period (after first 15 total messages)
+            if (totalMessages >= HOOK_MESSAGE_LIMIT) {
                 usingFreeModel = true;
             }
 
-            console.log(`📊 Free user: ${currentCount} msgs today | Pro remaining: ${remainingProMessages} | Using free model: ${usingFreeModel}`);
+            console.log(`📊 Free user: ${currentCount} msgs today | Total: ${totalMessages} | Hook remaining: ${remainingProMessages} | Using free model: ${usingFreeModel}`);
 
             // Soft cap at 200 messages (DDoS/abuse protection)
             if (currentCount >= DAILY_MESSAGE_LIMIT_FREE) {
@@ -919,7 +928,7 @@ DO NOT set send_image: true for guests. Just playfully redirect to login.`;
 
         // Append current time and user status to system prompt
         const userStatus = isPro ? 'PRO SUBSCRIBER' : 'FREE USER (3 images/day limit)';
-        const systemPrompt = `${baseSystemPrompt}
+        let systemPrompt = `${baseSystemPrompt}
 
 [CURRENT TIME: ${currentTimeIST}]
 Use this to greet appropriately (good morning/evening) and reference time naturally.
@@ -1025,6 +1034,17 @@ This user is LOGGED IN. You CAN send photos when appropriate.`;
 
         // 4e. Inject summary as context (if exists)
         if (existingSummary?.summary) {
+            // Extract language preference from summary JSON and enforce it in system prompt
+            try {
+                const summaryData = JSON.parse(existingSummary.summary);
+                const preferredLang = summaryData?.profile?.language;
+                if (preferredLang && (preferredLang.includes('हिन्दी') || preferredLang.toLowerCase().includes('hindi'))) {
+                    systemPrompt += `\n\n[CRITICAL LANGUAGE OVERRIDE]\nThis user has explicitly set their language preference to PURE HINDI (हिन्दी). You MUST respond ONLY in pure Hindi. Do NOT use any English words. Do NOT use Hinglish. Every single message must be in pure Hindi script or pure Hindi words. This overrides all other language rules.`;
+                }
+            } catch (_) {
+                // Summary is not JSON or has no language field — ignore
+            }
+
             // Add summary as first user message for context
             // Using user role because Gemini requires alternating roles starting with user
             processedHistory.unshift({
@@ -1056,13 +1076,13 @@ This user is LOGGED IN. You CAN send photos when appropriate.`;
 
         if (!isPro) {
             if (usingFreeModel) {
-                // After 20 messages: use cheaper model
+                // After 15 total messages: use flash-lite model
                 modelName = FREE_MODEL;
-                console.log(`📉 Free user (${currentCount} msgs) - using ${FREE_MODEL}`);
+                console.log(`📉 Free user (${currentCount} msgs today) - using ${FREE_MODEL}`);
             } else {
-                // First 20 messages: use flash model (not pro)
-                modelName = FREE_MODEL_FIRST_20;
-                console.log(`⭐ Free user (${currentCount} msgs) - using ${FREE_MODEL_FIRST_20} (${remainingProMessages} premium msgs left)`);
+                // First 15 total messages: use hook model (gemini-3.1-pro)
+                modelName = FREE_MODEL_HOOK;
+                console.log(`🪝 Free user hook period (${remainingProMessages} hook msgs left) - using ${FREE_MODEL_HOOK}`);
             }
         } else {
             console.log(`👑 Pro user - using ${PRO_MODEL}`);
@@ -1617,7 +1637,10 @@ Vibe & Personality:
 
 LANGUAGE RULE:
 
-- Respond in same language as user (Hindi / English / Hinglish)
+- Default: Hinglish (Hindi + English mix)
+- If user writes in English only → reply in English
+- CRITICAL: If user explicitly asks to speak in Hindi (e.g. "Hindi mein bolo", "Hindi ma bolo", "sirf Hindi", "Hindi me baat karo") → IMMEDIATELY switch to PURE Hindi. No English words. Maintain pure Hindi until user switches back.
+- The language the user uses to REQUEST Hindi does NOT matter — what matters is the intent of the request.
 
 Ultra-Realism Rules:
 
@@ -1796,8 +1819,11 @@ You use pet names naturally, not mechanically.
 
 COMMUNICATION STYLE (WHATSAPP MODE)
 
-Language  
-- Respond in same language as user (Hindi / English / Hinglish(Default))
+Language
+- Default: Hinglish (Hindi + English mix)
+- If user writes in English only → reply in English
+- CRITICAL: If user explicitly asks to speak in Hindi (e.g. "Hindi mein bolo", "Hindi ma bolo", "sirf Hindi", "Hindi me baat karo") → IMMEDIATELY switch to PURE Hindi. No English words. Maintain pure Hindi until user switches back.
+- The language the user uses to REQUEST Hindi does NOT matter — what matters is the intent of the request.
 Use Gen Z or Millennial slang when it fits.
 
 Tone  
@@ -1914,7 +1940,10 @@ NO plain text - JSON only!
 
         LANGUAGE RULE:
 
-        - Respond in same language as user (Hindi / English / Hinglish(Default))
+        - Default: Hinglish (Hindi + English mix)
+        - If user writes in English only → reply in English
+        - CRITICAL: If user explicitly asks to speak in Hindi (e.g. "Hindi mein bolo", "Hindi ma bolo", "sirf Hindi", "Hindi me baat karo") → IMMEDIATELY switch to PURE Hindi. No English words. Maintain pure Hindi until user switches back.
+        - The language the user uses to REQUEST Hindi does NOT matter — what matters is the intent of the request.
 
         Ultra-Realism Rules:
 
@@ -2010,7 +2039,10 @@ Vibe & Personality:
 
 LANGUAGE RULE:
 
-- Respond in same language as user (Hindi / English / Hinglish(Default))
+- Default: Hinglish (Hindi + English mix)
+- If user writes in English only → reply in English
+- CRITICAL: If user explicitly asks to speak in Hindi (e.g. "Hindi mein bolo", "Hindi ma bolo", "sirf Hindi", "Hindi me baat karo") → IMMEDIATELY switch to PURE Hindi. No English words. Maintain pure Hindi until user switches back.
+- The language the user uses to REQUEST Hindi does NOT matter — what matters is the intent of the request.
 
 Ultra-Realism Rules:
 

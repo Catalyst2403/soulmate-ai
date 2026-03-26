@@ -54,6 +54,7 @@ interface Pack {
     tag?: string;
     tagHi?: string;
     highlight: boolean;
+    btnClass: string;
 }
 
 interface IgUser {
@@ -68,31 +69,34 @@ const PACKS: Pack[] = [
     {
         id: 'basic',
         icon: <Leaf className="w-5 h-5 text-emerald-400" />,
-        name: 'Basic',     nameHi: 'बेसिक',
-        price: 99,         originalPrice: 199,
-        messages: '600 msgs',   messagesHi: '600 संदेश',
-        validity: '30 days',    validityHi: '30 दिन',
+        name: 'Basic', nameHi: 'बेसिक',
+        price: 99, originalPrice: 199,
+        messages: '600 msgs', messagesHi: '600 संदेश',
+        validity: '30 days', validityHi: '30 दिन',
         highlight: false,
+        btnClass: 'bg-emerald-700 hover:bg-emerald-600 border border-emerald-500/60',
     },
     {
         id: 'romantic',
         icon: <Heart className="w-5 h-5 text-pink-400 fill-pink-400" />,
-        name: 'Romantic',  nameHi: 'रोमांटिक',
-        price: 199,        originalPrice: 399,
+        name: 'Romantic', nameHi: 'रोमांटिक',
+        price: 199, originalPrice: 399,
         messages: '1,500 msgs', messagesHi: '1,500 संदेश',
-        validity: '30 days',    validityHi: '30 दिन',
+        validity: '30 days', validityHi: '30 दिन',
         tag: '💖 Most Popular', tagHi: '💖 सबसे लोकप्रिय',
         highlight: true,
+        btnClass: 'bg-gradient-to-r from-[#833AB4] via-[#FD1D1D] to-[#F77737] hover:opacity-90',
     },
     {
         id: 'soulmate',
         icon: <Crown className="w-5 h-5 text-yellow-400" />,
-        name: 'Soulmate',  nameHi: 'सोलमेट',
-        price: 349,        originalPrice: 699,
+        name: 'Soulmate', nameHi: 'सोलमेट',
+        price: 349, originalPrice: 699,
         messages: '3,000 msgs', messagesHi: '3,000 संदेश',
-        validity: '30 days',    validityHi: '30 दिन',
-        tag: '👑 Best Value',   tagHi: '👑 सबसे अच्छा',
+        validity: '30 days', validityHi: '30 दिन',
+        tag: '👑 Best Value', tagHi: '👑 सबसे अच्छा',
         highlight: false,
+        btnClass: 'bg-amber-700 hover:bg-amber-600 border border-amber-500/60',
     },
 ];
 
@@ -116,9 +120,8 @@ const LangToggle = ({ lang, setLang }: { lang: 'en' | 'hi'; setLang: (l: 'en' | 
                 <button
                     key={l}
                     onClick={() => setLang(l)}
-                    className={`px-3 py-1 rounded-full transition-all font-medium ${
-                        lang === l ? 'bg-white text-black' : 'text-gray-400 hover:text-white'
-                    }`}
+                    className={`px-3 py-1 rounded-full transition-all font-medium ${lang === l ? 'bg-white text-black' : 'text-gray-400 hover:text-white'
+                        }`}
                 >
                     {l === 'en' ? 'EN' : 'हि'}
                 </button>
@@ -139,6 +142,9 @@ const ProfileHeader = () => (
 
 const FooterTrust = ({ lang, igUserId }: { lang: 'en' | 'hi'; igUserId?: string }) => (
     <div className="space-y-2 mt-auto pt-6">
+        <p className="text-center text-xs text-amber-600 font-medium">
+            {lang === 'hi' ? '⚠️ यह सेवा केवल 18 वर्ष और उससे अधिक आयु के उपयोगकर्ताओं के लिए है।' : '⚠️ This service is for users 18 years of age and older only.'}
+        </p>
         <div className="flex items-center justify-center gap-1.5 text-gray-500">
             <Shield className="w-3 h-3" />
             <p className="text-xs">
@@ -167,25 +173,26 @@ const InstagramPayment = () => {
     // ?id= param: pre-identified user (backward-compat with old DM links)
     const prefilledId = searchParams.get('id');
 
-    const [step, setStep]                  = useState<Step>('plans');
-    const [lang, setLang]                  = useState<'en' | 'hi'>('en');
-    const [selectedPack, setSelectedPack]  = useState<Pack | null>(null);
-    const [igUser, setIgUser]              = useState<IgUser | null>(
+    const [step, setStep] = useState<Step>('plans');
+    const [lang, setLang] = useState<'en' | 'hi'>('en');
+    const [selectedPack, setSelectedPack] = useState<Pack | null>(null);
+    const [igUser, setIgUser] = useState<IgUser | null>(
         prefilledId
             ? { instagram_user_id: prefilledId, instagram_username: null, instagram_name: null }
             : null
     );
 
     // Username search state
-    const [query, setQuery]        = useState('');
-    const [results, setResults]    = useState<IgUser[]>([]);
+    const [query, setQuery] = useState('');
+    const [results, setResults] = useState<IgUser[]>([]);
     const [searching, setSearching] = useState(false);
     const [confirmed, setConfirmed] = useState<IgUser | null>(null);
-    const debounceRef              = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Payment state
-    const [paying, setPaying]       = useState(false);
+    const [paying, setPaying] = useState(false);
     const [successPack, setSuccessPack] = useState<Pack | null>(null);
+    const [ageConfirmed, setAgeConfirmed] = useState(false);
 
     // ── Load Razorpay script once ──────────────────────────────────────────────
     useEffect(() => {
@@ -195,7 +202,7 @@ const InstagramPayment = () => {
         document.body.appendChild(script);
 
         if (prefilledId) logEvent(prefilledId, 'page_visit', { source: 'dm_link' });
-        else             logEvent('anonymous',  'page_visit', { source: 'bio_link' });
+        else logEvent('anonymous', 'page_visit', { source: 'bio_link' });
 
         return () => { try { document.body.removeChild(script); } catch { } };
     }, []);
@@ -340,10 +347,10 @@ const InstagramPayment = () => {
 
     // ── Language helpers ───────────────────────────────────────────────────────
     const t = {
-        name:     (p: Pack) => lang === 'hi' ? p.nameHi     : p.name,
+        name: (p: Pack) => lang === 'hi' ? p.nameHi : p.name,
         messages: (p: Pack) => lang === 'hi' ? p.messagesHi : p.messages,
         validity: (p: Pack) => lang === 'hi' ? p.validityHi : p.validity,
-        tag:      (p: Pack) => lang === 'hi' ? (p.tagHi || p.tag) : p.tag,
+        tag: (p: Pack) => lang === 'hi' ? (p.tagHi || p.tag) : p.tag,
     };
 
     // ── Root ───────────────────────────────────────────────────────────────────
@@ -396,11 +403,10 @@ const InstagramPayment = () => {
                                         </div>
 
                                         <div
-                                            className={`flex-1 rounded-2xl border p-3 cursor-pointer transition-all active:scale-95 ${
-                                                pack.highlight
+                                            className={`flex-1 rounded-2xl border p-3 cursor-pointer transition-all active:scale-95 ${pack.highlight
                                                     ? 'border-pink-500 bg-pink-500/10 shadow-lg shadow-pink-500/20'
                                                     : 'border-white/10 bg-white/[0.02]'
-                                            }`}
+                                                }`}
                                             onClick={() => handleSelectPlan(pack)}
                                         >
                                             <div className="flex justify-center mb-2">{pack.icon}</div>
@@ -420,11 +426,7 @@ const InstagramPayment = () => {
                                         </div>
 
                                         <Button
-                                            className={`mt-2 w-full h-10 text-xs font-bold rounded-xl transition-all ${
-                                                pack.highlight
-                                                    ? 'bg-gradient-to-r from-[#833AB4] via-[#FD1D1D] to-[#F77737] hover:opacity-90'
-                                                    : 'bg-white/10 border border-white/20 hover:bg-white/20'
-                                            }`}
+                                            className={`mt-2 w-full h-10 text-xs font-bold rounded-xl transition-all ${pack.btnClass}`}
                                             onClick={() => handleSelectPlan(pack)}
                                         >
                                             {lang === 'hi' ? `${t.name(pack)} लो` : `Get ${pack.name}`}
@@ -609,9 +611,24 @@ const InstagramPayment = () => {
                                             )}
                                         </div>
 
+                                        <label className="flex items-start gap-2 cursor-pointer text-xs text-gray-400 w-full max-w-xs">
+                                            <input
+                                                type="checkbox"
+                                                checked={ageConfirmed}
+                                                onChange={e => setAgeConfirmed(e.target.checked)}
+                                                className="mt-0.5 accent-pink-500"
+                                            />
+                                            <span>
+                                                {lang === 'hi'
+                                                    ? 'मैं पुष्टि करता/करती हूँ कि मेरी आयु 18 वर्ष या उससे अधिक है।'
+                                                    : 'I confirm that I am 18 years of age or older.'}
+                                            </span>
+                                        </label>
+
                                         <Button
-                                            className="w-full max-w-xs h-12 bg-gradient-to-r from-[#833AB4] via-[#FD1D1D] to-[#F77737] font-bold"
+                                            className="w-full max-w-xs h-12 bg-gradient-to-r from-[#833AB4] via-[#FD1D1D] to-[#F77737] font-bold disabled:opacity-40"
                                             onClick={() => openRazorpay(selectedPack, igUser)}
+                                            disabled={!ageConfirmed}
                                         >
                                             {lang === 'hi' ? 'UPI से Pay करें' : 'Pay via UPI'}
                                         </Button>
