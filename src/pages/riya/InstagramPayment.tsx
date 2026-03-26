@@ -142,8 +142,8 @@ const ProfileHeader = () => (
 
 const FooterTrust = ({ lang, igUserId }: { lang: 'en' | 'hi'; igUserId?: string }) => (
     <div className="space-y-2 mt-auto pt-6">
-        <p className="text-center text-xs text-amber-600 font-medium">
-            {lang === 'hi' ? '⚠️ यह सेवा केवल 18 वर्ष और उससे अधिक आयु के उपयोगकर्ताओं के लिए है।' : '⚠️ This service is for users 18 years of age and older only.'}
+        <p className="text-center text-xs text-gray-500">
+            {lang === 'hi' ? 'इस सेवा का उपयोग करके आप पुष्टि करते हैं कि आपकी आयु 18 वर्ष या उससे अधिक है।' : 'By using this service you confirm you are 18 years of age or older.'}
         </p>
         <div className="flex items-center justify-center gap-1.5 text-gray-500">
             <Shield className="w-3 h-3" />
@@ -620,8 +620,8 @@ const InstagramPayment = () => {
                                             />
                                             <span>
                                                 {lang === 'hi'
-                                                    ? 'मैं पुष्टि करता/करती हूँ कि मेरी आयु 18 वर्ष या उससे अधिक है।'
-                                                    : 'I confirm that I am 18 years of age or older.'}
+                                                    ? 'मैं 18 वर्ष या उससे अधिक आयु का/की हूँ और Terms of Service से सहमत हूँ।'
+                                                    : 'I am 18 or older and agree to the Terms of Service.'}
                                             </span>
                                         </label>
 
