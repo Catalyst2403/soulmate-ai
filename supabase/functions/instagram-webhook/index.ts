@@ -2201,7 +2201,11 @@ async function handleRequest(
         // SILENT TREATMENT CHECK (before typing indicator)
         // =======================================
         const todayStr = new Date().toISOString().split('T')[0];
-        const isPro = user.is_pro;
+        // Legacy pro: must have is_pro=true AND an active (non-expired) subscription.
+        // Without the expiry check, users whose subscription_end_date passed remain unlimited forever.
+        const isPro = user.is_pro === true
+            && !!user.subscription_end_date
+            && new Date(user.subscription_end_date) > new Date();
         const effectiveProEarly = isPro || hasActiveCredits(user); // credit users = pro for silent/payment gating
         let returningFromSilence = false;
         let silentReason: string | null = null;
