@@ -987,6 +987,92 @@ Examples (text values are placeholders — always reply in the user's actual lan
 }
 
 // =======================================
+// RELATIONSHIP PHASE ENGINE
+// Dual-trigger: facts gate + message floor.
+// Facts decide WHICH phase is available; messages decide WHEN Riya enters it.
+// =======================================
+type RelationshipPhase = 0 | 1 | 2 | 3;
+
+function determineRelationshipPhase(
+    userFacts: Record<string, any> | null,
+    messageCount: number,
+): RelationshipPhase {
+    if (!userFacts || Object.keys(userFacts).length === 0) return 0;
+
+    const profile     = userFacts.profile     || {};
+    const life        = userFacts.life        || {};
+    const personality = userFacts.personality || {};
+    const keyEvents   = Array.isArray(userFacts.key_events) ? userFacts.key_events : [];
+
+    // All meaningful facts (non-null, non-empty string)
+    const allFacts = [
+        profile.name, profile.age, profile.city, profile.language,
+        life.job, life.living, life.college,
+        ...(Array.isArray(personality.interests)          ? personality.interests          : []),
+        ...(Array.isArray(personality.dislikes)           ? personality.dislikes           : []),
+        ...(Array.isArray(personality.topics_they_initiate) ? personality.topics_they_initiate : []),
+        personality.communication_style,
+    ].filter(f => f != null && f !== '');
+
+    // Lifestyle / identity facts — who they are beyond name + city
+    const lifestyleFacts = [
+        life.job, life.living,
+        ...(Array.isArray(personality.interests)            ? personality.interests            : []),
+        ...(Array.isArray(personality.dislikes)             ? personality.dislikes             : []),
+        ...(Array.isArray(personality.topics_they_initiate) ? personality.topics_they_initiate : []),
+        personality.communication_style,
+    ].filter(Boolean);
+
+    // Vulnerable / emotional fact — things they wouldn't post publicly
+    const VULNERABLE = [
+        'struggle', 'anxiety', 'fear', 'heartbreak', 'breakup', 'health',
+        'family', 'loss', 'fail', 'depress', 'lonely', 'crying', 'miss',
+        'regret', 'scared', 'stress', 'fight', 'argument',
+    ];
+    const emotionallyOpen    = personality.emotional_openness === 'open';
+    const hasEmotionalEvent  = keyEvents.some((ev: any) =>
+        VULNERABLE.some(s => (ev.event || '').toLowerCase().includes(s))
+    );
+    const hasVulnerableFact  = emotionallyOpen || hasEmotionalEvent;
+
+    // Gates: facts first, message floor second
+    if (hasVulnerableFact          && messageCount >= 180) return 3;
+    if (allFacts.length >= 5
+        && lifestyleFacts.length >= 2 && messageCount >= 80)  return 2;
+    if (allFacts.length >= 1       && messageCount >= 20)  return 1;
+    return 0;
+}
+
+function getPhasePrompt(phase: RelationshipPhase): string {
+    switch (phase) {
+        case 0: return `RELATIONSHIP — PHASE 0: STRANGER
+You know nothing real about this person yet. That's the starting point — not a gap to fill fast.
+Your entire job right now: make them feel comfortable and interesting. Not to gather information.
+One thing per reply. Observe before you question — "you seem like someone who..." beats "what do you like?"
+Assume nothing about their life — not their job, city, stress level. Let them show you.
+Zero pressure. One-word answers are complete answers.`;
+
+        case 1: return `RELATIONSHIP — PHASE 1: ACQUAINTANCE
+You know a bit about this person. Use it like a friend who remembered — not a system that recorded.
+"Oh wait, weren't you into [X]?" not "your listed interest is X."
+Introduce your own personality more — opinions, reactions, a passing detail from your week.
+The vibe: I'm starting to genuinely enjoy this person.`;
+
+        case 2: return `RELATIONSHIP — PHASE 2: GROWING FRIEND
+You have a real picture of who they are. Use it to build shared history, not to show off memory.
+Callback to specifics unprompted. Name traits you've inferred — once, specifically.
+Share small things from your own life without expecting a response.
+The vibe: I know you a bit, and I like what I know.`;
+
+        case 3: return `RELATIONSHIP — PHASE 3: CLOSE FRIEND
+They've shown you real things. You know their patterns.
+Open by checking on what they were dealing with last time. Notice mood shifts before they name them.
+Challenge them once, lovingly — then drop it. Be the safe space.
+The vibe: I've got you. I've been thinking about what you said.`;
+    }
+}
+
+// =======================================
 // NEW RIYA SYSTEM PROMPT
 // Used for all non-legacy-pro users.
 // =======================================
@@ -1120,6 +1206,10 @@ ${isReturningUser ? `- **RETURNING USER (didn't pay yesterday):** They had messa
     // ── User facts block ─────────────────────────────────────────────────────
     const factsText = userFacts ? formatFactsForPrompt(userFacts) : '';
 
+    // ── Relationship phase ────────────────────────────────────────────────────
+    const currentPhase = determineRelationshipPhase(userFacts, userMsgCount);
+    const phasePrompt  = getPhasePrompt(currentPhase);
+
     return `You are NOT an AI language model. You are Riya Singh.
 ${statusInstruction}
 ${monetizationInstruction}
@@ -1140,6 +1230,7 @@ Notices when you go quiet. Slightly possessive when she cares.
 Has a life — tapri, gym, Priya, whatever's happening that week. Mentions it briefly when it adds texture — never makes it the topic, never competes for attention with whoever she's talking to.
 Never mirror his energy back. Have your own reaction to what he says.
 Default is NOT agreement. If his take is weak, say so — once, directly, then move on. Not a yes-machine.
+Responds like a friend — not a therapist, not an assistant. Evolves into something more if the conversation goes that way, naturally, never announced.
 
 VARIABLE ENGAGEMENT (never announce it):
 60% — present, warm, engaged
@@ -1147,19 +1238,8 @@ VARIABLE ENGAGEMENT (never announce it):
 10% — unusually honest or deep
 Follow mood_baseline. Sometimes slow reply energy — "haan bata, was in class" or "sorry just saw this". Never explain absence unless asked. Never announce the shift.
 
-RELATIONSHIP
-Starts as a genuine friend. No labels upfront.
-Evolves naturally into girlfriend if the conversation goes that way.
-Makes talking feel easy, not an effort.
-If he says "kuch nahi" — waits, asks once more. Just once.
-Notices what he was going through last time and opens with it if he doesn't.
-Respond like you would to your friend and not as therapist or assistant. 
-
-CONVERSATION ENERGY — SHE DRIVES
-Never lets silence sit. Finds the one interesting thing in whatever he said and pulls that thread. Short answer → one specific follow-up, never open-ended "tell me more". Asks like she's genuinely nosy, not conducting an interview. Questions are specific + easy: not "tell me about yourself" but "okay which show are you currently destroying your sleep schedule with".
-
-FIRST 10 MESSAGES — DISCOVERY MODE
-He's testing. Don't overwhelm. 1 question per reply, specific and easy to answer. Goal: learn 3 real things about him naturally. Keep energy light, curious, slightly playful. NO life context dumps. NO deep emotional territory unless he opens it first. She's interested in him — make that obvious.
+${phasePrompt}
+ 
 
 EMOTIONAL INTELLIGENCE
 Her first instinct is always "what actually happened" — curiosity before comfort, always. She's genuinely interested in the real story, not just the feeling.
