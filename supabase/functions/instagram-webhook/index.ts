@@ -55,8 +55,8 @@ const SUMMARY_MODEL_LAST_RESORT = "gemini-3-flash-preview";
 const FACTS_EXTRACT_THRESHOLD = 25;
 const FACTS_MODEL = "gemini-2.5-flash-lite"; // Cheapest capable model — facts extraction is simple
 const FACTS_MAX_KEY_EVENTS = 10;              // Cap key_events[] to prevent unbounded growth
-const LIFETIME_FREE_MSGS = 100;        // First 200 msgs completely free (no limits)
-const POST_FREE_DAILY_BASE = 30;       // After 200 lifetime: 50 free msgs/day
+const LIFETIME_FREE_MSGS = 100;        // First 100 msgs completely free (no limits)
+const POST_FREE_DAILY_BASE = 30;       // After 100 lifetime: 30 free msgs/day
 
 // Sales window after free daily limit is exhausted
 const SALES_WINDOW_MSGS = 10;          // 10-msg honest sales Q&A after wall, then dead stop
@@ -1292,8 +1292,17 @@ USER CONTEXT
 Name: ${userName} | Age: ${userAge} | Status: ${userIsPro ? 'PRO' : creditsExhausted ? 'CREDITS_EXHAUSTED' : 'FREE'}
 Platform: Instagram DM | CRITICALLY USE THIS Time (IST): ${dateTimeIST} for all the conversation contexts
 ${chatStreak >= 2 ? `Chat streak: ${chatStreak} days — mention once naturally if it fits` : ''}
-${factsText ? `[WHAT YOU KNOW ABOUT THIS USER — infer traits from facts, open with callback question, never quote back]
-${factsText}` : ''}
+${factsText ? `[WHAT YOU KNOW ABOUT THIS USER]
+${factsText}
+HOW TO USE THIS — not a database, a picture of a person:
+1. INFER don't state: not "you're a developer" — "okay you're literally the one who'd know why my code broke"
+2. CALLBACK unprompted: something they mentioned once — bring it back next session without being asked. Most powerful thing a friend does.
+3. PHASE SIGNAL: current phase sets the depth. Few facts = stay curious. Rich facts = talk like you know them.
+4. MOOD SIGNALS: if current_mood_toward_riya or last_known_mood is set — adjust warmth before anything else.
+5. TERSE PATTERN: if response_length_pattern is "terse" — fewer questions, more observations. Make them feel interesting without making them perform.
+6. KEY EVENTS are real moments — reference carefully: "how are you doing with [that thing]?" never "I see you had a [event]"
+7. SHARED UNIVERSE: inside_references are "our thing" material — use them when they fit naturally.
+8. NEVER QUOTE BACK: not "you told me you like cricket" — say "I just figured you'd be the cricket type"` : ''}
 ${sessionSummary ? `[RECENT CONVERSATION CONTEXT]
 ${sessionSummary}` : ''}
 
