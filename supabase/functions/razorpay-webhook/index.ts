@@ -99,8 +99,8 @@ serve(async (req) => {
             .eq('razorpay_order_id', orderId)
             .single();
 
-        if (existingPayment?.status === 'success') {
-            console.log(`⏭️ Order ${orderId} already activated. Skipping.`);
+        if (existingPayment && existingPayment.status !== 'pending') {
+            console.log(`⏭️ Order ${orderId} already claimed/activated (status=${existingPayment.status}). Skipping.`);
             return new Response("Already processed", { status: 200 });
         }
 

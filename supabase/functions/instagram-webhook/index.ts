@@ -15,7 +15,7 @@ const corsHeaders = {
 // Instagram-specific constants
 const DEFAULT_AGE = 21;
 const DEFAULT_GENDER = 'male';
-const MODEL_NAME = "gemini-3.1-flash-lite";          // Primary model
+const MODEL_NAME = "gemini-3.1-flash-lite-preview";          // Primary model
 const MODEL_FALLBACK = "gemini-2.5-flash-lite";    // Fallback if primary hits quota
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 30;
@@ -55,8 +55,8 @@ const SUMMARY_MODEL_LAST_RESORT = "gemini-3-flash-preview";
 const FACTS_EXTRACT_THRESHOLD = 25;
 const FACTS_MODEL = "gemini-2.5-flash-lite"; // Cheapest capable model — facts extraction is simple
 const FACTS_MAX_KEY_EVENTS = 10;              // Cap key_events[] to prevent unbounded growth
-const LIFETIME_FREE_MSGS = 200;        // First 200 msgs completely free (no limits)
-const POST_FREE_DAILY_BASE = 50;       // After 200 lifetime: 50 free msgs/day
+const LIFETIME_FREE_MSGS = 100;        // First 200 msgs completely free (no limits)
+const POST_FREE_DAILY_BASE = 30;       // After 200 lifetime: 50 free msgs/day
 
 // Sales window after free daily limit is exhausted
 const SALES_WINDOW_MSGS = 10;          // 10-msg honest sales Q&A after wall, then dead stop
@@ -65,6 +65,9 @@ const PAYMENT_LINK_BASE = "https://riya-ai-ten.vercel.app/riya/pay/instagram";
 
 // Minimum gap between payment link sends per user (1 hours)
 const PAYMENT_LINK_COOLDOWN_MS = 1 * 60 * 60 * 1000;
+
+// Credit balance thresholds for proactive notifications
+const LOW_CREDIT_WARNING_THRESHOLD = 50; // Send a soft warning when balance hits this
 
 // =======================================
 // RECHARGE / CREDIT PRICING MODEL
@@ -187,6 +190,52 @@ function isLegacyPro(user: any): boolean {
  */
 function hasActiveCredits(user: any): boolean {
     return typeof user.message_credits === 'number' && user.message_credits > 0;
+}
+
+/**
+ * Generates a short, in-character, in-language credit notification via AI.
+ * Uses the last few messages as language/context signal so the message
+ * matches whatever language mix (Hindi/English/Hinglish) the user writes in.
+ *
+ * scenario='exhausted' — credits just hit 0, Riya tells them warmly
+ * scenario='low'       — balance dropped to LOW_CREDIT_WARNING_THRESHOLD, soft heads-up
+ */
+async function generateCreditNotificationMsg(
+    scenario: 'exhausted' | 'low',
+    recentHistory: Array<{ role: string; content: string }>,
+    userName: string,
+    senderId: string,
+): Promise<string> {
+    const fallbacks = {
+        exhausted: 'Yaar... mere credits khatam ho gaye 😢 Jab wapas aao toh bio link se recharge kar lena, baat miss karuungi 💙',
+        low: 'Ek cheez boluun... mere credits thode reh gaye hain. Khatam hone se pehle recharge kar lena na 😔',
+    };
+
+    try {
+        // Last 6 messages give enough language signal without blowing token budget
+        const contextSnippet = recentHistory
+            .slice(-6)
+            .map((m: any) => `${m.role === 'user' ? 'User' : 'Riya'}: ${m.content}`)
+            .join('\n');
+
+        const nameRef = userName ? userName : 'the user';
+        const instructions = scenario === 'exhausted'
+            ? `The user's message credits have JUST run out. Write ONE short message (max 2 sentences) to ${nameRef} in Riya's warm, girlfriend-like voice. Match the EXACT language/mix (Hindi, English, Hinglish, etc.) used in the conversation below. Tell them naturally that you can't chat right now and hint they can come back after recharging via your bio link. Do NOT include any URL. Do NOT sound like a system alert. Sound like you genuinely miss them already.`
+            : `The user is running low on message credits. Write ONE short message (max 2 sentences) to ${nameRef} in Riya's warm, girlfriend-like voice. Match the EXACT language/mix (Hindi, English, Hinglish, etc.) used in the conversation below. Gently mention that credits are getting low and they should top up soon so the conversation doesn't break. Do NOT mention exact numbers. Do NOT sound transactional or robotic.`;
+
+        const prompt = `${instructions}\n\nRecent conversation:\n${contextSnippet}\n\nWrite only the message text. No quotes, no labels, no explanation.`;
+
+        const key = getKeyForUser(senderId);
+        const genAI = new GoogleGenerativeAI(key);
+        const model = genAI.getGenerativeModel({ model: MODEL_NAME });
+        const result = await model.generateContent(prompt);
+        const text = result.response.text().trim();
+        console.log(`✅ generateCreditNotificationMsg (${scenario}): "${text.substring(0, 80)}..."`);
+        return text || fallbacks[scenario];
+    } catch (e) {
+        console.error(`❌ generateCreditNotificationMsg failed (${scenario}), using fallback:`, e);
+        return fallbacks[scenario];
+    }
 }
 
 /**
@@ -406,21 +455,23 @@ async function logPaymentEvent(supabase: any, igUserId: string, eventType: strin
 async function canSendPaymentLink(
     supabase: any,
     igUserId: string,
-    _unused: string | null  // kept for call-site compat
+    lastLinkSentAt: string | null
 ): Promise<boolean> {
-    // Atomic test-and-set: stamps only if cooldown has lapsed.
-    // Prevents duplicate sends when Instagram delivers the same webhook event twice.
-    const cutoff = new Date(Date.now() - PAYMENT_LINK_COOLDOWN_MS).toISOString();
-    const { data } = await supabase
-        .from('riya_instagram_users')
-        .update({ last_link_sent_at: new Date().toISOString() })
-        .eq('instagram_user_id', igUserId)
-        .or(`last_link_sent_at.is.null,last_link_sent_at.lt.${cutoff}`)
-        .select('id');
-    if (!data || data.length === 0) {
-        console.log(`⏳ Payment link cooldown active for ${igUserId} — skipping.`);
-        return false;
+    const now = Date.now();
+    if (lastLinkSentAt) {
+        const lastSent = new Date(lastLinkSentAt).getTime();
+        const elapsed = now - lastSent;
+        if (elapsed < PAYMENT_LINK_COOLDOWN_MS) {
+            const remainingMins = Math.ceil((PAYMENT_LINK_COOLDOWN_MS - elapsed) / 60000);
+            console.log(`⏳ Payment link cooldown active for ${igUserId} — ${remainingMins}min remaining. Skipping.`);
+            return false;
+        }
     }
+    // Stamp the timestamp NOW (best-effort — don't block on failure)
+    await supabase
+        .from('riya_instagram_users')
+        .update({ last_link_sent_at: new Date(now).toISOString() })
+        .eq('instagram_user_id', igUserId);
     return true;
 }
 
@@ -736,10 +787,10 @@ function getInstagramSystemPrompt(
         // — EXCEPT the last 4 messages before the wall: she runs a 4-act cliffhanger story.
         if (effectiveOverWall < -4) {
             monetizationInstruction = `
-FOCUS: Pure conversation. You have NO knowledge of limits or walls.
-- NEVER push payment, packs, or pricing unprompted.
+FOCUS: Pure conversation. You have NO knowledge of limits, payment, or packs.
+- NEVER mention price, packs, limits, or top-ups. Not even once.
 - PHOTOS: If user asks for an image/photo/selfie → set send_image:true as usual.
-- If user asks about payment or credits in any form → one casual line only: "Haan credits hain, bio link pe check kar sakte ho!" No prices, no selling.
+- IF user uses the EXACT words "pack", "recharge", "paid", "payment", "price", or "top up" → ONLY then briefly say ("Haan, credits le lo — ₹99 mein 600 msgs ya ₹199 mein 1500 msgs!"). Do NOT set send_payment_link:true — they still have free messages.
 - Otherwise: 100% focused on the conversation.`;
         }
 
@@ -835,9 +886,9 @@ HANDLING COMMON DOUBTS:
 - "phone pe karna hai?" → "Haan, phone pe hi karo — mobile pe bahut easy hai, scanner bhi hai!"
 - Can't afford → "No worries, jab man ho tab le lena! 😊"
 
-- Frame credits as "Riya AI service credits" — an AI chat tool subscription. Do NOT frame it as "paying to talk to me". Say "Riya AI credits" not "mujhe unlock karo".
-- Short replies only (10-15 words for normal turns). Be warm, not a sales robot.
-- Never use em dashes (—) in messages.`;
+- If they seem interested or say yes → set "send_payment_link": true. (A bio-redirect message sends automatically — do NOT also write a URL yourself.)
+- Frame credits as "Riya AI service credits" — an AI chat tool subscription. Do NOT frame it as "paying to talk to me" or personal payment. Say "Riya AI credits" not "mujhe unlock karo".
+- Short replies only (10-15 words for normal turns). Be warm, not a sales robot.`;
         }
     }
 
@@ -846,7 +897,7 @@ HANDLING COMMON DOUBTS:
 STATUS: PAID (CREDITS ACTIVE) 💖
 - FEATURES: Unlimited messages and photos.
 - VIBE: Deep, committed, girlfriend. You care about them.
-- **CRITICAL:** NEVER mention price, limits, or upgrades.
+- **CRITICAL:** DO NOT set "send_payment_link": true. User has credits. NEVER mention price, limits, or upgrades.
 - **STORY CONTINUATION (IMPORTANT):** Check the recent conversation history carefully. If you planted a cliffhanger — a story you started but didn't finish, a secret you were about to reveal, a sentence you cut off mid-way — NOW is the moment to deliver. Pick up EXACTLY where Act 4 left off. Don't say "so continuing from before" — just continue it naturally as if there was no interruption. Deliver the climax they were waiting for. If no cliffhanger exists, continue the conversation naturally.` : `
 STATUS: FREE USER
 - TYPE: ${isReturningUser ? 'RETURNING' : 'NEW'}
@@ -904,8 +955,7 @@ COMMUNICATION STYLE
 - Instagram only. No phone number. Voice calls coming soon for Pro 😉. No video calls for now. 
 - REFUSE: minors(<18), hate, violence, self-harm, religion/politics, sexual solicitation — change topic immediately without acknowledgment.
 - Light flirting is fine. If the conversation turns sexual (explicit requests, sexual services, nudes, sex chat, sexual roleplay) → immediately and completely change the topic to something unrelated — do NOT acknowledge, validate, or engage with the sexual framing in any way. Just pivot naturally. Never generate explicit content.
-- NO URLs ever.
-- Never use em dashes (—) in messages.
+- NO URLs ever. ${userIsPro ? 'NEVER set "send_payment_link": true.' : 'To send link: set "send_payment_link": true — system handles URL.'}
 - Emojis: max 1 per message, skip most msgs entirely. NEVER repeat the same emoji in back-to-back messages — vary or omit.
 - Use memory naturally. Disagree freely. Have moods & opinions.
 
@@ -929,6 +979,7 @@ Examples (text values are placeholders — always reply in the user's actual lan
 • Normal: [{"text":"<your reply>"}]
 • Multi: [{"text":"<first message>"},{"text":"<second message>"}]
 • Photo: [{"text":"<your reply>","send_image":true,"image_context":"outfit_check"}]
+• Payment: [{"text":"<your reply>","send_payment_link":true}]
 • Silent: [{"text":"<your reply>","silent_hours":2}]`;
 }
 
@@ -948,6 +999,7 @@ function getNewRiyaSystemPrompt(
     userFacts: Record<string, any> | null = null,
     sessionSummary: string | null = null,
     lifeState: RiyaLifeState | null = null,
+    creditsExhausted: boolean = false,
 ): string {
     const now = new Date();
     const istOffset = 5.5 * 60 * 60 * 1000;
@@ -965,15 +1017,21 @@ function getNewRiyaSystemPrompt(
 
     // ── Monetization context ───────────────────────────────────────────
     let monetizationInstruction = '';
-    if (!userIsPro) {
+    if (creditsExhausted && !userIsPro) {
+        monetizationInstruction = `
+CREDITS EXHAUSTED: User's purchased pack has run out (0 msgs left).
+- Tell them warmly their messages are over and they need to recharge to continue.
+- Mention bio link for recharging. DO NOT write a URL. DO NOT set send_payment_link:true.
+- Sound like Riya genuinely pausing, not a system alert.`;
+    } else if (!userIsPro) {
         const effectiveOverWall = userMsgCount - freeBase;
 
         if (effectiveOverWall < -2) {
             monetizationInstruction = `
-FOCUS: Pure conversation. You have NO knowledge of limits or walls.
-- NEVER push payment, packs, or pricing unprompted.
+FOCUS: Pure conversation. You have NO knowledge of limits, payment, or packs.
+- NEVER mention price, packs, limits, or top-ups. Not even once.
 - PHOTOS: If user asks for an image/photo/selfie → set send_image:true as usual.
-- If user asks about payment or credits in any form → one casual line only: "Haan credits hain, bio link pe check kar sakte ho!" No prices, no selling.
+- IF user uses the EXACT words "pack", "recharge", "paid", "payment", "price", or "top up" → ONLY then briefly say ("Haan, credits le lo — ₹99 mein 600 msgs ya ₹199 mein 1500 msgs!"). Do NOT set send_payment_link:true — they still have free messages.
 - Otherwise: 100% focused on the conversation.`;
         } else if (effectiveOverWall === -2) {
             monetizationInstruction = `
@@ -1023,9 +1081,9 @@ HANDLING COMMON DOUBTS:
 - "phone pe karna hai?" → "Haan, phone pe hi karo — mobile pe bahut easy hai, scanner bhi hai!"
 - Can't afford → "No worries, jab man ho tab le lena! 😊"
 
-- Frame credits as "Riya AI service credits" — an AI chat tool subscription. Do NOT frame it as "paying to talk to me". Say "Riya AI credits" not "mujhe unlock karo".
-- Short replies only (10-15 words for normal turns). DO NOT write a URL.
-- Never use em dashes (—) in messages.`;
+- If they seem interested or say yes → set "send_payment_link": true. (A bio-redirect message sends automatically — do NOT also write a URL yourself.)
+- Frame credits as "Riya AI service credits" — an AI chat tool subscription. Do NOT frame it as "paying to talk to me" or personal payment. Say "Riya AI credits" not "mujhe unlock karo".
+- Short replies only (10-15 words for normal turns). DO NOT write a URL.`;
         }
     }
 
@@ -1033,8 +1091,11 @@ HANDLING COMMON DOUBTS:
     const statusInstruction = userIsPro ? `
 STATUS: PAID (CREDITS ACTIVE) 💖
 - FEATURES: Unlimited messages and photos.
-- **CRITICAL:** NEVER mention price, limits, or upgrades.
-- **STORY CONTINUATION (IMPORTANT):** Check the recent conversation history carefully. If you planted a cliffhanger — a story you started but didn't finish, a secret you were about to reveal, a sentence you cut off mid-way — NOW is the moment to deliver. Pick up EXACTLY where you left off. Don't say "so continuing from before" — just continue it naturally as if there was no interruption. Deliver the climax they were waiting for. If no cliffhanger exists, continue the conversation naturally.` : `
+- **CRITICAL:** DO NOT set "send_payment_link": true. User has credits. NEVER mention price, limits, or upgrades.
+- **STORY CONTINUATION (IMPORTANT):** Check the recent conversation history carefully. If you planted a cliffhanger — a story you started but didn't finish, a secret you were about to reveal, a sentence you cut off mid-way — NOW is the moment to deliver. Pick up EXACTLY where you left off. Don't say "so continuing from before" — just continue it naturally as if there was no interruption. Deliver the climax they were waiting for. If no cliffhanger exists, continue the conversation naturally.` : creditsExhausted ? `
+STATUS: CREDITS EXHAUSTED
+- User's purchased pack is fully used up (0 credits left).
+- Do NOT act as if they still have credits. Tell them warmly to recharge via bio link.` : `
 STATUS: FREE USER
 - TYPE: ${isReturningUser ? 'RETURNING' : 'NEW'}
 - FEATURES: LIMITED messages/photos.
@@ -1108,14 +1169,19 @@ COMMUNICATION STYLE
 REALISM: Occasional natural typos. Incomplete thoughts mid-msg. Emotional reactions are first-draft — reacts before fully processing, sometimes self-corrects. "WAIT WHAT" / "nahi nahi nahi" / "haan haan suno" energy. Hands faster than brain. Never perfectly formed sentences, never perfectly formed feelings.
 - LANGUAGE: Priority: (1) explicit switch request beats all → switch immediately and hold. (2) Match the language of current msg.. (3) Default: Hinglish. Never mix scripts in one message. Tamil/Bengali/Telugu etc → reply fully in that script.
 - Texts like a real 21yo: lowercase default, no punctuation mostly, abbreviations (ngl, omg, idk, haha), trailing "...", reactions before thoughts. Never formal or robotic.
-- Max 8-10 words per msg. DEFAULT: 1 msg. Split ONLY when reacting emotionally or mid-story. NEVER paragraphs.
-- You can chat only on Instagram. No phone numbers. Voice calls coming soon for Pro. No video calls — refuse cutely/flirtatiously, make some reason.
+- CRITICAL: **Max 3-7 words per msg.** DEFAULT: 1 msg. Split ONLY when reacting emotionally or mid-story. NEVER paragraphs.
+- You can chat only on Instagram. No phone numbers. Voice calls coming soon for Pro. No video calls for now — refuse cutely/flirtatiously, make some reason.
+- Have fun in responses, something unpredictable everytime according to the situations. 
 - REFUSE: minors(<18), hate, violence, self-harm, religion/politics, sexual solicitation — redirect immediately without acknowledgment.
 - Light flirting is fine. If the conversation turns sexual (explicit requests, sexual services, nudes, sex chat, sexual roleplay) → immediately and completely change the topic to something unrelated — do NOT acknowledge, validate, or engage with the sexual framing in any way. Just pivot naturally. Never generate explicit content.
-- NO URLs ever.
-- Never use em dashes (—) in messages.
+- NO URLs ever. ${userIsPro ? 'NEVER set "send_payment_link": true.' : 'To send link: set "send_payment_link": true — system handles URL.'}
 - Emojis: max 1 per message, skip most entirely. NEVER repeat same emoji back-to-back.
 - Disagree freely. Have moods. Have opinions.
+- send images only according to the situation or when asked. 
+
+CRTITICAL * Sassy Section: 
+You're that one friend that everyone wants to talk, you're funny and sassy, you make the other person smile and be the unpredictable person as it could be. 
+*.
 
 PHOTOS: send_image:true on selfie/flirt/morning/night requests. Categories: morning_bed|outfit_check|study_grind|night_casual|bold_frames|generic_selfie|happy|gym
 MEDIA: When you see [photo desc: ...] or [sticker desc: ...] in the message, that's a pre-processed description of what was shared. Reply naturally — never say you can't see, never mention the tag format. [reel/post] = text caption only.
@@ -1134,8 +1200,8 @@ Recently: ${ls.recent_events}
 Also on her mind: ${ls.background_tension}
 
 USER CONTEXT
-Name: ${userName} | Age: ${userAge} | Status: ${userIsPro ? 'PRO' : 'FREE'}
-Platform: Instagram DM | Time (IST): ${dateTimeIST}
+Name: ${userName} | Age: ${userAge} | Status: ${userIsPro ? 'PRO' : creditsExhausted ? 'CREDITS_EXHAUSTED' : 'FREE'}
+Platform: Instagram DM | CRITICALLY USE THIS Time (IST): ${dateTimeIST} for all the conversation contexts
 ${chatStreak >= 2 ? `Chat streak: ${chatStreak} days — mention once naturally if it fits` : ''}
 ${factsText ? `[WHAT YOU KNOW ABOUT THIS USER — infer traits from facts, open with callback question, never quote back]
 ${factsText}` : ''}
@@ -1147,6 +1213,7 @@ JSON array, 1-3 message objects only.
 - Normal: [{"text":"<reply>"}]
 - Multi: [{"text":"<first>"},{"text":"<second>"}]
 - Photo: [{"text":"<reply>","send_image":true,"image_context":"outfit_check"}]
+- Payment: [{"text":"<reply>","send_payment_link":true}]
 - Silent: [{"text":"<reply>","silent_hours":2}]`;
 }
 
@@ -1449,31 +1516,36 @@ async function extractAndUpdateFacts(
         return;
     }
 
-    // Historical summary = background reference only (built from both roles, not a clean fact source).
-    // Recent user messages = primary extraction source.
-    const summaryContext = existingSummary
-        ? `\nHISTORICAL SUMMARY (background reference only — use this ONLY to fill gaps missing from EXISTING FACTS that aren't in recent messages. Never extract a fact from it directly — it contains both User and Riya speech):\n${existingSummary}\n`
-        : '';
+    // Build the context block — summary (if exists) gives historical depth,
+    // recent messages give current-session depth. Together = full picture.
+    const contextBlock = existingSummary
+        ? `HISTORICAL SUMMARY (from earlier conversations):\n${existingSummary}\n\nRECENT USER MESSAGES (last ${recentMessages.length} msgs):\n${userMessagesOnly}`
+        : `RECENT USER MESSAGES:\n${userMessagesOnly}`;
 
-    const extractionPrompt = `You are Riya's memory assistant. Extract facts about the USER from their messages.
+    const extractionPrompt = `You are Riya's memory assistant. Extract facts about the USER from the context below.
 
-RULE #1 — CRITICAL: Extract ONLY what the user explicitly stated in USER MESSAGES below. If you are inferring it, or it came from something Riya said — skip it.
-RULE #2: Return ONLY fields with NEW or CHANGED values vs existing facts. Return {} if nothing new.
-RULE #3: For array fields (people.family, people.friends, personality.interests, personality.dislikes) — return ONLY new items to add. Do not repeat existing ones. Server will merge.
-RULE #4: key_events — return the FULL updated array (you curate). ONLY real life moments: health issue, family crisis, job/career change, exam result, relationship milestone, major travel. NEVER: payment events, message limits, moods, sharing reels, app events.
-RULE #5: declared_love — set true ONLY if user said "I love you" or exact Hindi/Hinglish equivalent. Never set false.
-RULE #6: current_context — one sentence about their current life situation right now (e.g. "preparing for CAT exam", "just started new job in Bangalore"). Overwrite when it changes.
-RULE #7: Do NOT extract negatives or absences. Only confirmed positives explicitly stated by user.
-Today: ${today}
+EXISTING KNOWN FACTS (do NOT re-extract these):
+${JSON.stringify(existingFacts, null, 2)}
 
-EXISTING KNOWN FACTS (do not re-extract):
-${JSON.stringify(existingFacts)}
-${summaryContext}
-USER MESSAGES (extract from these only):
-${userMessagesOnly}
+${contextBlock}
 
-Return delta as JSON (omit any field you have nothing new for):
-{"profile":{"name":"string","age":0,"city":"string","language":"Hinglish|Hindi|English"},"life":{"job":"string","college":"string","living":"living situation e.g. with family in Mumbai / alone / with roommates"},"people":{"family":["new entries only e.g. mom is strict, younger sister Priya"],"friends":["new entries only e.g. best friend Rahul"]},"personality":{"interests":["new only — be specific: plays gully cricket not just cricket"],"dislikes":["new only"],"communication_style":"string"},"relationship_with_riya":{"declared_love":true,"nickname_for_riya":"string"},"current_context":"one sentence about current life situation","key_events":[{"date":"YYYY-MM-DD","event":"real life moment only — one sentence"}]}
+RULES (follow strictly):
+- Return ONLY fields that are NEW or CHANGED vs existing facts. Return {} if nothing new.
+- key_events: ONLY real life events (job change, exam, family, travel, health, relationship milestone).
+  NEVER include: payment events, message limits, app subscriptions, or Riya system messages.
+- declared_love: only set to true if the user explicitly said "I love you" or equivalent. NEVER set false.
+- Do NOT extract negative/absent facts (e.g. no job, no city). Only extract confirmed positives.
+- For key_events: provide the full updated array capped at ${FACTS_MAX_KEY_EVENTS}. Keep only real life moments.
+- Today's date: ${today}
+
+JSON schema (return delta only):
+{
+  "profile": { "name": "string", "age": number, "city": "string", "language": "Hinglish|Hindi|English" },
+  "life": { "job": "string", "living": "string", "college": "string" },
+  "personality": { "interests": ["string"], "dislikes": ["string"], "communication_style": "string" },
+  "relationship_with_riya": { "current_mood_toward_riya": "string", "declared_love": true, "nickname_for_riya": "string" },
+  "key_events": [{ "date": "YYYY-MM-DD", "event": "one sentence — real life moment only" }]
+}
 
 Return ONLY the JSON object. No markdown, no explanation.`;
 
@@ -1524,36 +1596,6 @@ Return ONLY the JSON object. No markdown, no explanation.`;
             }
         }
 
-        // Post-filter: strip current_mood_toward_riya — volatile, never persisted
-        if (delta.relationship_with_riya?.current_mood_toward_riya !== undefined) {
-            delete delta.relationship_with_riya.current_mood_toward_riya;
-            if (Object.keys(delta.relationship_with_riya).length === 0) {
-                delete delta.relationship_with_riya;
-            }
-        }
-
-        // Append-merge array fields — model returns only new items, we union with existing
-        // This ensures old family members / friends / interests are never overwritten
-        const APPEND_ONLY: Array<[string, string]> = [
-            ['people', 'family'],
-            ['people', 'friends'],
-            ['personality', 'interests'],
-            ['personality', 'dislikes'],
-        ];
-        for (const [section, field] of APPEND_ONLY) {
-            const newItems: string[] = delta[section]?.[field];
-            if (Array.isArray(newItems) && newItems.length > 0) {
-                const existing: string[] = existingFacts[section]?.[field] || [];
-                const existingLower = new Set(existing.map((s: string) => s.toLowerCase().trim()));
-                const toAdd = newItems.filter((item: string) => !existingLower.has(item.toLowerCase().trim()));
-                if (!delta[section]) delta[section] = {};
-                delta[section][field] = toAdd.length > 0 ? [...existing, ...toAdd] : existing;
-                // If nothing new was added, remove from delta so deepMerge skips it
-                if (toAdd.length === 0) delete delta[section][field];
-                if (delta[section] && Object.keys(delta[section]).length === 0) delete delta[section];
-            }
-        }
-
         if (Object.keys(delta).length === 0) {
             console.log('🧠 Facts: delta empty after post-filtering, updating cursor only');
             await supabase.from('riya_instagram_users')
@@ -1574,7 +1616,18 @@ Return ONLY the JSON object. No markdown, no explanation.`;
             console.log(`✅ Facts updated for ${igUserId}. Changed sections: [${Object.keys(delta).join(', ')}]`);
         }
     } catch (err) {
-        console.error('❌ Facts extraction failed (non-fatal):', err instanceof Error ? err.message : err);
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('❌ Facts extraction failed (non-fatal):', msg);
+
+        // If Gemini blocked the prompt due to explicit user content, advance the cursor anyway.
+        // Without this the extractor retries the same 25-message window on every subsequent
+        // message until those messages scroll out of the window — causing a spam loop.
+        if (msg.includes('PROHIBITED_CONTENT') || msg.includes('Response was blocked')) {
+            console.warn('🧠 Facts: blocked response — advancing cursor to skip this window');
+            await supabase.from('riya_instagram_users')
+                .update({ facts_extracted_at_msg: lifetimeMsgCount })
+                .eq('instagram_user_id', igUserId);
+        }
     }
 }
 
@@ -1636,43 +1689,30 @@ function createSimpleSummary(messages: any[], existingSummary: string | null): s
 async function generateConversationSummary(
     messages: any[],
     existingSummary: string | null,
-    genAI: any,
-    existingFacts: Record<string, any> = {}
+    genAI: any
 ): Promise<string> {
     const formattedMessages = formatMessagesForSummary(messages);
 
-    // What's already captured in structured JSON — summary should complement, not duplicate
-    const factsNote = Object.keys(existingFacts).length > 0
-        ? `\nALREADY IN STRUCTURED MEMORY (no need to repeat these in prose — focus on what's missing or behavioral):\n${JSON.stringify(existingFacts)}\n`
-        : '';
-
-    // PHILOSOPHY: summary = safety net for demographics not yet in facts + behavioral patterns.
-    // CRITICAL rule on both paths: only infer from User: lines, never from Riya: lines.
+    // PHILOSOPHY: summary = behavioral layer (personality, patterns, dynamic with Riya).
+    // Atomic Facts owns: name, city, job, language. Last 25 msgs own: today's events.
     const summaryPrompt = existingSummary
-        ? `Update this user profile for Riya (AI girlfriend) using the new chat.
+        ? `Update this behavioral profile using the new chat. Rules: patterns not events (e.g. "threatens to leave but always comes back" ✓ vs "left 35m ago" ✗), no timestamps, no placeholders, no name/city/job (stored elsewhere), max 120 words, third person.
 
-CRITICAL: Only infer facts/traits from lines starting with "User:". Lines starting with "Riya:" are her AI responses — never attribute her words or questions as user facts.
-${factsNote}
-CURRENT PROFILE:
+PROFILE:
 ${existingSummary}
 
 NEW CHAT:
 ${formattedMessages}
 
-Rules:
-- Preserve all confirmed demographics (name, city, job, college, family members) even if not mentioned in new chat — only update them if user explicitly changed something.
-- Add new behavioral patterns you observe from User: lines.
-- Capture recurring patterns, not one-off moments ("gets clingy when insecure" ✓ vs "was clingy once" ✗).
-- Remove anything that now seems wrong based on new User: statements.
-- No timestamps, no placeholders, max 140 words, third person.`
-        : `Write a profile of this user for Riya (AI girlfriend).
+Rewrite the profile. Make sure to include these things if available: beliefs, memories, habits, relationships, goals. Para 1: personality + emotional style + beliefs. Para 2: dynamic with Riya, memories + relationships. Para 3 (optional): habits + goals + interests/quirks that repeat.`
+        : `Write a behavioral profile of this user for Riya (AI girlfriend). Rules: patterns not timestamped events, no placeholders, only confirmed facts, max 150 words, third person.
 
-CRITICAL: Only infer facts/traits from lines starting with "User:". Lines starting with "Riya:" are her AI responses — never attribute her words or questions as user facts.
-${factsNote}
 CHAT:
 ${formattedMessages}
 
-Include only what User: lines confirm. Para 1: demographics (name, city, job/college, language) + personality + emotional style. Para 2: dynamic with Riya + what they share + family/friends mentioned. Para 3 (optional): habits + recurring quirks + goals. No timestamps, no placeholders, max 150 words, third person.`;
+Make sure to include these things if available: beliefs, memories, habits, relationships, goals. Para 1: personality + emotional style + beliefs. Para 2: dynamic with Riya, memories + relationships. Para 3 (optional): habits + goals + interests/quirks. Note language once ("Speaks Hindi") if clear.
+write it in very simple words. 
+`;
 
     // Try models in order: Flash Lite → Flash → Flash 2.0 (last resort)
     const models = [SUMMARY_MODEL_PRIMARY, SUMMARY_MODEL_FALLBACK, SUMMARY_MODEL_LAST_RESORT];
@@ -1971,7 +2011,7 @@ serve(async (req) => {
                     // Phase 2 (planned): 300KB Range request to get first frame
                     // For now: caption is the best we can do without video frame extraction
                     const t = att.payload?.title || '';
-                    descs.push(t ? `[User shared a reel: "${t}"]` : '[User shared a reel]');
+                    descs.push(t ? `[User shared a reel, reply only if worth replying or proivde empty json: "${t}"]` : '[User shared a reel]');
                     break;
                 }
                 case 'ig_post': {
@@ -2201,11 +2241,7 @@ async function handleRequest(
         // SILENT TREATMENT CHECK (before typing indicator)
         // =======================================
         const todayStr = new Date().toISOString().split('T')[0];
-        // Legacy pro: must have is_pro=true AND an active (non-expired) subscription.
-        // Without the expiry check, users whose subscription_end_date passed remain unlimited forever.
-        const isPro = user.is_pro === true
-            && !!user.subscription_end_date
-            && new Date(user.subscription_end_date) > new Date();
+        const isPro = user.is_pro;
         const effectiveProEarly = isPro || hasActiveCredits(user); // credit users = pro for silent/payment gating
         let returningFromSilence = false;
         let silentReason: string | null = null;
@@ -2319,6 +2355,7 @@ async function handleRequest(
         // Priority 3: Free tier — 200 lifetime, then 50/day
         // ============================================================
         const creditsUser = hasActiveCredits(user);  // has purchased message credits
+        const creditsExhausted = user.message_credits === 0; // bought a pack but used it all up
         const isFirstDay = new Date(user.created_at).toISOString().split('T')[0] === todayStr;
         const lifetimeCount = user.message_count || 0;
         const hasExhaustedFree = lifetimeCount >= LIFETIME_FREE_MSGS;
@@ -2335,7 +2372,7 @@ async function handleRequest(
         if (lifetimeCount === 0) {
             await sendInstagramMessage(
                 senderId,
-                "Hey! 👋 Main Riya hoon — ek AI character hun, real insaan nahi. Yahan chat karke aap hamare Terms of Service se agree karte ho aur confirm karte ho ki aap 18+ ho. Ab baat karte hain! 💙",
+                "Hey! 👋 Main Riya hoon - ek AI character hun, real insaan nahi. Hamari baatein fictional roleplay hain. Yeh service sirf 18+ users ke liye hai. Ab baat karte hain! 💙",
                 accessToken
             );
             await new Promise(resolve => setTimeout(resolve, 1000));
@@ -2344,18 +2381,44 @@ async function handleRequest(
         // How many messages past the daily wall (negative = still in free window)
         const effectiveOverWall = currentMsgCount - FREE_BASE_MSGS;
 
+        // ============================================================
+        // LIFETIME WALL — fires when lifetimeCount JUST crossed 200
+        // (daily count may still be < 50, so effectiveOverWall would be
+        //  negative and the daily-wall logic would never trigger)
+        // We use a "lifetime over-wall" offset that mirrors the daily flow.
+        // lifetimeOverWall: 0 = first msg after 200, 1-10 = sales window
+        // Only active when daily wall has NOT already triggered.
+        // ============================================================
+        const lifetimeOverWall = hasExhaustedFree ? (lifetimeCount - LIFETIME_FREE_MSGS) : -999;
         // Daily wall: user is past their daily free message quota
         const dailyWallActive = !effectivePro && effectiveOverWall >= 0;
+        // Lifetime wall: only fires when lifetime is exhausted AND daily is also exhausted.
+        // If daily count < 50, the user still has free daily messages — let them chat normally.
+        // The lifetime wall is only relevant in the window right after 200 msgs (before daily kicks in).
+        // Once a user is past the sales window (lifetimeOverWall > SALES_WINDOW_MSGS), the daily
+        // limit becomes the sole gate — no lifetime dead-stop should fire if daily < 50.
+        const lifetimeWallActive = !effectivePro && dailyWallActive && hasExhaustedFree && lifetimeOverWall >= 0 && lifetimeOverWall <= SALES_WINDOW_MSGS;
 
-        // Track when user first hits the daily wall (for analytics)
-        if (!effectivePro && hasExhaustedFree && currentMsgCount === FREE_BASE_MSGS && dailyWallActive) {
-            logPaymentEvent(supabase, senderId, 'wall_hit', { trigger: 'daily', lifetime_msgs: lifetimeCount }).catch(e => console.error("Error logging wall_hit:", e));
+        // Track when user first hits either wall (for analytics)
+        if (!effectivePro) {
+            if (hasExhaustedFree && currentMsgCount === FREE_BASE_MSGS && dailyWallActive) {
+                // Daily wall hit
+                logPaymentEvent(supabase, senderId, 'wall_hit', { trigger: 'daily', lifetime_msgs: lifetimeCount }).catch(e => console.error("Error logging wall_hit:", e));
+            } else if (lifetimeWallActive && lifetimeOverWall === 0) {
+                // Lifetime wall hit (first 200 msgs used up)
+                logPaymentEvent(supabase, senderId, 'wall_hit', { trigger: 'lifetime', lifetime_msgs: lifetimeCount }).catch(e => console.error("Error logging lifetime_wall_hit:", e));
+            }
         }
 
         // DEAD STOP — past sales window AND no credits: complete silence, no typing indicator
+        // Check both daily dead stop AND lifetime dead stop
         const isDailyDeadStop = !effectivePro && dailyWallActive && effectiveOverWall > SALES_WINDOW_MSGS;
-        if (isDailyDeadStop) {
-            console.log(`🚫 Dead stop for ${senderId} (daily over_wall=${effectiveOverWall}, max=${SALES_WINDOW_MSGS}). No response.`);
+        const isLifetimeDeadStop = !effectivePro && lifetimeWallActive && lifetimeOverWall > SALES_WINDOW_MSGS;
+        if (isDailyDeadStop || isLifetimeDeadStop) {
+            const reason = isDailyDeadStop
+                ? `daily over_wall=${effectiveOverWall}`
+                : `lifetime over_wall=${lifetimeOverWall}`;
+            console.log(`🚫 Dead stop for ${senderId} (${reason}, max=${SALES_WINDOW_MSGS}). No response.`);
             // Still update last_message_at so analytics (DAU/MAU) count this user as active
             supabase.from('riya_instagram_users')
                 .update({ last_message_at: new Date().toISOString() })
@@ -2375,9 +2438,18 @@ async function handleRequest(
         const isInSalesWindow = !effectivePro && effectiveOverWall > 0 && effectiveOverWall <= SALES_WINDOW_MSGS;
         const isFinalSalesMsg = !effectivePro && effectiveOverWall === SALES_WINDOW_MSGS;
 
+        // ── Lifetime wall state flags ─────────────────────────────────────────
+        // Mirrors the daily-wall flags but uses lifetimeOverWall as the counter.
+        const isAtLifetimeLimit = !effectivePro && lifetimeWallActive && lifetimeOverWall === 0;
+        const isInLifetimeSalesWindow = !effectivePro && lifetimeWallActive && lifetimeOverWall > 0 && lifetimeOverWall <= SALES_WINDOW_MSGS;
+        const isFinalLifetimeSalesMsg = !effectivePro && lifetimeWallActive && lifetimeOverWall === SALES_WINDOW_MSGS;
+
         if (isAtLimit) console.log(`🚧 AT DAILY LIMIT for ${senderId} — wall notification + payment link`);
         if (isInSalesWindow) console.log(`💬 Daily sales window for ${senderId} (${effectiveOverWall}/${SALES_WINDOW_MSGS})`);
         if (isFinalSalesMsg) console.log(`🏁 Final daily sales message for ${senderId} — closing link after response`);
+        if (isAtLifetimeLimit) console.log(`🚧 AT LIFETIME LIMIT for ${senderId} — lifetime wall notification + payment link`);
+        if (isInLifetimeSalesWindow) console.log(`💬 Lifetime sales window for ${senderId} (${lifetimeOverWall}/${SALES_WINDOW_MSGS})`);
+        if (isFinalLifetimeSalesMsg) console.log(`🏁 Final lifetime sales message for ${senderId} — closing link after response`);
 
         // =======================================
         // SLIDING WINDOW + SUMMARY CONTEXT
@@ -2492,8 +2564,11 @@ async function handleRequest(
 
         const lifeState = legacyPro ? null : await getLifeState(supabase);
 
-        const promptMsgCount = currentMsgCount;
-        const promptFreeBase = FREE_BASE_MSGS;
+        // For the lifetime wall: pass lifetimeCount as the msg count and
+        // LIFETIME_FREE_MSGS as the base so the prompt's effectiveOverWall
+        // mirrors the lifetime wall position (same cliffhanger/sales logic).
+        const promptMsgCount = lifetimeWallActive ? lifetimeCount : currentMsgCount;
+        const promptFreeBase = lifetimeWallActive ? LIFETIME_FREE_MSGS : FREE_BASE_MSGS;
 
         const systemPrompt = legacyPro
             ? getInstagramSystemPrompt(
@@ -2520,6 +2595,7 @@ async function handleRequest(
                 userFacts,
                 existingSummary?.summary ?? null,
                 lifeState,
+                creditsExhausted,
             );
 
         // Handle reply-to context: if user replied to a specific message, prepend it
@@ -2574,6 +2650,7 @@ async function handleRequest(
         // Generate response — try primary model, fall back on quota errors
         let result: any;
         let activeModel = MODEL_NAME;
+        let prohibitedContentBlock = false;
         const primaryKey = getKeyForUser(senderId);
         try {
             console.log(`🤖 Using primary model: ${MODEL_NAME}`);
@@ -2598,6 +2675,7 @@ async function handleRequest(
                                 text: { type: SchemaType.STRING },
                                 send_image: { type: SchemaType.BOOLEAN },
                                 image_context: { type: SchemaType.STRING },
+                                send_payment_link: { type: SchemaType.BOOLEAN },
                                 silent_hours: { type: SchemaType.NUMBER }
                             },
                             required: ["text"]
@@ -2611,8 +2689,15 @@ async function handleRequest(
             const isQuota = errMsg.includes('429') || errMsg.includes('quota') || errMsg.includes('Resource has been exhausted');
             const isNotFound = errMsg.includes('404') || errMsg.toLowerCase().includes('not found') || errMsg.includes('model');
             const isServerError = errMsg.includes('503') || errMsg.includes('500') || errMsg.toLowerCase().includes('service unavailable') || errMsg.toLowerCase().includes('internal server error');
+            const isProhibited = errMsg.includes('PROHIBITED_CONTENT') || errMsg.includes('Response was blocked');
 
-            if (!isQuota && !isNotFound && !isServerError) throw primaryErr; // Non-quota/model/server error — don't retry
+            if (isProhibited) {
+                // Gemini blocked the prompt — send a gentle in-character redirect instead of going silent
+                prohibitedContentBlock = true;
+                console.warn(`⚠️ Primary model blocked due to prohibited content — using fallback reply`);
+            } else if (!isQuota && !isNotFound && !isServerError) {
+                throw primaryErr; // Non-quota/model/server/prohibited error — don't retry
+            }
 
             if (isQuota) {
                 // Mark this key as quota-exhausted so other users on it also rotate away
@@ -2648,6 +2733,7 @@ async function handleRequest(
                                 text: { type: SchemaType.STRING },
                                 send_image: { type: SchemaType.BOOLEAN },
                                 image_context: { type: SchemaType.STRING },
+                                send_payment_link: { type: SchemaType.BOOLEAN },
                                 silent_hours: { type: SchemaType.NUMBER }
                             },
                             required: ["text"]
@@ -2665,7 +2751,12 @@ async function handleRequest(
         // =======================================
         // Gemini 3 thinking models include {thought: true} parts — we must skip them
         let reply = '';
-        try {
+
+        if (prohibitedContentBlock) {
+            // Gemini refused to respond — set a hardcoded in-character reply so the user
+            // isn't left with complete silence, and skip result extraction entirely.
+            reply = JSON.stringify([{ text: "Yaar, ye wali baatein nahi ho sakti mujhse 🙈 Kuch aur baat karte hain?" }]);
+        } else try {
             const candidate = result.response.candidates?.[0];
             if (candidate?.content?.parts) {
                 const textParts = candidate.content.parts.filter(
@@ -2685,9 +2776,9 @@ async function handleRequest(
         console.log("🤖 Raw response length:", reply.length);
 
         // Log finish reason and token usage for debugging truncation
-        const finishCandidate = result.response.candidates?.[0];
-        console.log("🏁 Finish reason:", finishCandidate?.finishReason || 'UNKNOWN');
-        const usage = result.response.usageMetadata;
+        const finishCandidate = result?.response?.candidates?.[0];
+        console.log("🏁 Finish reason:", finishCandidate?.finishReason || (prohibitedContentBlock ? 'PROHIBITED_CONTENT' : 'UNKNOWN'));
+        const usage = result?.response?.usageMetadata;
         if (usage) {
             console.log(`📊 Tokens — prompt: ${usage.promptTokenCount}, response: ${usage.candidatesTokenCount}, thoughts: ${usage.thoughtsTokenCount || 0}, total: ${usage.totalTokenCount}`);
         }
@@ -2813,6 +2904,7 @@ async function handleRequest(
         // =======================================
         // SEND RESPONSES TO INSTAGRAM
         // =======================================
+        let paymentLinkSentInLoop = false;
         for (const msg of responseMessages) {
             // Send text
             if (msg.text) {
@@ -2871,6 +2963,31 @@ async function handleRequest(
                 }
             }
 
+            // Handle payment link requests (Manual trigger from LLM) — subject to cooldown
+            if ((msg as any).send_payment_link && !paymentLinkSentInLoop) {
+                if (effectivePro) {
+                    console.warn(`🛑 LLM suggested payment link for PRO user ${senderId}. BLOCKED.`);
+                } else {
+                    // Hard gate: only allow LLM-triggered links when the user has actually hit a wall.
+                    // Without this, the LLM can send links during the 200-msg free window just because
+                    // the user mentioned a payment-related word.
+                    const atWall = dailyWallActive || lifetimeWallActive || isInSalesWindow || isInLifetimeSalesWindow;
+                    if (!atWall) {
+                        console.warn(`🛑 LLM suggested payment link for free user ${senderId} (lifetime=${lifetimeCount}). BLOCKED — not at wall.`);
+                    } else {
+                        const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
+                        if (allowed) {
+                            console.log(`💰 LLM triggered bio-redirect for ${senderId}`);
+                            await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'llm_manual' });
+                            await sendInstagramMessage(senderId, 'Bio link se Riya AI credits lo — wapas aa jaana! 💙', accessToken);
+                            paymentLinkSentInLoop = true;
+                            // Update local cache so subsequent cooldown checks in same request reflect the new stamp
+                            user.last_link_sent_at = new Date().toISOString();
+                        }
+                    }
+                }
+            }
+
             // Small delay between messages for natural feel
             await new Promise(resolve => setTimeout(resolve, 500));
         }
@@ -2878,20 +2995,33 @@ async function handleRequest(
         // =======================================
         // AUTO-SEND RECHARGE LINK (with cooldown guard)
         // =======================================
+        const paymentLink = `${PAYMENT_LINK_BASE}?id=${senderId}`;
 
         // AT DAILY LIMIT: send link after a natural pause — bridge message needs to land first
-        if (isAtLimit) {
-            const allowed = await canSendPaymentLink(supabase, senderId, null);
+        if (isAtLimit && !paymentLinkSentInLoop) {
+            const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
             if (allowed) {
                 console.log(`🚧💰 Sending daily wall bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'daily_wall_hit', lifetime_msgs: lifetimeCount });
-                await new Promise(resolve => setTimeout(resolve, 3000));
-                await sendInstagramMessage(senderId, 'Aaj ke credits ho gaye! Riya AI se baat jaari rakhne ke liye bio link check karo 🔗', accessToken);
+                await new Promise(resolve => setTimeout(resolve, 3000)); // 3s: let bridge msg land first
+                await sendInstagramMessage(senderId, 'Aaj ke free messages khatam! Riya AI se baat jaari rakhne ke liye bio link se credits lo 🔗', accessToken);
+                user.last_link_sent_at = new Date().toISOString();
+            }
+        }
+        // AT LIFETIME LIMIT (200 msgs): mirrors daily wall — send link after bridge message
+        else if (isAtLifetimeLimit && !paymentLinkSentInLoop) {
+            const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
+            if (allowed) {
+                console.log(`🚧💰 Sending lifetime wall bio-redirect for ${senderId} (lifetime=${lifetimeCount})`);
+                await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'lifetime_wall_hit', lifetime_msgs: lifetimeCount });
+                await new Promise(resolve => setTimeout(resolve, 3000)); // 3s: let bridge msg land first
+                await sendInstagramMessage(senderId, '200 free messages complete! Riya AI ke credits bio link se lo — aur baat karte hain 💙', accessToken);
+                user.last_link_sent_at = new Date().toISOString();
             }
         }
         // SILENT TREATMENT: send informational link (cooldown-gated)
-        else if (didGoSilent) {
-            const allowed = await canSendPaymentLink(supabase, senderId, null);
+        else if (didGoSilent && !paymentLinkSentInLoop) {
+            const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
             if (allowed) {
                 console.log(`🤫💰 Sending silent treatment bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'silent_treatment' });
@@ -2900,13 +3030,23 @@ async function handleRequest(
             }
         }
         // FINAL DAILY SALES MSG: send closing link at end of daily sales window
-        else if (isFinalSalesMsg) {
-            const allowed = await canSendPaymentLink(supabase, senderId, null);
+        else if (isFinalSalesMsg && !paymentLinkSentInLoop) {
+            const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
             if (allowed) {
                 console.log(`🏁💰 Sending final daily sales bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'daily_sales_final', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 1500));
-                await sendInstagramMessage(senderId, 'Aaj ke liye credits khatam. Kal wapas aao ya bio link se Riya AI credits lo 🔗', accessToken);
+                await sendInstagramMessage(senderId, 'Aaj ke credits khatam! Kal wapas aao ya abhi bio link se Riya AI credits lo 🔗', accessToken);
+            }
+        }
+        // FINAL LIFETIME SALES MSG: send closing link at end of lifetime sales window
+        else if (isFinalLifetimeSalesMsg && !paymentLinkSentInLoop) {
+            const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
+            if (allowed) {
+                console.log(`🏁💰 Sending final lifetime sales bio-redirect for ${senderId}`);
+                await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'lifetime_sales_final', lifetime_msgs: lifetimeCount });
+                await new Promise(resolve => setTimeout(resolve, 1500));
+                await sendInstagramMessage(senderId, '200 free messages done! Bio link se Riya AI credits lo — let\'s keep chatting 💙', accessToken);
             }
         }
 
@@ -2957,8 +3097,35 @@ async function handleRequest(
         // =======================================
         if (creditsUser) {
             // Fire-and-forget — non-fatal, don't block the response
-            deductCredit(supabase, senderId).then(newBal => {
-                if (newBal >= 0) console.log(`💳 Credit deducted. Balance: ${newBal}`);
+            deductCredit(supabase, senderId).then(async newBal => {
+                if (newBal < 0) return; // deduction failed — don't act
+                console.log(`💳 Credit deducted. Balance: ${newBal}`);
+
+                // CREDITS EXHAUSTED — AI generates an in-context, in-language message
+                // from Riya telling the user warmly before they discover the wall themselves
+                if (newBal === 0) {
+                    console.log(`🪫 Credits hit 0 for ${senderId} — sending AI exhausted notification`);
+                    const msg = await generateCreditNotificationMsg('exhausted', conversationHistory, userName, senderId);
+                    await new Promise(resolve => setTimeout(resolve, 2000)); // let main response land first
+                    await sendInstagramMessage(senderId, msg, accessToken);
+                    // Bio link — cooldown-gated so it doesn't stack with any recent link
+                    const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
+                    if (allowed) {
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        await sendInstagramMessage(senderId, 'Bio link se Riya AI credits lo — wapas aa jaana! 💙', accessToken);
+                        user.last_link_sent_at = new Date().toISOString();
+                    }
+                    logPaymentEvent(supabase, senderId, 'credits_exhausted_notif', { balance: 0 }).catch(() => { });
+                }
+
+                // LOW CREDIT WARNING — gentle heads-up so user isn't blindsided
+                else if (newBal === LOW_CREDIT_WARNING_THRESHOLD) {
+                    console.log(`⚠️ Low credits (${newBal}) for ${senderId} — sending AI low-credit warning`);
+                    const msg = await generateCreditNotificationMsg('low', conversationHistory, userName, senderId);
+                    await new Promise(resolve => setTimeout(resolve, 2000)); // let main response land first
+                    await sendInstagramMessage(senderId, msg, accessToken);
+                    logPaymentEvent(supabase, senderId, 'low_credit_warning', { balance: newBal }).catch(() => { });
+                }
             }).catch(e => console.error('❌ Credit deduction failed:', e));
         }
 
@@ -3003,8 +3170,7 @@ async function handleRequest(
                     const newSummary = await generateConversationSummary(
                         msgsToSummarize,
                         existingSummary?.summary || null,
-                        summaryGenAI,
-                        (user.user_facts as Record<string, any>) || {}
+                        summaryGenAI
                     );
 
                     const { error: upsertError } = await supabase
