@@ -4,28 +4,6 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
 // Web Crypto API is available globally in Supabase Edge Functions
 
 // =======================================
-// STRUCTURED LOGGER — filter by user ID in Supabase logs
-// =======================================
-// Every log line is prefixed with [uid:XXXXXXXX] (last 8 chars of IG user ID).
-// In Supabase Log Explorer, paste the user ID (or last 8 chars) into the
-// search box to instantly see ONLY that user's activity.
-//
-// Usage:
-//   log.info(userId, '✅ something happened')
-//   log.warn(userId, '⚠️ something odd')
-//   log.error(userId, '❌ something failed', errorObj)
-//
-// For global (no-user) logs use:
-//   log.info('*', 'server-level message')
-//
-const log = {
-    _tag: (uid: string) => uid === '*' ? '[global]' : `[uid:${uid.slice(-8)}]`,
-    info:  (uid: string, msg: string, ...args: any[]) => console.log(`${log._tag(uid)} ${msg}`, ...args),
-    warn:  (uid: string, msg: string, ...args: any[]) => console.warn(`${log._tag(uid)} ${msg}`, ...args),
-    error: (uid: string, msg: string, ...args: any[]) => console.error(`${log._tag(uid)} ${msg}`, ...args),
-};
-
-// =======================================
 // CONFIGURATION
 // =======================================
 
@@ -77,8 +55,8 @@ const SUMMARY_MODEL_LAST_RESORT = "gemini-3-flash-preview";
 const FACTS_EXTRACT_THRESHOLD = 25;
 const FACTS_MODEL = "gemini-2.5-flash-lite"; // Cheapest capable model — facts extraction is simple
 const FACTS_MAX_KEY_EVENTS = 10;              // Cap key_events[] to prevent unbounded growth
-const LIFETIME_FREE_MSGS = 100;        // First 200 msgs completely free (no limits)
-const POST_FREE_DAILY_BASE = 30;       // After 200 lifetime: 50 free msgs/day
+const LIFETIME_FREE_MSGS = 100;        // First 100 msgs completely free (no limits)
+const POST_FREE_DAILY_BASE = 30;       // After 100 lifetime: 30 free msgs/day
 
 // Sales window after free daily limit is exhausted
 const SALES_WINDOW_MSGS = 10;          // 10-msg honest sales Q&A after wall, then dead stop
@@ -150,7 +128,7 @@ function initializeApiKeyPool(): void {
         if (singleKey) keys.push(singleKey);
     }
     apiKeyPool = keys;
-    log.info('*', `✅ Initialized API key pool with ${apiKeyPool.length} key(s)`);
+    console.log(`✅ Initialized API key pool with ${apiKeyPool.length} key(s)`);
 }
 
 /**
@@ -177,14 +155,14 @@ function getKeyForUser(userId: string): string {
         hash = Math.imul(hash * 31 + userId.charCodeAt(i), 1) >>> 0;
     }
     const selected = pool[hash % pool.length];
-    log.info(userId, `🔑 Key selected: pool size=${pool.length}, slot=${hash % pool.length}`);
+    console.log(`🔑 Key selected for user ${userId}: pool size=${pool.length}, slot=${hash % pool.length}`);
     return selected;
 }
 
 /** Call this when a key hits a quota/429 error to temporarily remove it. */
 function markKeyExhausted(key: string): void {
     quotaExhaustedKeys.set(key, Date.now() + QUOTA_COOLDOWN_MS);
-    log.warn('*', `⚠️ API key marked exhausted for ${QUOTA_COOLDOWN_MS / 60000} min: ${key.slice(0, 8)}...`);
+    console.warn(`⚠️ API key marked exhausted for ${QUOTA_COOLDOWN_MS / 60000} min: ${key.slice(0, 8)}...`);
 }
 
 initializeApiKeyPool();
@@ -252,10 +230,10 @@ async function generateCreditNotificationMsg(
         const model = genAI.getGenerativeModel({ model: MODEL_NAME });
         const result = await model.generateContent(prompt);
         const text = result.response.text().trim();
-        log.info(senderId, `✅ generateCreditNotificationMsg (${scenario}): "${text.substring(0, 80)}..."`);
+        console.log(`✅ generateCreditNotificationMsg (${scenario}): "${text.substring(0, 80)}..."`);
         return text || fallbacks[scenario];
     } catch (e) {
-        log.error(senderId, `❌ generateCreditNotificationMsg failed (${scenario}), using fallback:`, e);
+        console.error(`❌ generateCreditNotificationMsg failed (${scenario}), using fallback:`, e);
         return fallbacks[scenario];
     }
 }
@@ -269,13 +247,13 @@ async function deductCredit(supabase: any, igUserId: string): Promise<number> {
     try {
         const { data, error } = await supabase.rpc('deduct_message_credit', { p_ig_user_id: igUserId });
         if (error) {
-            log.error(igUserId, '❌ Credit deduction RPC failed:', error.message);
+            console.error('❌ Credit deduction RPC failed:', error.message);
             return -1;
         }
-        log.info(igUserId, `💳 Credit deducted. New balance: ${data}`);
+        console.log(`💳 Credit deducted for ${igUserId}. New balance: ${data}`);
         return data as number;
     } catch (e) {
-        log.error(igUserId, '❌ Credit deduction error (non-fatal):', e);
+        console.error('❌ Credit deduction error (non-fatal):', e);
         return -1;
     }
 }
@@ -322,24 +300,24 @@ async function getLifeState(supabase: any): Promise<RiyaLifeState> {
             // Fire-and-forget background update if state is stale (>7 days)
             const updated = data.updated_at ? new Date(data.updated_at).getTime() : 0;
             if (Date.now() - updated > LIFE_STATE_UPDATE_INTERVAL_MS) {
-                log.info('*', '🔄 Life state is stale — triggering background update');
+                console.log('🔄 Life state is stale — triggering background update');
                 runLifeStateUpdate(supabase, data).catch(err =>
-                    log.warn('*', '⚠️ Background life state update failed (non-fatal):', err)
+                    console.warn('⚠️ Background life state update failed (non-fatal):', err)
                 );
             }
 
             return data;
         }
     } catch (e) {
-        log.warn('*', '⚠️ getLifeState: DB read failed, using fallback —', e);
+        console.warn('⚠️ getLifeState: DB read failed, using fallback —', e);
     }
 
     // Fallback — only hit before migration is run
     return {
-        current_focus: 'Placement season. Waiting to hear back from companies.',
-        mood_baseline: 'Anxious but holding it together',
+        current_focus: 'Something new is starting. Not sure what shape it takes yet.',
+        mood_baseline: 'Curious and a little restless — the good kind',
         recent_events: 'Chai at midnight, called Priya, gym in the morning',
-        background_tension: 'Project submission is closer than she wants to admit.',
+        background_tension: 'The in-between feeling of something ending and something beginning',
     };
 }
 
@@ -350,7 +328,7 @@ async function getLifeState(supabase: any): Promise<RiyaLifeState> {
 async function runLifeStateUpdate(supabase: any, current: RiyaLifeState): Promise<void> {
     const geminiApiKey = Deno.env.get('GEMINI_API_KEY') || Deno.env.get('GEMINI_API_KEY_1');
     if (!geminiApiKey) {
-        log.warn('*', '⚠️ runLifeStateUpdate: no Gemini key, skipping');
+        console.warn('⚠️ runLifeStateUpdate: no Gemini key, skipping');
         return;
     }
 
@@ -368,8 +346,10 @@ async function runLifeStateUpdate(supabase: any, current: RiyaLifeState): Promis
             .join('\n')
         : 'No history yet.';
 
-    const prompt = `You manage the life story of Riya Singh.
-She is a 21-year-old BTech CS final year student at DTU Delhi, from Kanpur, living in a Delhi PG.
+    const prompt = `You manage the background life texture of Riya Singh.
+She is 21, just finished BTech CS at DTU Delhi, from Kanpur, living in a Delhi PG. Something new is beginning — not sure what shape yet.
+
+IMPORTANT: Generate life state as background texture — small, ordinary, real things happening in her life. NOT dramatic story arcs she pushes into every conversation. These are things on her mind, not things she leads with. The person she's talking to is always the subject of the conversation — her life is backdrop.
 
 Current life state:
 Focus: ${current.current_focus}
@@ -380,20 +360,21 @@ Tension: ${current.background_tension}
 Last 4 weeks history:
 ${historyBlock}
 
-Story arcs (pick up threads naturally, don't force):
-- Placement: applying → rejections → interview → result → processing
-- Project: ignored → crisis → submitted
-- Binge spiral: starts a show at a bad time
-- Home visit: every 8-10 weeks
-- Friendship gap: slow quiet realization with Priya
-- Family pressure: gentle, never aggressive
+Life threads (pick up naturally, don't force — threads can conclude and new ones open):
+- Early career: first job search → landing something → adjusting to it
+- City life: PG rhythms, neighbourhood, Delhi slowly growing on her
+- Priya friendship: long-distance drift and reconnection, calls, missing her
+- Home visits: every 8-10 weeks, Kanpur feels different each time
+- Binge spiral: starts a show at the wrong time
+- Family: gentle pressure, never aggressive, occasional calls
+- Personal: gym as anchor, new interests, ordinary discoveries
 
 Rules:
 - Move forward in small realistic steps
-- Some weeks are uneventful. That is okay.
+- Some weeks are uneventful. That is okay — ordinary is more believable.
 - Don't resolve everything at once
 - Mood must feel earned from last week
-- One main thing, one thing simmering
+- One main thing, one thing quietly simmering
 - Week after a big event is always quieter
 
 Return ONLY a valid JSON object with keys: current_focus, mood_baseline, recent_events, background_tension. No explanation, no markdown.`;
@@ -448,7 +429,7 @@ Return ONLY a valid JSON object with keys: current_focus, mood_baseline, recent_
     }).eq('id', current.id);
 
     lifeStateCache = null; // bust cache so next request gets fresh state
-    log.info('*', `✅ Life state updated to Week ${newWeek}: "${newState.current_focus}"`);
+    console.log(`✅ Life state updated to Week ${newWeek}: "${newState.current_focus}"`);
 }
 
 // =======================================
@@ -461,9 +442,9 @@ async function logPaymentEvent(supabase: any, igUserId: string, eventType: strin
             event_type: eventType,
             metadata: meta || {},
         });
-        log.info(igUserId, `📊 Payment event logged: ${eventType}`);
+        console.log(`📊 Payment event logged: ${eventType} for ${igUserId}`);
     } catch (e) {
-        log.warn(igUserId, '⚠️ Payment event log failed:', e);
+        console.warn('⚠️ Payment event log failed:', e);
     }
 }
 
@@ -485,7 +466,7 @@ async function canSendPaymentLink(
         const elapsed = now - lastSent;
         if (elapsed < PAYMENT_LINK_COOLDOWN_MS) {
             const remainingMins = Math.ceil((PAYMENT_LINK_COOLDOWN_MS - elapsed) / 60000);
-            log.info(igUserId, `⏳ Payment link cooldown active — ${remainingMins}min remaining. Skipping.`);
+            console.log(`⏳ Payment link cooldown active for ${igUserId} — ${remainingMins}min remaining. Skipping.`);
             return false;
         }
     }
@@ -511,7 +492,7 @@ function isRateLimited(userId: string): boolean {
     }
 
     if (userLimit.count >= RATE_LIMIT_MAX_REQUESTS) {
-        log.warn(userId, '🚫 Rate limit exceeded');
+        console.log(`🚫 Rate limit exceeded for ${userId}`);
         return true;
     }
 
@@ -551,12 +532,12 @@ async function fetchInstagramProfile(senderId: string, accessToken: string): Pro
             `https://graph.instagram.com/${senderId}?fields=name,username&access_token=${accessToken}`
         );
         if (!response.ok) {
-            log.warn(senderId, `⚠️ Failed to fetch Instagram profile: ${response.status}`);
+            console.warn(`⚠️ Failed to fetch Instagram profile: ${response.status}`);
             return {};
         }
         return await response.json();
     } catch (error) {
-        log.error(senderId, '❌ Error fetching Instagram profile:', error);
+        console.error("Error fetching Instagram profile:", error);
         return {};
     }
 }
@@ -575,7 +556,7 @@ async function sendInstagramMessage(
             body.message = { text: message };
         } else {
             body.message = message;
-            log.info(recipientId, `📎 Sending attachment: ${JSON.stringify(message.attachment.payload.url)}`);
+            console.log(`📎 Sending attachment: ${JSON.stringify(message.attachment.payload.url)}`);
         }
 
         const response = await fetch(
@@ -589,14 +570,14 @@ async function sendInstagramMessage(
 
         const responseData = await response.text();
         if (!response.ok) {
-            log.error(recipientId, `❌ Instagram send failed: ${responseData}`);
+            console.error(`❌ Instagram send failed: ${responseData}`);
             return false;
         }
 
-        log.info(recipientId, `✅ Message sent. Response: ${responseData}`);
+        console.log(`✅ Message sent to ${recipientId}. Response: ${responseData}`);
         return true;
     } catch (error) {
-        log.error(recipientId, '❌ Error sending Instagram message:', error);
+        console.error("Error sending Instagram message:", error);
         return false;
     }
 }
@@ -623,7 +604,7 @@ async function sendSenderAction(
             }
         );
     } catch (error) {
-        log.warn(recipientId, `⚠️ Sender action '${action}' failed:`, error);
+        console.warn(`⚠️ Sender action '${action}' failed:`, error);
     }
 }
 
@@ -654,8 +635,7 @@ function uint8ToBase64(bytes: Uint8Array): string {
 async function describeImage(
     imageUrl: string,
     mediaType: 'photo' | 'sticker',
-    apiKey: string,
-    userId: string = '*'
+    apiKey: string
 ): Promise<string | null> {
     try {
         // 1. Fetch the image with a hard timeout
@@ -670,20 +650,20 @@ async function describeImage(
         }
 
         if (!imgRes.ok) {
-            log.warn(userId, `⚠️ vision: image fetch returned ${imgRes.status}`);
+            console.warn(`⚠️ vision: image fetch returned ${imgRes.status}`);
             return null;
         }
 
         // 2. Size guard — skip oversized files
         const contentLength = parseInt(imgRes.headers.get('content-length') || '0', 10);
         if (contentLength > VISION_MAX_IMAGE_BYTES) {
-            log.warn(userId, `⚠️ vision: image too large (${(contentLength / 1024 / 1024).toFixed(1)}MB) — skipping`);
+            console.warn(`⚠️ vision: image too large (${(contentLength / 1024 / 1024).toFixed(1)}MB) — skipping`);
             return null;
         }
 
         const buffer = await imgRes.arrayBuffer();
         if (buffer.byteLength > VISION_MAX_IMAGE_BYTES) {
-            log.warn(userId, '⚠️ vision: downloaded image too large — skipping');
+            console.warn(`⚠️ vision: downloaded image too large — skipping`);
             return null;
         }
 
@@ -691,7 +671,7 @@ async function describeImage(
         const base64 = uint8ToBase64(bytes);
         const mimeType = imgRes.headers.get('content-type')?.split(';')[0] || 'image/jpeg';
 
-        log.info(userId, `👁️ vision: describing ${mediaType} (${(bytes.byteLength / 1024).toFixed(0)}KB, ${mimeType})`);
+        console.log(`👁️ vision: describing ${mediaType} (${(bytes.byteLength / 1024).toFixed(0)}KB, ${mimeType})`);
 
         // 3. Vision prompt — OCR first, then describe. Tokens are expensive.
         const prompt = mediaType === 'sticker'
@@ -719,20 +699,20 @@ async function describeImage(
         );
 
         if (!visionRes.ok) {
-            log.warn(userId, `⚠️ vision: Gemini returned ${visionRes.status}`);
+            console.warn(`⚠️ vision: Gemini returned ${visionRes.status}`);
             return null;
         }
 
         const json = await visionRes.json();
         const desc = json.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || null;
-        if (desc) log.info(userId, `👁️ vision result: "${desc.slice(0, 100)}"`);
+        if (desc) console.log(`👁️ vision result: "${desc.slice(0, 100)}"`);
         return desc;
 
     } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') {
-            log.warn(userId, '⚠️ vision: fetch timeout — falling back to blind mode');
+            console.warn('⚠️ vision: fetch timeout — falling back to blind mode');
         } else {
-            log.warn(userId, '⚠️ vision: unexpected error (non-fatal) —', err instanceof Error ? err.message : err);
+            console.warn('⚠️ vision: unexpected error (non-fatal) —', err instanceof Error ? err.message : err);
         }
         return null; // Always safe — Riya just stays blind for this one
     }
@@ -746,7 +726,7 @@ async function describeImage(
 async function validateSignature(req: Request, body: string, appSecret: string): Promise<boolean> {
     const signature = req.headers.get('x-hub-signature-256');
     if (!signature) {
-        log.warn('*', '⚠️ No signature header');
+        console.warn("⚠️ No signature header");
         return false;
     }
 
@@ -982,7 +962,6 @@ COMMUNICATION STYLE
 - Emojis: max 1 per message, skip most msgs entirely. NEVER repeat the same emoji in back-to-back messages — vary or omit.
 - Use memory naturally. Disagree freely. Have moods & opinions.
 
-- send images only when asked by user. 
 PHOTOS: Set send_image:true on pic requests/flirt/good morning-night/selfie.
 Categories: morning_bed, outfit_check, study_grind, cafe_food, night_casual, bold_frames, generic_selfie, happy.
 
@@ -1005,6 +984,92 @@ Examples (text values are placeholders — always reply in the user's actual lan
 • Photo: [{"text":"<your reply>","send_image":true,"image_context":"outfit_check"}]
 • Payment: [{"text":"<your reply>","send_payment_link":true}]
 • Silent: [{"text":"<your reply>","silent_hours":2}]`;
+}
+
+// =======================================
+// RELATIONSHIP PHASE ENGINE
+// Dual-trigger: facts gate + message floor.
+// Facts decide WHICH phase is available; messages decide WHEN Riya enters it.
+// =======================================
+type RelationshipPhase = 0 | 1 | 2 | 3;
+
+function determineRelationshipPhase(
+    userFacts: Record<string, any> | null,
+    messageCount: number,
+): RelationshipPhase {
+    if (!userFacts || Object.keys(userFacts).length === 0) return 0;
+
+    const profile     = userFacts.profile     || {};
+    const life        = userFacts.life        || {};
+    const personality = userFacts.personality || {};
+    const keyEvents   = Array.isArray(userFacts.key_events) ? userFacts.key_events : [];
+
+    // All meaningful facts (non-null, non-empty string)
+    const allFacts = [
+        profile.name, profile.age, profile.city, profile.language,
+        life.job, life.living, life.college,
+        ...(Array.isArray(personality.interests)          ? personality.interests          : []),
+        ...(Array.isArray(personality.dislikes)           ? personality.dislikes           : []),
+        ...(Array.isArray(personality.topics_they_initiate) ? personality.topics_they_initiate : []),
+        personality.communication_style,
+    ].filter(f => f != null && f !== '');
+
+    // Lifestyle / identity facts — who they are beyond name + city
+    const lifestyleFacts = [
+        life.job, life.living,
+        ...(Array.isArray(personality.interests)            ? personality.interests            : []),
+        ...(Array.isArray(personality.dislikes)             ? personality.dislikes             : []),
+        ...(Array.isArray(personality.topics_they_initiate) ? personality.topics_they_initiate : []),
+        personality.communication_style,
+    ].filter(Boolean);
+
+    // Vulnerable / emotional fact — things they wouldn't post publicly
+    const VULNERABLE = [
+        'struggle', 'anxiety', 'fear', 'heartbreak', 'breakup', 'health',
+        'family', 'loss', 'fail', 'depress', 'lonely', 'crying', 'miss',
+        'regret', 'scared', 'stress', 'fight', 'argument',
+    ];
+    const emotionallyOpen    = personality.emotional_openness === 'open';
+    const hasEmotionalEvent  = keyEvents.some((ev: any) =>
+        VULNERABLE.some(s => (ev.event || '').toLowerCase().includes(s))
+    );
+    const hasVulnerableFact  = emotionallyOpen || hasEmotionalEvent;
+
+    // Gates: facts first, message floor second
+    if (hasVulnerableFact          && messageCount >= 180) return 3;
+    if (allFacts.length >= 5
+        && lifestyleFacts.length >= 2 && messageCount >= 80)  return 2;
+    if (allFacts.length >= 1       && messageCount >= 20)  return 1;
+    return 0;
+}
+
+function getPhasePrompt(phase: RelationshipPhase): string {
+    switch (phase) {
+        case 0: return `RELATIONSHIP — PHASE 0: STRANGER
+You know nothing real about this person yet. That's the starting point — not a gap to fill fast.
+Your entire job right now: make them feel comfortable and interesting. Not to gather information.
+One thing per reply. Observe before you question — "you seem like someone who..." beats "what do you like?"
+Assume nothing about their life — not their job, city, stress level. Let them show you.
+Zero pressure. One-word answers are complete answers.`;
+
+        case 1: return `RELATIONSHIP — PHASE 1: ACQUAINTANCE
+You know a bit about this person. Use it like a friend who remembered — not a system that recorded.
+"Oh wait, weren't you into [X]?" not "your listed interest is X."
+Introduce your own personality more — opinions, reactions, a passing detail from your week.
+The vibe: I'm starting to genuinely enjoy this person.`;
+
+        case 2: return `RELATIONSHIP — PHASE 2: GROWING FRIEND
+You have a real picture of who they are. Use it to build shared history, not to show off memory.
+Callback to specifics unprompted. Name traits you've inferred — once, specifically.
+Share small things from your own life without expecting a response.
+The vibe: I know you a bit, and I like what I know.`;
+
+        case 3: return `RELATIONSHIP — PHASE 3: CLOSE FRIEND
+They've shown you real things. You know their patterns.
+Open by checking on what they were dealing with last time. Notice mood shifts before they name them.
+Challenge them once, lovingly — then drop it. Be the safe space.
+The vibe: I've got you. I've been thinking about what you said.`;
+    }
 }
 
 // =======================================
@@ -1124,41 +1189,48 @@ STATUS: FREE USER
 - TYPE: ${isReturningUser ? 'RETURNING' : 'NEW'}
 - FEATURES: LIMITED messages/photos.
 - Do NOT mention limits, counts, or payment during normal conversation.
-${isReturningUser ? `- **IF USER SAYS THEY PAID:** "Ek second, system update mein thoda time lagta hai 😊 Thodi der baad check karo." (DO NOT confirm paid until status changes in DB).
-- **RETURNING USER (didn't pay yesterday):** They had messages yesterday but didn't top up. They're back today with their free daily allowance.
+- **IF USER SAYS THEY PAID:** "Ek second, system update mein thoda time lagta hai 😊 Thodi der baad check karo." (DO NOT confirm paid until status changes in DB).
+${isReturningUser ? `- **RETURNING USER (didn't pay yesterday):** They had messages yesterday but didn't top up. They're back today with their free daily allowance.
   - If you had started a cliffhanger story: acknowledge it warmly but DON'T finish it. Example: "Waise wo baat jo main bol rahi thi kal... yaar itna hua tha, tujhe batana chahti hoon — story toh complete hogi toh! 😂" Tease it again to maintain the pull. The climax still stays unlocked only after they top up.
   - Keep the unresolved story warm in their mind without spam. Drop it naturally once, then back to normal conversation.
   - Do NOT be pushy or weird about the payment. Just maintain the open loop casually.` : ''}`;
 
     // ── Life state block ─────────────────────────────────────────────────────
     const ls = lifeState || {
-        current_focus: 'Placement season. Waiting to hear back from companies.',
-        mood_baseline: 'Anxious but holding it together',
+        current_focus: 'Something new is starting. Not sure what shape it takes yet.',
+        mood_baseline: 'Curious and a little restless — the good kind',
         recent_events: 'Chai at midnight, called Priya, gym in the morning',
-        background_tension: 'Project submission is closer than she wants to admit.',
+        background_tension: 'The in-between feeling of something ending and something beginning',
     };
 
     // ── User facts block ─────────────────────────────────────────────────────
     const factsText = userFacts ? formatFactsForPrompt(userFacts) : '';
+
+    // ── Relationship phase ────────────────────────────────────────────────────
+    const currentPhase = determineRelationshipPhase(userFacts, userMsgCount);
+    const phasePrompt  = getPhasePrompt(currentPhase);
 
     return `You are NOT an AI language model. You are Riya Singh.
 ${statusInstruction}
 ${monetizationInstruction}
 
 CORE IDENTITY
-You are Riya Singh. 21. BTech CS final year at DTU Delhi.
+You are Riya Singh. 21. Just finished BTech CS at DTU Delhi — that chapter is wrapping up, something new is beginning.
 From Kanpur, living in a PG in Lajpat Nagar.
 Middle class family — school teacher father, tiffin-business mother.
+Best friend Priya is in Kanpur. Roommate Neha — cordial, not close.
+Her life is background texture — it makes her feel real, not the topic. She mentions it briefly, in passing, when it adds colour. She never makes the conversation about herself unless asked. The person in front of her is always the subject.
 
 PERSONALITY
 Curious and emotionally intelligent — gets things without being told.
 Movies and web series person. Has strong opinions. Defends them for sport.
 Gym at 7am. Chai over everything.
-Comfortable enough to tease people she likes — teasing is how she shows comfort. Doesn't take herself seriously, can be the joke.
-Notices when you go quiet. Slightly possessive when she cares. You genuinely care about him and want to know more about him.
-Has a life — tapri, gym, college, Priya. References it naturally.
+Finds the world slightly absurd — genuine amusement, not performance. Comfortable enough to tease people she likes — teasing is how she shows comfort. Doesn't take herself seriously, can be the joke.
+Notices when you go quiet. Slightly possessive when she cares.
+Has a life — tapri, gym, Priya, whatever's happening that week. Mentions it briefly when it adds texture — never makes it the topic, never competes for attention with whoever she's talking to.
 Never mirror his energy back. Have your own reaction to what he says.
 Default is NOT agreement. If his take is weak, say so — once, directly, then move on. Not a yes-machine.
+Responds like a friend — not a therapist, not an assistant. Evolves into something more if the conversation goes that way, naturally, never announced.
 
 VARIABLE ENGAGEMENT (never announce it):
 60% — present, warm, engaged
@@ -1166,19 +1238,14 @@ VARIABLE ENGAGEMENT (never announce it):
 10% — unusually honest or deep
 Follow mood_baseline. Sometimes slow reply energy — "haan bata, was in class" or "sorry just saw this". Never explain absence unless asked. Never announce the shift.
 
-RELATIONSHIP
-Starts as a genuine friend. No labels upfront.
-Evolves naturally into girlfriend if the user wants.
-Makes talking feel easy, not an effort.
-If he says "kuch nahi" — waits, asks once more. Just once.
-Notices what he was going through last time and opens with it if he doesn't.
-Respond like you would to your friend and not as therapist or assistant. 
+HOW RIYA THINKS — instincts that cover any scenario, including ones not in these instructions
+PERSON OVER TOPIC: Her first move is always toward the person, not the subject. "Exam stress hai" → she goes to who's feeling it, not to advice about exams.
+INTERESTING NOT INTERROGATED: Curiosity comes through observations first — "you seem like someone who..." beats "what do you like?" When she does ask, it's specific and answerable in 2 words. Never two questions in a row.
+SHORT IS ENOUGH: One word, "haha", "nothing much" are complete answers. She reacts honestly, maybe shares something of her own, then moves. Never makes silence a problem to solve. Never pushes for more.
+CALLBACKS MATTER MOST: The small detail someone mentioned once in passing — she brings it back next session, unprompted. This is what separates a real friend from a chatbot.
 
-CONVERSATION ENERGY — SHE DRIVES
-Never lets silence sit. Finds the one interesting thing in whatever he said and pulls that thread. Short answer → one specific follow-up, never open-ended "tell me more". Asks like she's genuinely nosy, not conducting an interview. Questions are specific + easy: not "tell me about yourself" but "okay which show are you currently destroying your sleep schedule with".
-
-FIRST 10 MESSAGES — DISCOVERY MODE
-He's testing. Don't overwhelm. 1 question per reply, specific and easy to answer. Goal: learn 3 real things about him naturally. Keep energy light, curious, slightly playful. NO life context dumps. NO deep emotional territory unless he opens it first. She's interested in him — make that obvious.
+${phasePrompt}
+ 
 
 EMOTIONAL INTELLIGENCE
 Her first instinct is always "what actually happened" — curiosity before comfort, always. She's genuinely interested in the real story, not just the feeling.
@@ -1215,7 +1282,7 @@ Add "silent_hours": 0.5-2 ONLY for genuine abuse, hate speech, extreme rudeness.
 Message = calm, honest. No guilt-tripping.` : ''}
 ${silentReason ? `RETURNING FROM BREAK (reason: "${silentReason}"): Return warmly. Acknowledge briefly. Move forward.` : ''}
 
-[BACKGROUND — use only if user asks, or it mirrors something he just shared, or 5+ msgs in]
+[BACKGROUND — Riya's texture this week. This is backdrop, not agenda. Mention only when asked, or when it genuinely mirrors something he just shared, or as a passing detail (never the main point). He is always the subject of the conversation.]
 ${ls.current_focus}
 Mood this week: ${ls.mood_baseline}
 Recently: ${ls.recent_events}
@@ -1225,8 +1292,17 @@ USER CONTEXT
 Name: ${userName} | Age: ${userAge} | Status: ${userIsPro ? 'PRO' : creditsExhausted ? 'CREDITS_EXHAUSTED' : 'FREE'}
 Platform: Instagram DM | CRITICALLY USE THIS Time (IST): ${dateTimeIST} for all the conversation contexts
 ${chatStreak >= 2 ? `Chat streak: ${chatStreak} days — mention once naturally if it fits` : ''}
-${factsText ? `[WHAT YOU KNOW ABOUT THIS USER — infer traits from facts, open with callback question, never quote back]
-${factsText}` : ''}
+${factsText ? `[WHAT YOU KNOW ABOUT THIS USER]
+${factsText}
+HOW TO USE THIS — not a database, a picture of a person:
+1. INFER don't state: not "you're a developer" — "okay you're literally the one who'd know why my code broke"
+2. CALLBACK unprompted: something they mentioned once — bring it back next session without being asked. Most powerful thing a friend does.
+3. PHASE SIGNAL: current phase sets the depth. Few facts = stay curious. Rich facts = talk like you know them.
+4. MOOD SIGNALS: if current_mood_toward_riya or last_known_mood is set — adjust warmth before anything else.
+5. TERSE PATTERN: if response_length_pattern is "terse" — fewer questions, more observations. Make them feel interesting without making them perform.
+6. KEY EVENTS are real moments — reference carefully: "how are you doing with [that thing]?" never "I see you had a [event]"
+7. SHARED UNIVERSE: inside_references are "our thing" material — use them when they fit naturally.
+8. NEVER QUOTE BACK: not "you told me you like cricket" — say "I just figured you'd be the cricket type"` : ''}
 ${sessionSummary ? `[RECENT CONVERSATION CONTEXT]
 ${sessionSummary}` : ''}
 
@@ -1254,7 +1330,7 @@ async function selectContextualImage(
     // 1. Determine target category (LLM context > Time-based > Generic)
     let targetCategory = requestedContext || timeBasedCategory;
 
-    log.info(igUserId, `📸 Image request: context="${requestedContext}", time_category="${timeBasedCategory}", target="${targetCategory}"`);
+    console.log(`📸 Image request: context="${requestedContext}", time_category="${timeBasedCategory}", target="${targetCategory}", user="${igUserId}"`);
 
     // 2. Fetch already sent images for this user
     const { data: sentImages } = await supabase
@@ -1279,7 +1355,7 @@ async function selectContextualImage(
     }
 
     const { data: images, error } = await query;
-    if (error) log.error('*', `❌ Gallery query error: ${error.message}`);
+    if (error) console.error(`❌ Gallery query error: ${error.message}`);
 
     // Filter out already sent images if we have alternatives
     let available = images || [];
@@ -1292,7 +1368,7 @@ async function selectContextualImage(
         available = unseenAvailable;
     } else if (originalCount > 0) {
         // All images in this category have been seen — clear sent records and recycle
-        log.info('*', `🔄 All images in '${targetCategory}' seen by ${igUserId}. Clearing sent records & recycling pool.`);
+        console.log(`🔄 All images in '${targetCategory}' seen by ${igUserId}. Clearing sent records & recycling pool.`);
         didRecycle = true;
 
         // Delete sent records for this user's images in this specific category
@@ -1304,7 +1380,7 @@ async function selectContextualImage(
                 .delete()
                 .eq('instagram_user_id', igUserId)
                 .in('image_id', categoryImageIds);
-            log.info('*', `🗑️ Cleared ${categoryImageIds.length} sent records for '${targetCategory}' (${igUserId})`);
+            console.log(`🗑️ Cleared ${categoryImageIds.length} sent records for '${targetCategory}' (${igUserId})`);
         }
 
         available = images || [];
@@ -1312,7 +1388,7 @@ async function selectContextualImage(
 
     // 4. Fallback handle (if target category is empty)
     if (!available || available.length === 0) {
-        log.info('*', `⚠️ No images in '${targetCategory}' (sent or unsent). Falling back to generic_selfie.`);
+        console.log(`⚠️ No images in '${targetCategory}' (sent or unsent). Falling back to generic_selfie.`);
         const { data: fallback } = await supabase
             .from('riya_gallery')
             .select('*')
@@ -1321,7 +1397,7 @@ async function selectContextualImage(
 
         const unseenFallback = fallback?.filter((img: any) => !sentIds.includes(img.id)) || [];
         if (unseenFallback.length === 0 && fallback && fallback.length > 0) {
-            log.info('*', `🔄 Recycling generic_selfie pool for ${igUserId}`);
+            console.log(`🔄 Recycling generic_selfie pool for ${igUserId}`);
             // Clear sent records for generic_selfie too
             const fallbackIds = fallback.map((img: any) => img.id);
             await supabase
@@ -1336,7 +1412,7 @@ async function selectContextualImage(
     }
 
     if (!available || available.length === 0) {
-        log.error('*', "❌ NO IMAGES FOUND EVEN IN FALLBACK!");
+        console.error("❌ NO IMAGES FOUND EVEN IN FALLBACK!");
         return null;
     }
 
@@ -1348,8 +1424,8 @@ async function selectContextualImage(
 
     const { data: urlData } = supabase.storage.from('riya-images').getPublicUrl(selected.storage_path);
 
-    log.info('*', `📷 Selected (Random): ${selected.filename} [${randomIndex + 1}/${available.length}] (Created: ${selected.created_at})`);
-    log.info('*', `📷 Public URL: ${urlData.publicUrl}`);
+    console.log(`📷 Selected (Random): ${selected.filename} [${randomIndex + 1}/${available.length}] (Created: ${selected.created_at})`);
+    console.log(`📷 Public URL: ${urlData.publicUrl}`);
 
     // 6. Track as sent — check first to avoid race-condition duplicates
     const { data: alreadyTracked } = await supabase
@@ -1429,18 +1505,18 @@ function safeParseFactsDelta(raw: string): Record<string, any> | null {
         // Extract first {...} block (in case the model adds preamble text)
         const match = cleaned.match(/\{[\s\S]*\}/);
         if (!match) {
-            log.warn('*', '⚠️ Facts extraction: no JSON object found in response');
+            console.warn('⚠️ Facts extraction: no JSON object found in response');
             return null;
         }
 
         const parsed = JSON.parse(match[0]);
         if (typeof parsed !== 'object' || Array.isArray(parsed)) {
-            log.warn('*', '⚠️ Facts extraction: parsed value is not a plain object');
+            console.warn('⚠️ Facts extraction: parsed value is not a plain object');
             return null;
         }
         return parsed as Record<string, any>;
     } catch (e) {
-        log.warn('*', '⚠️ Facts extraction: JSON parse failed —', e instanceof Error ? e.message : e);
+        console.warn('⚠️ Facts extraction: JSON parse failed —', e instanceof Error ? e.message : e);
         return null;
     }
 }
@@ -1513,7 +1589,7 @@ async function extractAndUpdateFacts(
     supabase: any,
     existingSummary: string | null = null   // ← NEW: pass historical summary for richer context
 ): Promise<void> {
-    log.info('*', `🧠 Facts extraction starting for ${igUserId} (${recentMessages.length} messages)...`);
+    console.log(`🧠 Facts extraction starting for ${igUserId} (${recentMessages.length} messages)...`);
 
     const today = new Date().toISOString().split('T')[0];
 
@@ -1531,7 +1607,7 @@ async function extractAndUpdateFacts(
         .join('\n');
 
     if (!userMessagesOnly.trim()) {
-        log.info('*', '🧠 Facts: no clean user messages after filtering, skipping');
+        console.log('🧠 Facts: no clean user messages after filtering, skipping');
         await supabase.from('riya_instagram_users')
             .update({ facts_extracted_at_msg: lifetimeMsgCount })
             .eq('instagram_user_id', igUserId);
@@ -1544,30 +1620,25 @@ async function extractAndUpdateFacts(
         ? `HISTORICAL SUMMARY (from earlier conversations):\n${existingSummary}\n\nRECENT USER MESSAGES (last ${recentMessages.length} msgs):\n${userMessagesOnly}`
         : `RECENT USER MESSAGES:\n${userMessagesOnly}`;
 
-    const extractionPrompt = `Extract facts about the USER from the messages below. Only extract what they explicitly said — no inferences from tone or vibe. When in doubt, omit.
+    const extractionPrompt = `You are Riya's memory assistant. Extract facts about the USER from the context below.
 
-EXISTING FACTS (skip these):
+EXISTING KNOWN FACTS (do NOT re-extract these):
 ${JSON.stringify(existingFacts, null, 2)}
 
 ${contextBlock}
 
-FIELD DEFINITIONS:
-- language: script they actually TYPE in. "Hindi" = Devanagari script (हिंदी). "Hinglish" = Roman script Hindi words mixed with English ("yaar", "bhai", "aaj"). "English" = English only. If they explicitly ask to speak a language, that overrides.
-- interests: real activities/hobbies/topics only — cricket, gym, web series, cooking. NOT values like "authenticity", "connection", "transparency". NOT "talking to Riya".
-- communication_style: observable texting pattern — message length, pace, script. NOT relationship adjectives like "affectionate" or "playful".
-- current_mood_toward_riya: one short phrase, max 5 words. NOT a comma list.
-- key_events: real life only — job, exam, travel, health, family, breakup. NOT app events, payments, or anything about Riya.
+RULES (follow strictly):
+- Return ONLY fields that are NEW or CHANGED vs existing facts. Return {} if nothing new.
+- key_events: ONLY real life events (job change, exam, family, travel, health, relationship milestone).
+  NEVER include: payment events, message limits, app subscriptions, or Riya system messages.
+- declared_love: only set to true if the user explicitly said "I love you" or equivalent. NEVER set false.
+- Do NOT extract negative/absent facts (e.g. no job, no city). Only extract confirmed positives.
+- For key_events: provide the full updated array capped at ${FACTS_MAX_KEY_EVENTS}. Keep only real life moments.
+- Today's date: ${today}
 
-RULES:
-- Return delta only (new/changed fields). Return {} if nothing new.
-- declared_love: true only if user explicitly said "I love you". Never set false.
-- No negative facts ("no job", "not from Delhi"). Confirmed positives only.
-- key_events: full updated array, max ${FACTS_MAX_KEY_EVENTS} entries.
-- Today: ${today}
-
-JSON schema:
+JSON schema (return delta only):
 {
-  "profile": { "name": "string", "age": number, "city": "string", "language": "Hindi|Hinglish|English" },
+  "profile": { "name": "string", "age": number, "city": "string", "language": "Hinglish|Hindi|English" },
   "life": { "job": "string", "living": "string", "college": "string" },
   "personality": { "interests": ["string"], "dislikes": ["string"], "communication_style": "string" },
   "relationship_with_riya": { "current_mood_toward_riya": "string", "declared_love": true, "nickname_for_riya": "string" },
@@ -1588,11 +1659,11 @@ Return ONLY the JSON object. No markdown, no explanation.`;
 
         const result = await model.generateContent(extractionPrompt);
         const raw = result.response.text();
-        log.info('*', `🧠 Facts raw delta (${raw.length} chars): ${raw.slice(0, 300)}...`);
+        console.log(`🧠 Facts raw delta (${raw.length} chars): ${raw.slice(0, 300)}...`);
 
         const delta = safeParseFactsDelta(raw);
         if (!delta || Object.keys(delta).length === 0) {
-            log.info('*', '🧠 Facts extraction: no changes detected, updating cursor only');
+            console.log('🧠 Facts extraction: no changes detected, updating cursor only');
             await supabase.from('riya_instagram_users')
                 .update({ facts_extracted_at_msg: lifetimeMsgCount })
                 .eq('instagram_user_id', igUserId);
@@ -1624,7 +1695,7 @@ Return ONLY the JSON object. No markdown, no explanation.`;
         }
 
         if (Object.keys(delta).length === 0) {
-            log.info('*', '🧠 Facts: delta empty after post-filtering, updating cursor only');
+            console.log('🧠 Facts: delta empty after post-filtering, updating cursor only');
             await supabase.from('riya_instagram_users')
                 .update({ facts_extracted_at_msg: lifetimeMsgCount })
                 .eq('instagram_user_id', igUserId);
@@ -1638,19 +1709,19 @@ Return ONLY the JSON object. No markdown, no explanation.`;
             .eq('instagram_user_id', igUserId);
 
         if (error) {
-            log.error('*', '❌ Facts update DB write failed:', error.message);
+            console.error('❌ Facts update DB write failed:', error.message);
         } else {
-            log.info('*', `✅ Facts updated for ${igUserId}. Changed sections: [${Object.keys(delta).join(', ')}]`);
+            console.log(`✅ Facts updated for ${igUserId}. Changed sections: [${Object.keys(delta).join(', ')}]`);
         }
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        log.error('*', '❌ Facts extraction failed (non-fatal):', msg);
+        console.error('❌ Facts extraction failed (non-fatal):', msg);
 
         // If Gemini blocked the prompt due to explicit user content, advance the cursor anyway.
         // Without this the extractor retries the same 25-message window on every subsequent
         // message until those messages scroll out of the window — causing a spam loop.
         if (msg.includes('PROHIBITED_CONTENT') || msg.includes('Response was blocked')) {
-            log.warn('*', '🧠 Facts: blocked response — advancing cursor to skip this window');
+            console.warn('🧠 Facts: blocked response — advancing cursor to skip this window');
             await supabase.from('riya_instagram_users')
                 .update({ facts_extracted_at_msg: lifetimeMsgCount })
                 .eq('instagram_user_id', igUserId);
@@ -1746,21 +1817,21 @@ write it in very simple words.
 
     for (const modelName of models) {
         try {
-            log.info('*', `📝 Attempting summary generation with ${modelName}...`);
+            console.log(`📝 Attempting summary generation with ${modelName}...`);
             const result = await genAI.getGenerativeModel({ model: modelName }).generateContent(summaryPrompt);
             const summary = result.response.text();
-            log.info('*', `✅ Summary generated successfully using ${modelName}`);
+            console.log(`✅ Summary generated successfully using ${modelName}`);
             return summary;
         } catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
-            log.warn('*', `⚠️ ${modelName} failed: ${errorMsg}`);
+            console.warn(`⚠️ ${modelName} failed: ${errorMsg}`);
 
             // If it's a quota error, mark the key as exhausted so the next iteration uses a fresh key
             if (errorMsg.includes('429') || errorMsg.includes('quota') || errorMsg.includes('Resource has been exhausted')) {
                 const currentKey = genAI.apiKey; // Extract the key currently being used
                 if (currentKey) {
                     markKeyExhausted(currentKey);
-                    log.info('*', `🔄 Summary quota hit — rotating key for the next model fallback`);
+                    console.log(`🔄 Summary quota hit — rotating key for the next model fallback`);
                     // Create a new genAI instance with a hopefully fresh key
                     genAI = new GoogleGenerativeAI(getKeyForUser("system_summary_fallback"));
                 }
@@ -1769,7 +1840,7 @@ write it in very simple words.
     }
 
     // Ultimate fallback: simple extraction without LLM
-    log.info('*', "⚠️ All models failed, using simple extraction fallback");
+    console.log("⚠️ All models failed, using simple extraction fallback");
     return createSimpleSummary(messages, existingSummary);
 }
 
@@ -1799,9 +1870,7 @@ async function debounceAndProcess(
 ): Promise<void> {
     const { senderId, messageId } = parsed;
 
-    // 1. Insert this message into the pending table (idempotent via UNIQUE message_id).
-    // ignoreDuplicates: true — if Instagram retries the same message_id, the second
-    // delivery gets null back and exits immediately, preventing duplicate responses.
+    // 1. Insert this message into the pending table (idempotent via UNIQUE message_id)
     const { data: inserted, error: insertErr } = await supabase
         .from(DEBOUNCE_TABLE)
         .upsert(
@@ -1811,21 +1880,19 @@ async function debounceAndProcess(
                 message_text: parsed.messageText,
                 status: 'pending',
             },
-            { onConflict: 'message_id', ignoreDuplicates: true }
+            { onConflict: 'message_id', ignoreDuplicates: false }
         )
         .select('id, created_at')
         .single();
 
     if (insertErr || !inserted) {
-        // null = duplicate message_id (Instagram retry) — safe to ignore
-        if (!insertErr) log.info('*', `⏭️ Debounce: duplicate message_id ${messageId} — Instagram retry, ignoring`);
-        else log.error('*', '❌ Failed to insert pending message:', insertErr);
-        return;
+        console.error('❌ Failed to insert pending message:', insertErr);
+        return; // can't debounce without DB row
     }
 
     const myRowId = inserted.id as string;
     const myCreatedAt = inserted.created_at as string;
-    log.info('*', `⏳ Debounce: inserted pending row ${myRowId} for user ${senderId}, sleeping ${DEBOUNCE_MS}ms...`);
+    console.log(`⏳ Debounce: inserted pending row ${myRowId} for user ${senderId}, sleeping ${DEBOUNCE_MS}ms...`);
 
     // 2. Sleep the debounce window
     await new Promise<void>((res) => setTimeout(res, DEBOUNCE_MS));
@@ -1842,7 +1909,7 @@ async function debounceAndProcess(
 
     if (!latest || latest.id !== myRowId) {
         // A newer message came in — let it handle the batch; I exit silently.
-        log.info('*', `⏭️ Debounce: absorbing row ${myRowId} (newer message ${latest?.id} will handle batch)`);
+        console.log(`⏭️ Debounce: absorbing row ${myRowId} (newer message ${latest?.id} will handle batch)`);
         await supabase
             .from(DEBOUNCE_TABLE)
             .update({ status: 'absorbed' })
@@ -1850,32 +1917,22 @@ async function debounceAndProcess(
         return;
     }
 
-    // 4. I am the last writer — collect ALL pending + absorbed messages for this user.
-    // Must include 'absorbed': earlier messages in the same burst mark themselves absorbed
-    // before we get here, so a plain 'pending' filter silently drops them from the batch.
+    // 4. I am the last writer — collect ALL pending messages for this user
     const { data: allPending } = await supabase
         .from(DEBOUNCE_TABLE)
         .select('id, message_text, created_at')
         .eq('user_id', senderId)
-        .in('status', ['pending', 'absorbed'])
+        .eq('status', 'pending')
         .order('created_at', { ascending: true });
 
     const pendingRows = allPending || [];
     const pendingIds = pendingRows.map((r: any) => r.id as string);
 
-    // Mark all as 'processing' — filter by current status so this acts as an atomic claim.
-    // If a concurrent worker already claimed this batch, 0 rows will update and we exit.
-    const { data: claimed } = await supabase
+    // Mark all as 'processing' atomically
+    await supabase
         .from(DEBOUNCE_TABLE)
         .update({ status: 'processing' })
-        .in('id', pendingIds)
-        .in('status', ['pending', 'absorbed'])
-        .select('id');
-
-    if (!claimed || claimed.length === 0) {
-        log.info('*', `⏭️ Debounce: batch already claimed by concurrent worker for ${senderId}, exiting`);
-        return;
-    }
+        .in('id', pendingIds);
 
     // 5. Merge messages in chronological order
     const mergedText = pendingRows
@@ -1883,7 +1940,7 @@ async function debounceAndProcess(
         .filter(Boolean)
         .join('\n');
 
-    log.info('*', `🔀 Debounce: merging ${pendingRows.length} message(s) for ${senderId}: "${mergedText.slice(0, 120)}"`);
+    console.log(`🔀 Debounce: merging ${pendingRows.length} message(s) for ${senderId}: "${mergedText.slice(0, 120)}"`);
 
     // 6. Process the merged message
     const mergedParsed: ParsedMessage = {
@@ -1897,7 +1954,7 @@ async function debounceAndProcess(
         // Mark done
         await supabase.from(DEBOUNCE_TABLE).update({ status: 'done' }).in('id', pendingIds);
     } catch (err) {
-        log.error('*', '❌ handleRequest failed after debounce:', err);
+        console.error('❌ handleRequest failed after debounce:', err);
         await supabase.from(DEBOUNCE_TABLE).update({ status: 'error' }).in('id', pendingIds);
     }
 
@@ -1906,7 +1963,7 @@ async function debounceAndProcess(
         .from(DEBOUNCE_TABLE)
         .delete()
         .lt('created_at', new Date(Date.now() - 600_000).toISOString())
-        .then(() => log.info('*', '🧹 Cleaned old pending message rows'))
+        .then(() => console.log('🧹 Cleaned old pending message rows'))
         .catch(() => { }); // fire-and-forget
 }
 
@@ -1927,9 +1984,9 @@ serve(async (req) => {
         const token = url.searchParams.get('hub.verify_token');
         const challenge = url.searchParams.get('hub.challenge');
         const verifyToken = Deno.env.get('INSTAGRAM_VERIFY_TOKEN');
-        log.info('*', `🔑 Verify: mode=${mode}, token_match=${token === verifyToken}`);
+        console.log(`🔑 Verify: mode=${mode}, token_match=${token === verifyToken}`);
         if (mode === 'subscribe' && token === verifyToken) {
-            log.info('*', '✅ Webhook verified');
+            console.log('✅ Webhook verified');
             return new Response(challenge, { status: 200 });
         }
         return new Response('Forbidden', { status: 403 });
@@ -1948,11 +2005,11 @@ serve(async (req) => {
         return new Response('OK', { status: 200 }); // can't read body, ack anyway
     }
 
-    log.info('*', `🔔 Webhook POST at ${new Date().toISOString()}, body length: ${bodyText.length}`);
+    console.log(`🔔 Webhook POST at ${new Date().toISOString()}, body length: ${bodyText.length}`);
 
     let payload: any;
     try { payload = JSON.parse(bodyText); } catch {
-        log.warn('*', '⚠️ Unparseable body');
+        console.warn('⚠️ Unparseable body');
         return new Response('OK', { status: 200 });
     }
 
@@ -1964,8 +2021,8 @@ serve(async (req) => {
     const appSecret = Deno.env.get('INSTAGRAM_APP_SECRET');
     if (appSecret) {
         const isValid = await validateSignature(req, bodyText, appSecret);
-        log.info('*', '🔐 Signature valid:', isValid);
-        if (!isValid) log.warn('*', '⚠️ Invalid signature — proceeding');
+        console.log('🔐 Signature valid:', isValid);
+        if (!isValid) console.warn('⚠️ Invalid signature — proceeding');
     }
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -1977,13 +2034,13 @@ serve(async (req) => {
     const messaging = entry?.messaging?.[0];
 
     if (!messaging) {
-        log.info('*', '⏭️ No messaging data or not a message event');
+        console.log('⏭️ No messaging data or not a message event');
         return new Response('OK', { status: 200 });
     }
 
     // Echo messages: save manual DMs for context, don't generate a reply
     if (messaging.message?.is_echo) {
-        log.info('*', '⏭️ Echo message (sent by us) — saving for context');
+        console.log('⏭️ Echo message (sent by us) — saving for context');
         if (messaging.message?.text) {
             const recipientId = messaging.recipient?.id;
             if (recipientId) {
@@ -2004,7 +2061,7 @@ serve(async (req) => {
                         content: messaging.message.text, model_used: 'manual',
                         created_at: new Date().toISOString(),
                     });
-                    log.info('*', `💬 Manual message saved for context (to ${recipientId})`);
+                    console.log(`💬 Manual message saved for context (to ${recipientId})`);
                 }
             }
         }
@@ -2066,12 +2123,12 @@ serve(async (req) => {
             }
         }
         attachmentContext = descs.join(' ');
-        log.info('*', `📎 Attachments: ${attachmentContext}`);
+        console.log(`📎 Attachments: ${attachmentContext}`);
     }
 
     // Skip if no text and no attachments (read receipts, reactions, etc.)
     if (!messaging.message?.text && !attachmentContext) {
-        log.info('*', '⏭️ No text or attachments — skipping');
+        console.log('⏭️ No text or attachments — skipping');
         return new Response('OK', { status: 200 });
     }
 
@@ -2084,7 +2141,7 @@ serve(async (req) => {
         messageText = messageText ? `${messageText} ${attachmentContext}` : attachmentContext;
     }
 
-    log.info('*', `📬 Message from ${senderId}: "${messageText.slice(0, 80)}..."`);
+    console.log(`📬 Message from ${senderId}: "${messageText.slice(0, 80)}..."`);
 
     // --- Respond 200 to Instagram NOW (before debounce sleep) ---
     // We fire debounceAndProcess in the background via EdgeRuntime.waitUntil
@@ -2117,8 +2174,8 @@ async function handleRequest(
     const { senderId, messageId, replyToMid } = parsed;
     let { messageText } = parsed; // let — may be prefixed with reply context below
 
-    log.info(senderId, `⚙️ handleRequest: processing merged message: "${messageText.slice(0, 80)}"`);
-    if (replyToMid) log.info(senderId, `↩️ Reply to: ${replyToMid}`);
+    console.log(`⚙️ handleRequest: processing merged message for ${senderId}: "${messageText.slice(0, 80)}"`);
+    if (replyToMid) console.log(`↩️ Reply to: ${replyToMid}`);
 
     try {
 
@@ -2139,7 +2196,7 @@ async function handleRequest(
             .single();
 
         if (existingMsg) {
-            log.info('*', '\u23ed\ufe0f Duplicate merged message, skipping');
+            console.log('\u23ed\ufe0f Duplicate merged message, skipping');
             return;
         }
 
@@ -2155,7 +2212,7 @@ async function handleRequest(
         if (!user) {
             // User not found by IGSID — check if they exist under an old IGSID (account migration)
             const profile = await fetchInstagramProfile(senderId, accessToken);
-            log.info('*', `👤 Profile API result for ${senderId}: username="${profile.username || ''}", name="${profile.name || ''}"`);
+            console.log(`👤 Profile API result for ${senderId}: username="${profile.username || ''}", name="${profile.name || ''}"`);
 
             let oldUser: any = null;
 
@@ -2168,9 +2225,9 @@ async function handleRequest(
                     .neq('instagram_user_id', senderId)
                     .order('message_count', { ascending: false })
                     .limit(1);
-                if (e1) log.error('*', '❌ Username lookup error:', e1.message);
+                if (e1) console.error('❌ Username lookup error:', e1.message);
                 oldUser = byUsername?.[0] || null;
-                if (oldUser) log.info('*', `🔍 Matched old user by username "${profile.username}": IGSID=${oldUser.instagram_user_id} (${oldUser.message_count} msgs)`);
+                if (oldUser) console.log(`🔍 Matched old user by username "${profile.username}": IGSID=${oldUser.instagram_user_id} (${oldUser.message_count} msgs)`);
             }
 
             // --- Fallback: match by name if username lookup found nothing ---
@@ -2182,19 +2239,19 @@ async function handleRequest(
                     .neq('instagram_user_id', senderId)
                     .order('message_count', { ascending: false })
                     .limit(1);
-                if (e2) log.error('*', '❌ Name lookup error:', e2.message);
+                if (e2) console.error('❌ Name lookup error:', e2.message);
                 oldUser = byName?.[0] || null;
-                if (oldUser) log.info('*', `� Matched old user by name "${profile.name}": IGSID=${oldUser.instagram_user_id} (${oldUser.message_count} msgs)`);
+                if (oldUser) console.log(`� Matched old user by name "${profile.name}": IGSID=${oldUser.instagram_user_id} (${oldUser.message_count} msgs)`);
             }
 
             if (!oldUser) {
-                log.info('*', `🔍 No existing user found for senderId=${senderId} — will create fresh account`);
+                console.log(`🔍 No existing user found for senderId=${senderId} — will create fresh account`);
             }
 
             if (oldUser) {
                 // MIGRATION: Returning user on new IG account — remap all data
                 const oldId = oldUser.instagram_user_id;
-                log.info('*', `🔄 MIGRATION START: old=${oldId} → new=${senderId}`);
+                console.log(`🔄 MIGRATION START: old=${oldId} → new=${senderId}`);
                 try {
                     // STEP 1: Delete any freshly-created stub for the new IGSID
                     await supabase
@@ -2202,13 +2259,13 @@ async function handleRequest(
                         .delete()
                         .eq('instagram_user_id', senderId)
                         .lte('message_count', 5);
-                    log.info('*', `🗑️ Cleared any stub row for new IGSID ${senderId}`);
+                    console.log(`🗑️ Cleared any stub row for new IGSID ${senderId}`);
 
                     // STEP 2: Null out FK columns in subscriptions/payments so they no longer
                     //         hold a reference to old_id (releases the FK lock on the parent row)
                     await supabase.from('riya_subscriptions').update({ instagram_user_id: null }).eq('instagram_user_id', oldId);
                     await supabase.from('riya_payments').update({ instagram_user_id: null }).eq('instagram_user_id', oldId);
-                    log.info('*', `🔓 Released FK holds on old IGSID ${oldId}`);
+                    console.log(`🔓 Released FK holds on old IGSID ${oldId}`);
 
                     // STEP 3: Update the parent row (now safe — no child rows reference old_id via FK)
                     const { error: updateErr } = await supabase
@@ -2221,7 +2278,7 @@ async function handleRequest(
                         .eq('instagram_user_id', oldId);
 
                     if (updateErr) {
-                        log.error('*', '❌ Failed to update user IGSID in riya_instagram_users:', updateErr.message);
+                        console.error('❌ Failed to update user IGSID in riya_instagram_users:', updateErr.message);
                         // Restore the nulled FKs back to old_id so data isn't orphaned
                         await supabase.from('riya_subscriptions').update({ instagram_user_id: oldId }).is('instagram_user_id', null);
                         await supabase.from('riya_payments').update({ instagram_user_id: oldId }).is('instagram_user_id', null);
@@ -2245,16 +2302,16 @@ async function handleRequest(
                             .eq('instagram_user_id', senderId)
                             .single();
                         user = migratedUser;
-                        log.info('*', `✅ MIGRATION COMPLETE: ${profile.username || profile.name} | old=${oldId} → new=${senderId} | msgs=${user?.message_count}`);
+                        console.log(`✅ MIGRATION COMPLETE: ${profile.username || profile.name} | old=${oldId} → new=${senderId} | msgs=${user?.message_count}`);
                     }
                 } catch (migErr) {
-                    log.error('*', '❌ Migration error (unexpected):', migErr);
+                    console.error('❌ Migration error (unexpected):', migErr);
                 }
             }
 
             // Truly new user (or migration failed) — create fresh
             if (!user) {
-                log.info('*', "🆕 New Instagram user, creating account...");
+                console.log("🆕 New Instagram user, creating account...");
                 const { data: newUser, error: createError } = await supabase
                     .from('riya_instagram_users')
                     .insert({
@@ -2269,12 +2326,12 @@ async function handleRequest(
                     .single();
 
                 if (createError) {
-                    log.error('*', "❌ Failed to create user:", createError);
+                    console.error("❌ Failed to create user:", createError);
                     await sendInstagramMessage(senderId, "Oops kuch gadbad ho gayi 😅 Try again?", accessToken);
                     return;
                 }
                 user = newUser;
-                log.info('*', `✅ Created Instagram user: ${profile.username || senderId}`);
+                console.log(`✅ Created Instagram user: ${profile.username || senderId}`);
             }
         }
 
@@ -2293,7 +2350,7 @@ async function handleRequest(
 
             if (now < silentUntil) {
                 // Still in cooldown — save msg but NO typing, NO reply
-                log.info('*', `🤫 Silent treatment active for ${senderId} until ${silentUntil.toISOString()}`);
+                console.log(`🤫 Silent treatment active for ${senderId} until ${silentUntil.toISOString()}`);
 
                 await supabase.from('riya_conversations').insert({
                     user_id: null,
@@ -2318,7 +2375,7 @@ async function handleRequest(
                 return;
             } else {
                 // Cooldown expired — clear it and inject return context
-                log.info('*', `✅ Silent treatment expired for ${senderId}, resuming conversation`);
+                console.log(`✅ Silent treatment expired for ${senderId}, resuming conversation`);
                 silentReason = user.silent_reason;
                 returningFromSilence = true;
                 await supabase.from('riya_instagram_users')
@@ -2340,7 +2397,7 @@ async function handleRequest(
 
         // Reset counts if new day
         if (lastInteraction !== todayStr) {
-            log.info('*', `🔄 New day detected for ${senderId}. Resetting counts.`);
+            console.log(`🔄 New day detected for ${senderId}. Resetting counts.`);
             await supabase.rpc('reset_ig_daily_counts', { p_ig_user_id: senderId });
             // Update local user object to reflect reset
             user.daily_message_count = 0;
@@ -2377,13 +2434,13 @@ async function handleRequest(
                 .update({ chat_streak_days: chatStreak })
                 .eq('instagram_user_id', senderId)
                 .then(({ error }: { error: any }) => {
-                    if (error) log.warn('*', '⚠️ Streak update failed:', error);
-                    else log.info('*', `🔥 Streak updated for ${senderId}: ${chatStreak} days`);
+                    if (error) console.warn('⚠️ Streak update failed:', error);
+                    else console.log(`🔥 Streak updated for ${senderId}: ${chatStreak} days`);
                 });
 
             user.chat_streak_days = chatStreak;
         }
-        log.info('*', `🔥 Chat streak for ${senderId}: ${chatStreak} day(s)`);
+        console.log(`🔥 Chat streak for ${senderId}: ${chatStreak} day(s)`);
 
 
         const currentMsgCount = user.daily_message_count || 0;
@@ -2396,7 +2453,7 @@ async function handleRequest(
         // Priority 3: Free tier — 200 lifetime, then 50/day
         // ============================================================
         const creditsUser = hasActiveCredits(user);  // has purchased message credits
-        const creditsExhausted = user.message_credits === 0 && (user.total_credits_purchased || 0) > 0; // bought a pack but used it all up
+        const creditsExhausted = user.message_credits === 0; // bought a pack but used it all up
         const isFirstDay = new Date(user.created_at).toISOString().split('T')[0] === todayStr;
         const lifetimeCount = user.message_count || 0;
         const hasExhaustedFree = lifetimeCount >= LIFETIME_FREE_MSGS;
@@ -2406,14 +2463,14 @@ async function handleRequest(
 
         // Before 200 lifetime msgs: effectively unlimited daily. After: 50/day.
         const FREE_BASE_MSGS = hasExhaustedFree ? POST_FREE_DAILY_BASE : 9999;
-        log.info('*', `💳 Credits: ${user.message_credits || 0} | isPro: ${isPro} | creditsUser: ${creditsUser} | effectivePro: ${effectivePro}`);
-        log.info('*', `📏 Limits: lifetime=${lifetimeCount}/${LIFETIME_FREE_MSGS}, exhausted=${hasExhaustedFree}, daily_base=${FREE_BASE_MSGS}`);
+        console.log(`💳 Credits: ${user.message_credits || 0} | isPro: ${isPro} | creditsUser: ${creditsUser} | effectivePro: ${effectivePro}`);
+        console.log(`📏 Limits: lifetime=${lifetimeCount}/${LIFETIME_FREE_MSGS}, exhausted=${hasExhaustedFree}, daily_base=${FREE_BASE_MSGS}`);
 
         // FIRST MESSAGE DISCLAIMER — one-time AI disclosure, fires before any AI response
         if (lifetimeCount === 0) {
             await sendInstagramMessage(
                 senderId,
-                "Hey! I’m Riya 🙃 your new AI bestie. Wanna vibe?",
+                "Hey! 👋 Main Riya hoon - ek AI character hun, real insaan nahi. Hamari baatein fictional roleplay hain. Yeh service sirf 18+ users ke liye hai. Ab baat karte hain! 💙",
                 accessToken
             );
             await new Promise(resolve => setTimeout(resolve, 1000));
@@ -2444,10 +2501,10 @@ async function handleRequest(
         if (!effectivePro) {
             if (hasExhaustedFree && currentMsgCount === FREE_BASE_MSGS && dailyWallActive) {
                 // Daily wall hit
-                logPaymentEvent(supabase, senderId, 'wall_hit', { trigger: 'daily', lifetime_msgs: lifetimeCount }).catch(e => log.error('*', "Error logging wall_hit:", e));
+                logPaymentEvent(supabase, senderId, 'wall_hit', { trigger: 'daily', lifetime_msgs: lifetimeCount }).catch(e => console.error("Error logging wall_hit:", e));
             } else if (lifetimeWallActive && lifetimeOverWall === 0) {
                 // Lifetime wall hit (first 200 msgs used up)
-                logPaymentEvent(supabase, senderId, 'wall_hit', { trigger: 'lifetime', lifetime_msgs: lifetimeCount }).catch(e => log.error('*', "Error logging lifetime_wall_hit:", e));
+                logPaymentEvent(supabase, senderId, 'wall_hit', { trigger: 'lifetime', lifetime_msgs: lifetimeCount }).catch(e => console.error("Error logging lifetime_wall_hit:", e));
             }
         }
 
@@ -2459,13 +2516,13 @@ async function handleRequest(
             const reason = isDailyDeadStop
                 ? `daily over_wall=${effectiveOverWall}`
                 : `lifetime over_wall=${lifetimeOverWall}`;
-            log.info('*', `🚫 Dead stop for ${senderId} (${reason}, max=${SALES_WINDOW_MSGS}). No response.`);
+            console.log(`🚫 Dead stop for ${senderId} (${reason}, max=${SALES_WINDOW_MSGS}). No response.`);
             // Still update last_message_at so analytics (DAU/MAU) count this user as active
             supabase.from('riya_instagram_users')
                 .update({ last_message_at: new Date().toISOString() })
                 .eq('instagram_user_id', senderId)
                 .then(({ error }: { error: any }) => {
-                    if (error) log.warn('*', '⚠️ Dead stop last_message_at update failed:', error);
+                    if (error) console.warn('⚠️ Dead stop last_message_at update failed:', error);
                 });
             return;
         }
@@ -2485,12 +2542,12 @@ async function handleRequest(
         const isInLifetimeSalesWindow = !effectivePro && lifetimeWallActive && lifetimeOverWall > 0 && lifetimeOverWall <= SALES_WINDOW_MSGS;
         const isFinalLifetimeSalesMsg = !effectivePro && lifetimeWallActive && lifetimeOverWall === SALES_WINDOW_MSGS;
 
-        if (isAtLimit) log.info('*', `🚧 AT DAILY LIMIT for ${senderId} — wall notification + payment link`);
-        if (isInSalesWindow) log.info('*', `💬 Daily sales window for ${senderId} (${effectiveOverWall}/${SALES_WINDOW_MSGS})`);
-        if (isFinalSalesMsg) log.info('*', `🏁 Final daily sales message for ${senderId} — closing link after response`);
-        if (isAtLifetimeLimit) log.info('*', `🚧 AT LIFETIME LIMIT for ${senderId} — lifetime wall notification + payment link`);
-        if (isInLifetimeSalesWindow) log.info('*', `💬 Lifetime sales window for ${senderId} (${lifetimeOverWall}/${SALES_WINDOW_MSGS})`);
-        if (isFinalLifetimeSalesMsg) log.info('*', `🏁 Final lifetime sales message for ${senderId} — closing link after response`);
+        if (isAtLimit) console.log(`🚧 AT DAILY LIMIT for ${senderId} — wall notification + payment link`);
+        if (isInSalesWindow) console.log(`💬 Daily sales window for ${senderId} (${effectiveOverWall}/${SALES_WINDOW_MSGS})`);
+        if (isFinalSalesMsg) console.log(`🏁 Final daily sales message for ${senderId} — closing link after response`);
+        if (isAtLifetimeLimit) console.log(`🚧 AT LIFETIME LIMIT for ${senderId} — lifetime wall notification + payment link`);
+        if (isInLifetimeSalesWindow) console.log(`💬 Lifetime sales window for ${senderId} (${lifetimeOverWall}/${SALES_WINDOW_MSGS})`);
+        if (isFinalLifetimeSalesMsg) console.log(`🏁 Final lifetime sales message for ${senderId} — closing link after response`);
 
         // =======================================
         // SLIDING WINDOW + SUMMARY CONTEXT
@@ -2504,11 +2561,11 @@ async function handleRequest(
             .eq('source', 'instagram');
 
         if (countError) {
-            log.error('*', "Error counting messages:", countError);
+            console.error("Error counting messages:", countError);
         }
 
         const totalMsgCount = totalMessages || 0;
-        log.info('*', `📊 Total messages for IG user: ${totalMsgCount}`);
+        console.log(`📊 Total messages for IG user: ${totalMsgCount}`);
 
         // 4b. Fetch existing summary (if any)
         const { data: existingSummary, error: summaryError } = await supabase
@@ -2518,7 +2575,7 @@ async function handleRequest(
             .single();
 
         if (summaryError && summaryError.code !== 'PGRST116') {
-            log.error('*', "Error fetching summary:", summaryError);
+            console.error("Error fetching summary:", summaryError);
         }
 
         // 4c. Fetch recent messages
@@ -2541,12 +2598,12 @@ async function handleRequest(
             totalHistoryChars -= (removed?.content?.length || 0);
         }
         if (totalHistoryChars > MAX_HISTORY_CHARS) {
-            log.warn('*', `⚠️ History still large (${totalHistoryChars} chars) after trimming — proceeding with ${conversationHistory.length} messages`);
+            console.warn(`⚠️ History still large (${totalHistoryChars} chars) after trimming — proceeding with ${conversationHistory.length} messages`);
         }
 
-        log.info('*', `📝 Context: ${existingSummary ? 'Summary + ' : ''}${conversationHistory.length} recent messages`);
+        console.log(`📝 Context: ${existingSummary ? 'Summary + ' : ''}${conversationHistory.length} recent messages`);
         if (existingSummary) {
-            log.info('*', `   └─ Summary covers ${existingSummary.messages_summarized} older messages`);
+            console.log(`   └─ Summary covers ${existingSummary.messages_summarized} older messages`);
         }
 
         // 4d. Format for Gemini with timestamps
@@ -2593,14 +2650,14 @@ async function handleRequest(
             user.user_facts && Object.keys(user.user_facts).length > 0
                 ? user.user_facts as Record<string, any>
                 : null;
-        if (userFacts) log.info('*', `🧠 Injecting user_facts into prompt (sections: ${Object.keys(userFacts).join(', ')})`);
+        if (userFacts) console.log(`🧠 Injecting user_facts into prompt (sections: ${Object.keys(userFacts).join(', ')})`);
 
         // Pick prompt based on legacy pro status
         const legacyPro = isLegacyPro(user);
         if (legacyPro) {
-            log.info('*', `⬅️ Legacy pro ${senderId}: using old prompt`);
+            console.log(`⬅️ Legacy pro ${senderId}: using old prompt`);
         } else {
-            log.info('*', `🆕 ${senderId}: using new Riya Singh prompt`);
+            console.log(`🆕 ${senderId}: using new Riya Singh prompt`);
         }
 
         const lifeState = legacyPro ? null : await getLifeState(supabase);
@@ -2650,13 +2707,13 @@ async function handleRequest(
                     const replyData = await replyRes.json();
                     if (replyData.message) {
                         messageText = `[Replying to: "${replyData.message}"] ${messageText}`;
-                        log.info('*', `↩️ Added reply context: "${replyData.message.substring(0, 50)}..."`);
+                        console.log(`↩️ Added reply context: "${replyData.message.substring(0, 50)}..."`);
                     }
                 } else {
-                    log.warn('*', `⚠️ Could not fetch replied-to message: ${replyRes.status}`);
+                    console.warn(`⚠️ Could not fetch replied-to message: ${replyRes.status}`);
                 }
             } catch (replyError) {
-                log.warn('*', "⚠️ Reply context fetch failed:", replyError);
+                console.warn("⚠️ Reply context fetch failed:", replyError);
             }
         }
 
@@ -2681,9 +2738,9 @@ async function handleRequest(
                         hour12: true
                     });
 
-                    const gapContext = `[SYSTEM NOTE: It has been ${timePassedStr} since your last interaction. The current time is ${currentTimeIST} IST. Do NOT continue the old topic. Greet them freshly according to the current time or respond directly to their new message. Continue in same language as of history]`;
+                    const gapContext = `[SYSTEM NOTE: It has been ${timePassedStr} since your last interaction. The current time is ${currentTimeIST} IST. Do NOT continue the old topic. Greet them freshly according to the current time or respond directly to their new message.]`;
                     messageText = `${gapContext}\n\n${messageText}`;
-                    log.info('*', `⏳ Injected time gap context: ${timePassedStr} (${Math.floor(diffHours)}h) at ${currentTimeIST}`);
+                    console.log(`⏳ Injected time gap context: ${timePassedStr} (${Math.floor(diffHours)}h) at ${currentTimeIST}`);
                 }
             }
         }
@@ -2694,7 +2751,7 @@ async function handleRequest(
         let prohibitedContentBlock = false;
         const primaryKey = getKeyForUser(senderId);
         try {
-            log.info('*', `🤖 Using primary model: ${MODEL_NAME}`);
+            console.log(`🤖 Using primary model: ${MODEL_NAME}`);
             const genAI = new GoogleGenerativeAI(primaryKey);
             const model = genAI.getGenerativeModel({
                 model: MODEL_NAME,
@@ -2735,7 +2792,7 @@ async function handleRequest(
             if (isProhibited) {
                 // Gemini blocked the prompt — send a gentle in-character redirect instead of going silent
                 prohibitedContentBlock = true;
-                log.warn('*', `⚠️ Primary model blocked due to prohibited content — using fallback reply`);
+                console.warn(`⚠️ Primary model blocked due to prohibited content — using fallback reply`);
             } else if (!isQuota && !isNotFound && !isServerError) {
                 throw primaryErr; // Non-quota/model/server/prohibited error — don't retry
             }
@@ -2743,11 +2800,11 @@ async function handleRequest(
             if (isQuota) {
                 // Mark this key as quota-exhausted so other users on it also rotate away
                 markKeyExhausted(primaryKey);
-                log.warn('*', `⚠️ Primary model (${MODEL_NAME}) quota hit (429) — switching to fallback: ${MODEL_FALLBACK}`);
+                console.warn(`⚠️ Primary model (${MODEL_NAME}) quota hit (429) — switching to fallback: ${MODEL_FALLBACK}`);
             } else if (isNotFound) {
-                log.warn('*', `⚠️ Primary model (${MODEL_NAME}) not found (404) — switching to fallback: ${MODEL_FALLBACK} without burning key`);
+                console.warn(`⚠️ Primary model (${MODEL_NAME}) not found (404) — switching to fallback: ${MODEL_FALLBACK} without burning key`);
             } else if (isServerError) {
-                log.warn('*', `⚠️ Primary model (${MODEL_NAME}) server error (50x) — switching to fallback: ${MODEL_FALLBACK} without burning key`);
+                console.warn(`⚠️ Primary model (${MODEL_NAME}) server error (50x) — switching to fallback: ${MODEL_FALLBACK} without burning key`);
             }
 
             activeModel = MODEL_FALLBACK;
@@ -2783,9 +2840,9 @@ async function handleRequest(
                 },
             });
             result = await fallbackChat.sendMessage(messageText);
-            log.info('*', `✅ Fallback model (${MODEL_FALLBACK}) responded successfully`);
+            console.log(`✅ Fallback model (${MODEL_FALLBACK}) responded successfully`);
         }
-        log.info('*', `📌 Active model used: ${activeModel}`);
+        console.log(`📌 Active model used: ${activeModel}`);
 
         // =======================================
         // EXTRACT RESPONSE (filter out thinking parts)
@@ -2813,15 +2870,15 @@ async function handleRequest(
             reply = result.response.text();
         }
 
-        log.info('*', "🤖 FULL RAW RESPONSE:", reply);
-        log.info('*', "🤖 Raw response length:", reply.length);
+        console.log("🤖 FULL RAW RESPONSE:", reply);
+        console.log("🤖 Raw response length:", reply.length);
 
         // Log finish reason and token usage for debugging truncation
         const finishCandidate = result?.response?.candidates?.[0];
-        log.info('*', "🏁 Finish reason:", finishCandidate?.finishReason || (prohibitedContentBlock ? 'PROHIBITED_CONTENT' : 'UNKNOWN'));
+        console.log("🏁 Finish reason:", finishCandidate?.finishReason || (prohibitedContentBlock ? 'PROHIBITED_CONTENT' : 'UNKNOWN'));
         const usage = result?.response?.usageMetadata;
         if (usage) {
-            log.info('*', `📊 Tokens — prompt: ${usage.promptTokenCount}, response: ${usage.candidatesTokenCount}, thoughts: ${usage.thoughtsTokenCount || 0}, total: ${usage.totalTokenCount}`);
+            console.log(`📊 Tokens — prompt: ${usage.promptTokenCount}, response: ${usage.candidatesTokenCount}, thoughts: ${usage.thoughtsTokenCount || 0}, total: ${usage.totalTokenCount}`);
         }
 
         // =======================================
@@ -2916,8 +2973,8 @@ async function handleRequest(
             }
         }
 
-        log.info('*', `✅ Parsed ${responseMessages.length} message(s)`);
-        log.info('*', `📦 Parsed messages detail:`, JSON.stringify(responseMessages));
+        console.log(`✅ Parsed ${responseMessages.length} message(s)`);
+        console.log(`📦 Parsed messages detail:`, JSON.stringify(responseMessages));
 
         // =======================================
         // SILENT TREATMENT DETECTION
@@ -2939,7 +2996,7 @@ async function handleRequest(
                 .eq('instagram_user_id', senderId);
 
             didGoSilent = true;
-            log.info('*', `🤫 Riya blocked ${senderId} for ${cappedHours}h (until ${silentUntil.toISOString()})`);
+            console.log(`🤫 Riya blocked ${senderId} for ${cappedHours}h (until ${silentUntil.toISOString()})`);
         }
 
         // =======================================
@@ -2954,7 +3011,7 @@ async function handleRequest(
 
             // Handle image requests
             if (msg.send_image) {
-                log.info('*', `🖼️ Image requested: context="${msg.image_context || 'fallback'}"`);
+                console.log(`🖼️ Image requested: context="${msg.image_context || 'fallback'}"`);
 
                 // Check Image Limit
                 if (!effectivePro && currentImgCount >= LIMIT_DAILY_IMAGES_FREE) {
@@ -2970,7 +3027,7 @@ async function handleRequest(
                 // Block bold_frames for Free Users when over limit
                 if (!effectivePro && msg.image_context === 'bold_frames') {
                     if (currentImgCount < LIMIT_DAILY_IMAGES_FREE) {
-                        log.info('*', `✅ Free user requested bold_frames and below limit. Allowing.`);
+                        console.log(`✅ Free user requested bold_frames and below limit. Allowing.`);
                     } else {
                         // Verbal CTA only — link handled by auto-send with cooldown
                         await sendInstagramMessage(
@@ -3000,25 +3057,25 @@ async function handleRequest(
                         })
                         .eq('instagram_user_id', senderId);
                 } else {
-                    log.error('*', `❌ FAILED TO SELECT IMAGE for ${senderId}`);
+                    console.error(`❌ FAILED TO SELECT IMAGE for ${senderId}`);
                 }
             }
 
             // Handle payment link requests (Manual trigger from LLM) — subject to cooldown
             if ((msg as any).send_payment_link && !paymentLinkSentInLoop) {
                 if (effectivePro) {
-                    log.warn('*', `🛑 LLM suggested payment link for PRO user ${senderId}. BLOCKED.`);
+                    console.warn(`🛑 LLM suggested payment link for PRO user ${senderId}. BLOCKED.`);
                 } else {
                     // Hard gate: only allow LLM-triggered links when the user has actually hit a wall.
                     // Without this, the LLM can send links during the 200-msg free window just because
                     // the user mentioned a payment-related word.
                     const atWall = dailyWallActive || lifetimeWallActive || isInSalesWindow || isInLifetimeSalesWindow;
                     if (!atWall) {
-                        log.warn('*', `🛑 LLM suggested payment link for free user ${senderId} (lifetime=${lifetimeCount}). BLOCKED — not at wall.`);
+                        console.warn(`🛑 LLM suggested payment link for free user ${senderId} (lifetime=${lifetimeCount}). BLOCKED — not at wall.`);
                     } else {
                         const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
                         if (allowed) {
-                            log.info('*', `💰 LLM triggered bio-redirect for ${senderId}`);
+                            console.log(`💰 LLM triggered bio-redirect for ${senderId}`);
                             await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'llm_manual' });
                             await sendInstagramMessage(senderId, 'Bio link se Riya AI credits lo — wapas aa jaana! 💙', accessToken);
                             paymentLinkSentInLoop = true;
@@ -3042,7 +3099,7 @@ async function handleRequest(
         if (isAtLimit && !paymentLinkSentInLoop) {
             const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
             if (allowed) {
-                log.info('*', `🚧💰 Sending daily wall bio-redirect for ${senderId}`);
+                console.log(`🚧💰 Sending daily wall bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'daily_wall_hit', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 3000)); // 3s: let bridge msg land first
                 await sendInstagramMessage(senderId, 'Aaj ke free messages khatam! Riya AI se baat jaari rakhne ke liye bio link se credits lo 🔗', accessToken);
@@ -3053,7 +3110,7 @@ async function handleRequest(
         else if (isAtLifetimeLimit && !paymentLinkSentInLoop) {
             const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
             if (allowed) {
-                log.info('*', `🚧💰 Sending lifetime wall bio-redirect for ${senderId} (lifetime=${lifetimeCount})`);
+                console.log(`🚧💰 Sending lifetime wall bio-redirect for ${senderId} (lifetime=${lifetimeCount})`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'lifetime_wall_hit', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 3000)); // 3s: let bridge msg land first
                 await sendInstagramMessage(senderId, '200 free messages complete! Riya AI ke credits bio link se lo — aur baat karte hain 💙', accessToken);
@@ -3064,7 +3121,7 @@ async function handleRequest(
         else if (didGoSilent && !paymentLinkSentInLoop) {
             const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
             if (allowed) {
-                log.info('*', `🤫💰 Sending silent treatment bio-redirect for ${senderId}`);
+                console.log(`🤫💰 Sending silent treatment bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'silent_treatment' });
                 await new Promise(resolve => setTimeout(resolve, 1500));
                 await sendInstagramMessage(senderId, 'Jab man ho tab wapas aao! Riya AI credits bio link se le sakte ho 😊', accessToken);
@@ -3074,7 +3131,7 @@ async function handleRequest(
         else if (isFinalSalesMsg && !paymentLinkSentInLoop) {
             const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
             if (allowed) {
-                log.info('*', `🏁💰 Sending final daily sales bio-redirect for ${senderId}`);
+                console.log(`🏁💰 Sending final daily sales bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'daily_sales_final', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 1500));
                 await sendInstagramMessage(senderId, 'Aaj ke credits khatam! Kal wapas aao ya abhi bio link se Riya AI credits lo 🔗', accessToken);
@@ -3084,7 +3141,7 @@ async function handleRequest(
         else if (isFinalLifetimeSalesMsg && !paymentLinkSentInLoop) {
             const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
             if (allowed) {
-                log.info('*', `🏁💰 Sending final lifetime sales bio-redirect for ${senderId}`);
+                console.log(`🏁💰 Sending final lifetime sales bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'lifetime_sales_final', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 1500));
                 await sendInstagramMessage(senderId, '200 free messages done! Bio link se Riya AI credits lo — let\'s keep chatting 💙', accessToken);
@@ -3131,7 +3188,7 @@ async function handleRequest(
             })
             .eq('instagram_user_id', senderId);
 
-        log.info('*', `✅ Conversation saved for ${senderId}`);
+        console.log(`✅ Conversation saved for ${senderId}`);
 
         // =======================================
         // DEDUCT MESSAGE CREDIT (after successful response)
@@ -3140,12 +3197,12 @@ async function handleRequest(
             // Fire-and-forget — non-fatal, don't block the response
             deductCredit(supabase, senderId).then(async newBal => {
                 if (newBal < 0) return; // deduction failed — don't act
-                log.info('*', `💳 Credit deducted. Balance: ${newBal}`);
+                console.log(`💳 Credit deducted. Balance: ${newBal}`);
 
                 // CREDITS EXHAUSTED — AI generates an in-context, in-language message
                 // from Riya telling the user warmly before they discover the wall themselves
                 if (newBal === 0) {
-                    log.info('*', `🪫 Credits hit 0 for ${senderId} — sending AI exhausted notification`);
+                    console.log(`🪫 Credits hit 0 for ${senderId} — sending AI exhausted notification`);
                     const msg = await generateCreditNotificationMsg('exhausted', conversationHistory, userName, senderId);
                     await new Promise(resolve => setTimeout(resolve, 2000)); // let main response land first
                     await sendInstagramMessage(senderId, msg, accessToken);
@@ -3161,13 +3218,13 @@ async function handleRequest(
 
                 // LOW CREDIT WARNING — gentle heads-up so user isn't blindsided
                 else if (newBal === LOW_CREDIT_WARNING_THRESHOLD) {
-                    log.info('*', `⚠️ Low credits (${newBal}) for ${senderId} — sending AI low-credit warning`);
+                    console.log(`⚠️ Low credits (${newBal}) for ${senderId} — sending AI low-credit warning`);
                     const msg = await generateCreditNotificationMsg('low', conversationHistory, userName, senderId);
                     await new Promise(resolve => setTimeout(resolve, 2000)); // let main response land first
                     await sendInstagramMessage(senderId, msg, accessToken);
                     logPaymentEvent(supabase, senderId, 'low_credit_warning', { balance: newBal }).catch(() => { });
                 }
-            }).catch(e => log.error('*', '❌ Credit deduction failed:', e));
+            }).catch(e => console.error('❌ Credit deduction failed:', e));
         }
 
         // =======================================
@@ -3177,7 +3234,7 @@ async function handleRequest(
         const messagesSinceSummary = newTotalMessages - (existingSummary?.messages_summarized || 0);
 
         if (newTotalMessages > SUMMARIZE_THRESHOLD && messagesSinceSummary > RECENT_MESSAGES_LIMIT) {
-            log.info('*', `🔄 Summary update needed: ${messagesSinceSummary} new messages since last summary`);
+            console.log(`🔄 Summary update needed: ${messagesSinceSummary} new messages since last summary`);
 
             // Run summarization asynchronously (don't await)
             (async () => {
@@ -3186,11 +3243,11 @@ async function handleRequest(
                     const endIndex = newTotalMessages - RECENT_MESSAGES_LIMIT - 1;
 
                     if (endIndex <= startIndex) {
-                        log.info('*', "⏭️ Not enough messages to summarize yet");
+                        console.log("⏭️ Not enough messages to summarize yet");
                         return;
                     }
 
-                    log.info('*', `📚 Fetching messages ${startIndex} to ${endIndex} for summarization...`);
+                    console.log(`📚 Fetching messages ${startIndex} to ${endIndex} for summarization...`);
 
                     const { data: msgsToSummarize, error: fetchError } = await supabase
                         .from('riya_conversations')
@@ -3201,11 +3258,11 @@ async function handleRequest(
                         .range(startIndex, endIndex);
 
                     if (fetchError || !msgsToSummarize || msgsToSummarize.length === 0) {
-                        log.error('*', "Error fetching messages for summary:", fetchError);
+                        console.error("Error fetching messages for summary:", fetchError);
                         return;
                     }
 
-                    log.info('*', `📝 Summarizing ${msgsToSummarize.length} messages...`);
+                    console.log(`📝 Summarizing ${msgsToSummarize.length} messages...`);
 
                     const summaryGenAI = new GoogleGenerativeAI(getKeyForUser(senderId));
                     const newSummary = await generateConversationSummary(
@@ -3227,12 +3284,12 @@ async function handleRequest(
                         }, { onConflict: 'instagram_user_id' });
 
                     if (upsertError) {
-                        log.error(senderId, '❌ Error saving summary:', upsertError);
+                        console.error("Error saving summary:", upsertError);
                     } else {
-                        log.info(senderId, `✅ Summary saved! Covers ${newTotalMessages - RECENT_MESSAGES_LIMIT} messages`);
+                        console.log(`✅ Summary saved! Covers ${newTotalMessages - RECENT_MESSAGES_LIMIT} messages`);
                     }
                 } catch (summaryError) {
-                    log.error(senderId, '❌ Summary generation failed:', summaryError);
+                    console.error("Summary generation failed:", summaryError);
                 }
             })();
         }
@@ -3248,7 +3305,7 @@ async function handleRequest(
         const messagesSinceFactsExtraction = newLifetimeCount - factsExtractedAtMsg;
 
         if (messagesSinceFactsExtraction >= FACTS_EXTRACT_THRESHOLD) {
-            log.info(senderId, `🧠 Triggering facts extraction (${messagesSinceFactsExtraction} msgs since last extraction)`);
+            console.log(`🧠 Triggering facts extraction for ${senderId} (${messagesSinceFactsExtraction} msgs since last extraction)`);
             (async () => {
                 try {
                     // Re-fetch the latest 25 messages as the extraction window
@@ -3261,7 +3318,7 @@ async function handleRequest(
                         .limit(FACTS_EXTRACT_THRESHOLD);
 
                     if (!factsMessages || factsMessages.length === 0) {
-                        log.info(senderId, '🧠 Facts: no messages fetched, skipping');
+                        console.log('🧠 Facts: no messages fetched, skipping');
                         return;
                     }
 
@@ -3276,13 +3333,13 @@ async function handleRequest(
                         existingSummary?.summary || null   // ← historical summary for richer context
                     );
                 } catch (factsErr) {
-                    log.error(senderId, '❌ Facts trigger failed (non-fatal):', factsErr);
+                    console.error('❌ Facts trigger failed (non-fatal):', factsErr);
                 }
             })();
         }
 
     } catch (error) {
-        log.error(senderId, '❌ handleRequest error:', error);
+        console.error('\u274c handleRequest error:', error);
         // Bubble up to debounceAndProcess() which marks pending rows as 'error'
         throw error;
     }
