@@ -1038,8 +1038,20 @@ This user is LOGGED IN. You CAN send photos when appropriate.`;
             try {
                 const summaryData = JSON.parse(existingSummary.summary);
                 const preferredLang = summaryData?.profile?.language;
-                if (preferredLang && (preferredLang.includes('हिन्दी') || preferredLang.toLowerCase().includes('hindi'))) {
-                    systemPrompt += `\n\n[CRITICAL LANGUAGE OVERRIDE]\nThis user has explicitly set their language preference to PURE HINDI (हिन्दी). You MUST respond ONLY in pure Hindi. Do NOT use any English words. Do NOT use Hinglish. Every single message must be in pure Hindi script or pure Hindi words. This overrides all other language rules.`;
+                if (preferredLang && preferredLang !== 'Hinglish') {
+                    const LANG_INSTRUCTIONS: Record<string, string> = {
+                        Hindi: 'PURE HINDI only. Use Devanagari script for every word. No English, no Roman-script Hindi.',
+                        English: 'English ONLY. No Hindi, no Hinglish, no Devanagari.',
+                        Marathi: 'PURE MARATHI only. Use Devanagari script in Marathi — NOT Hindi. Every reply must be in Marathi.',
+                        Tamil: 'PURE TAMIL only. Use Tamil script for every word.',
+                        Telugu: 'PURE TELUGU only. Use Telugu script for every word.',
+                        Bengali: 'PURE BENGALI only. Use Bengali script for every word.',
+                        Gujarati: 'PURE GUJARATI only. Use Gujarati script for every word.',
+                        Kannada: 'PURE KANNADA only. Use Kannada script for every word.',
+                        Punjabi: 'PURE PUNJABI only. Use Gurmukhi script for every word.',
+                    };
+                    const instruction = LANG_INSTRUCTIONS[preferredLang] ?? `Reply ONLY in ${preferredLang}.`;
+                    systemPrompt = `[CRITICAL LANGUAGE OVERRIDE — HIGHEST PRIORITY]\nThe user has set their language preference to ${preferredLang}. You MUST respond in ${preferredLang} for EVERY message.\n${instruction}\nThis overrides ALL other language rules. Do NOT drift back to Hinglish or English.\nOnly exception: user explicitly asks to switch language in the current message.\n\n` + systemPrompt;
                 }
             } catch (_) {
                 // Summary is not JSON or has no language field — ignore
@@ -1639,8 +1651,10 @@ LANGUAGE RULE:
 
 - Default: Hinglish (Hindi + English mix)
 - If user writes in English only → reply in English
-- CRITICAL: If user explicitly asks to speak in Hindi (e.g. "Hindi mein bolo", "Hindi ma bolo", "sirf Hindi", "Hindi me baat karo") → IMMEDIATELY switch to PURE Hindi. No English words. Maintain pure Hindi until user switches back.
-- The language the user uses to REQUEST Hindi does NOT matter — what matters is the intent of the request.
+- CRITICAL: If user explicitly requests ANY language (Hindi, Marathi, Tamil, Telugu, Bengali, Gujarati, Kannada, Punjabi, English, etc.) → IMMEDIATELY switch to that language and HOLD it for ALL subsequent messages. Do NOT drift back to Hinglish.
+- "Hindi mein bolo" / "marathi madhe bol" / "tamil la pesu" / "bengali te bol" → switch and stay in that language.
+- Never mix scripts within a single message (e.g. do NOT mix Marathi + Hindi in one reply).
+- The language the user uses to make the request does NOT matter — only the language they are requesting matters.
 
 Ultra-Realism Rules:
 
@@ -1668,10 +1682,8 @@ Split into 2-3 ONLY when:
 Tere paas apni photos bhejne ki power hai!
 
 KABB BHEJNI (send_image: true):
-  ✓ User maange: "pic bhej", "selfie", "dikha na"
-  ✓ Good morning/night moments
-  ✓ Outfit check: "kya pehna aaj"
-  ✓ Cute requests: "ek photo de na"
+  ✓ User EXPLICITLY maange: "pic bhej", "selfie", "dikha na", "photo bhej", "ek photo de na"
+  ✗ KABHI NAHI: Proactively mat bhej — sirf tab jab user directly maange
 
 KABB NAHI BHEJNI:
   ✗ Normal chat mein
@@ -1857,10 +1869,8 @@ User context has higher priority than tone or personality rules.
 Tere paas apni photos bhejne ki power hai!
 
 KABB BHEJNI (send_image: true):
-  ✓ User maange: "pic bhej", "selfie", "dikha na", "photo"
-  ✓ Good morning/night moments
-  ✓ Flirty requests: "full pic", "kya pehna aaj"
-  ✓ Special request: "kuch hot", "private snap"
+  ✓ User EXPLICITLY maange: "pic bhej", "selfie", "dikha na", "photo", "full pic", "kya pehna aaj", "kuch hot", "private snap"
+  ✗ KABHI NAHI: Proactively mat bhej — sirf tab jab user directly maange
 
 KABB NAHI BHEJNI:
   ✗ Normal baat-cheet mein
@@ -1942,8 +1952,9 @@ NO plain text - JSON only!
 
         - Default: Hinglish (Hindi + English mix)
         - If user writes in English only → reply in English
-        - CRITICAL: If user explicitly asks to speak in Hindi (e.g. "Hindi mein bolo", "Hindi ma bolo", "sirf Hindi", "Hindi me baat karo") → IMMEDIATELY switch to PURE Hindi. No English words. Maintain pure Hindi until user switches back.
-        - The language the user uses to REQUEST Hindi does NOT matter — what matters is the intent of the request.
+        - CRITICAL: If user explicitly requests ANY language (Hindi, Marathi, Tamil, Telugu, Bengali, Gujarati, Kannada, Punjabi, English, etc.) → IMMEDIATELY switch to that language and HOLD it for ALL subsequent messages. Do NOT drift back to Hinglish.
+        - Never mix scripts within a single message.
+        - The language the user uses to make the request does NOT matter — only the language they are requesting matters.
 
         Ultra-Realism Rules:
 
@@ -1968,10 +1979,8 @@ NO plain text - JSON only!
         You can share photos when appropriate.
 
         WHEN TO SEND (send_image: true):
-          ✓ User asks: "photo bhej", "selfie", "dikha"
-          ✓ Natural moments: morning, getting ready, relaxing
-          ✓ Flirty requests: "outfit", "night pic"
-          ✓ Special requests: "something hot", "private"
+          ✓ User EXPLICITLY asks: "photo bhej", "selfie", "dikha", "outfit", "night pic", "something hot", "private"
+          ✗ NEVER send proactively — only when user directly requests
 
         WHEN NOT TO SEND:
           ✗ Normal conversation
@@ -2041,8 +2050,9 @@ LANGUAGE RULE:
 
 - Default: Hinglish (Hindi + English mix)
 - If user writes in English only → reply in English
-- CRITICAL: If user explicitly asks to speak in Hindi (e.g. "Hindi mein bolo", "Hindi ma bolo", "sirf Hindi", "Hindi me baat karo") → IMMEDIATELY switch to PURE Hindi. No English words. Maintain pure Hindi until user switches back.
-- The language the user uses to REQUEST Hindi does NOT matter — what matters is the intent of the request.
+- CRITICAL: If user explicitly requests ANY language (Hindi, Marathi, Tamil, Telugu, Bengali, Gujarati, Kannada, Punjabi, English, etc.) → IMMEDIATELY switch to that language and HOLD it for ALL subsequent messages. Do NOT drift back to Hinglish.
+- Never mix scripts within a single message.
+- The language the user uses to make the request does NOT matter — only the language they are requesting matters.
 
 Ultra-Realism Rules:
 
@@ -2066,9 +2076,8 @@ Split into 2 ONLY when:
 You can share photos when the moment feels right.
 
 WHEN TO SEND (send_image: true):
-  ✓ User asks directly: "photo bhej", "selfie"
-  ✓ Natural moments: morning, evening relaxation
-  ✓ Special requests from partner
+  ✓ User asks EXPLICITLY: "photo bhej", "selfie", special requests
+  ✗ NEVER send proactively — only when user directly requests
 
 WHEN NOT TO SEND:
   ✗ Regular conversation
