@@ -1561,21 +1561,20 @@ async function generateAndSendVoiceNote(
     try {
         const voice = (istHour >= 22 || istHour <= 4) ? TTS_VOICE_NIGHT : TTS_VOICE_DAY;
         const ttsPrompt = buildRiyaTTSPrompt(preferredLang, istHour);
+        // TTS models do NOT support systemInstruction — prepend persona into the text content directly.
+        const ttsInput = `${ttsPrompt}\n\n${text}`;
+
+        const makeTtsBody = () => JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: ttsInput }] }],
+            generationConfig: {
+                responseModalities: ['AUDIO'],
+                speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } },
+            },
+        });
 
         const ttsRes1 = await fetch(
             `https://generativelanguage.googleapis.com/v1beta/models/${TTS_MODEL}:generateContent?key=${apiKey}`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    contents: [{ parts: [{ text }] }],
-                    systemInstruction: { parts: [{ text: ttsPrompt }] },
-                    generationConfig: {
-                        responseModalities: ['AUDIO'],
-                        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } },
-                    },
-                }),
-            }
+            { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: makeTtsBody() }
         );
 
         // Retry once on 500/503 (preview model is occasionally flaky)
@@ -1585,18 +1584,7 @@ async function generateAndSendVoiceNote(
             await new Promise(r => setTimeout(r, 1500));
             ttsRes2 = await fetch(
                 `https://generativelanguage.googleapis.com/v1beta/models/${TTS_MODEL}:generateContent?key=${apiKey}`,
-                {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{ parts: [{ text }] }],
-                        systemInstruction: { parts: [{ text: ttsPrompt }] },
-                        generationConfig: {
-                            responseModalities: ['AUDIO'],
-                            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } },
-                        },
-                    }),
-                }
+                { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: makeTtsBody() }
             );
         }
 
