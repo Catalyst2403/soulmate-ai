@@ -2286,7 +2286,11 @@ serve(async (req) => {
                             const audioRes = await fetch(audioUrl, { headers: { 'User-Agent': 'RiyaBot/1.0' } });
                             if (audioRes.ok) {
                                 const contentLength = parseInt(audioRes.headers.get('content-length') || '0', 10);
-                                const mimeType = audioRes.headers.get('content-type') || 'audio/mp4';
+                                // Instagram CDN sometimes serves audio/mp4 voice notes with video/mp4 Content-Type.
+                                // Force to audio/mp4 — Gemini treats video/* as video and fails with "0 Frames found".
+                                const rawMime = audioRes.headers.get('content-type')?.split(';')[0] || 'audio/mp4';
+                                const mimeType = rawMime.startsWith('video/') ? 'audio/mp4' : rawMime;
+                                log.info('*', `🎤 Audio MIME: raw=${rawMime} → using=${mimeType}`);
                                 if (contentLength > TTS_MAX_AUDIO_INLINE_BYTES) {
                                     log.warn('*', `⚠️ Audio too large (${(contentLength / 1024 / 1024).toFixed(1)}MB) — skipping inline`);
                                     descs.push('[User sent a voice message]');
@@ -3027,7 +3031,25 @@ async function handleRequest(
                     { text: messageText || '[User sent a voice note. Process it natively and respond naturally as Riya.]' },
                 ]
                 : messageText;
-            result = await chat.sendMessage(messageParts);
+            try {
+                result = await chat.sendMessage(messageParts);
+            } catch (audioErr: any) {
+                // If Gemini rejects the audio (400 / "video is corrupted" / "0 Frames"),
+                // retry with text-only — don't crash the handler over a bad audio format.
+                const audioErrMsg = audioErr instanceof Error ? audioErr.message : String(audioErr);
+                const isAudioBadFormat = inlineAudio && (
+                    audioErrMsg.includes('400') ||
+                    audioErrMsg.toLowerCase().includes('corrupted') ||
+                    audioErrMsg.toLowerCase().includes('0 frames') ||
+                    audioErrMsg.toLowerCase().includes('video metadata')
+                );
+                if (isAudioBadFormat) {
+                    log.warn(senderId, `⚠️ Audio rejected by Gemini (${audioErrMsg.slice(0, 80)}) — retrying text-only`);
+                    result = await chat.sendMessage(messageText);
+                } else {
+                    throw audioErr; // not an audio issue — propagate to outer catch
+                }
+            }
         } catch (primaryErr) {
             const errMsg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
             const isQuota = errMsg.includes('429') || errMsg.includes('quota') || errMsg.includes('Resource has been exhausted');
@@ -3096,8 +3118,25 @@ async function handleRequest(
                     { text: messageText || '[User sent a voice note. Process it natively and respond naturally as Riya.]' },
                 ]
                 : messageText;
-            result = await fallbackChat.sendMessage(fallbackParts);
-            log.info('*', `✅ Fallback model (${MODEL_FALLBACK}) responded successfully`);
+            try {
+                result = await fallbackChat.sendMessage(fallbackParts);
+                log.info('*', `✅ Fallback model (${MODEL_FALLBACK}) responded successfully`);
+            } catch (fbAudioErr: any) {
+                const fbErrMsg = fbAudioErr instanceof Error ? fbAudioErr.message : String(fbAudioErr);
+                const isFbAudioBad = inlineAudio && (
+                    fbErrMsg.includes('400') ||
+                    fbErrMsg.toLowerCase().includes('corrupted') ||
+                    fbErrMsg.toLowerCase().includes('0 frames') ||
+                    fbErrMsg.toLowerCase().includes('video metadata')
+                );
+                if (isFbAudioBad) {
+                    log.warn(senderId, `⚠️ Fallback: audio rejected — retrying text-only`);
+                    result = await fallbackChat.sendMessage(messageText);
+                    log.info('*', `✅ Fallback model (${MODEL_FALLBACK}) responded (text-only retry)`);
+                } else {
+                    throw fbAudioErr;
+                }
+            }
         }
         log.info('*', `📌 Active model used: ${activeModel}`);
 
