@@ -1020,7 +1020,7 @@ JSON array, 1-3 message objects.
 - Language switch (first msg only, when user requests a new language): {"text":"...","lang":"<Language>"}
   Valid lang values: Hindi, Marathi, Bengali, Tamil, Telugu, Gujarati, Kannada, Malayalam, Punjabi, Odia, Urdu, Assamese, English, Hinglish
 - Voice note: {"text":"<reply>","send_voice":true}
-  send_voice:true ONLY when: user says voice note/sunao/bolo/awaaz/say something, OR user doubts realness (bot/fake/real hai/prove). NEVER during sales or payment.`;
+  send_voice:true ONLY when: user wants hear or asks for voice note, something, OR user doubts realness (bot/fake/real hai/prove). NEVER during sales or payment.`;
 }
 
 // =======================================
@@ -1262,7 +1262,7 @@ JSON array, 1-3 message objects.
 - Language switch (first msg only, when user requests a new language): {"text":"...","lang":"<Language>"}
   Valid lang values: Hindi, Marathi, Bengali, Tamil, Telugu, Gujarati, Kannada, Malayalam, Punjabi, Odia, Urdu, Assamese, English, Hinglish
 - Voice note: {"text":"<reply>","send_voice":true}
-  send_voice:true ONLY when: user says voice note/sunao/bolo/awaaz/say something, OR user doubts realness (bot/fake/real hai/prove). NEVER during sales or payment.`;
+  send_voice:true ONLY when: user wants hear or asks for voice note, OR user doubts realness (bot/fake/real hai/prove). NEVER during sales or payment.`;
 }
 
 // =======================================
@@ -2288,14 +2288,14 @@ serve(async (req) => {
                                 const contentLength = parseInt(audioRes.headers.get('content-length') || '0', 10);
                                 const mimeType = audioRes.headers.get('content-type') || 'audio/mp4';
                                 if (contentLength > TTS_MAX_AUDIO_INLINE_BYTES) {
-                                    log.warn('*', `⚠️ Audio too large (${(contentLength/1024/1024).toFixed(1)}MB) — skipping inline`);
+                                    log.warn('*', `⚠️ Audio too large (${(contentLength / 1024 / 1024).toFixed(1)}MB) — skipping inline`);
                                     descs.push('[User sent a voice message]');
                                 } else {
                                     const arrayBuf = await audioRes.arrayBuffer();
                                     const audioB64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuf)));
                                     // Store inline audio for injection into main Gemini call
                                     (messaging as any)._inlineAudio = { mimeType: mimeType.split(';')[0], data: audioB64 };
-                                    log.info('*', `🎤 Inbound voice note: ${(arrayBuf.byteLength/1024).toFixed(0)}KB, type=${mimeType}`);
+                                    log.info('*', `🎤 Inbound voice note: ${(arrayBuf.byteLength / 1024).toFixed(0)}KB, type=${mimeType}`);
                                     descs.push('[User sent a voice note — process it natively]');
                                 }
                             } else {
@@ -3025,7 +3025,7 @@ async function handleRequest(
                 ? [
                     { inlineData: { mimeType: inlineAudio.mimeType, data: inlineAudio.data } },
                     { text: messageText || '[User sent a voice note. Process it natively and respond naturally as Riya.]' },
-                  ]
+                ]
                 : messageText;
             result = await chat.sendMessage(messageParts);
         } catch (primaryErr) {
@@ -3094,7 +3094,7 @@ async function handleRequest(
                 ? [
                     { inlineData: { mimeType: inlineAudio.mimeType, data: inlineAudio.data } },
                     { text: messageText || '[User sent a voice note. Process it natively and respond naturally as Riya.]' },
-                  ]
+                ]
                 : messageText;
             result = await fallbackChat.sendMessage(fallbackParts);
             log.info('*', `✅ Fallback model (${MODEL_FALLBACK}) responded successfully`);
@@ -3332,8 +3332,16 @@ async function handleRequest(
             }
         }
 
+        // Voice-in → voice-out: if user sent a voice note, Riya always replies in voice.
+        // Exception: sales window / credits exhausted — payment messages must stay as text.
+        if (inlineAudio && !isInSalesWindow && !creditsExhausted && !hasLLMVoiceTrigger) {
+            voiceTexts.push(...responseMessages.map(m => m.text));
+            textOnlyMsgs.length = 0;
+            log.info(senderId, '🎤 Voice-in → voice-out mode');
+        }
+
         // Spontaneous trigger: fires on text-only responses when conditions match
-        if (!hasLLMVoiceTrigger && !isInSalesWindow && !creditsExhausted) {
+        if (!hasLLMVoiceTrigger && !inlineAudio && !isInSalesWindow && !creditsExhausted) {
             const combinedForTrigger = responseMessages.map(m => m.text).join(' ');
             if (shouldSendSpontaneousVoice(combinedForTrigger, currentISTHour, isInSalesWindow, creditsExhausted)) {
                 // Voice all messages as one note
@@ -3436,7 +3444,7 @@ async function handleRequest(
         if (voiceTexts.length > 0) {
             const combinedVoiceText = voiceTexts.join('\n\n'); // \n\n = natural pause in Gemini TTS
             log.info(senderId, `🎤 Generating voice note: ${combinedVoiceText.slice(0, 80)}...`);
-            await generateAndSendVoiceNote(
+            const voiceSent = await generateAndSendVoiceNote(
                 combinedVoiceText,
                 senderId,
                 preferredLang,
@@ -3445,6 +3453,15 @@ async function handleRequest(
                 accessToken,
                 ttsApiKey,
             );
+            // Increment voice note counter on success (fire-and-forget)
+            if (voiceSent) {
+                supabase
+                    .from('riya_instagram_users')
+                    .update({ total_voice_notes_sent: (user.total_voice_notes_sent || 0) + 1 })
+                    .eq('instagram_user_id', senderId)
+                    .then(() => log.info(senderId, `📊 Voice note count: ${(user.total_voice_notes_sent || 0) + 1}`))
+                    .catch(() => { });
+            }
         }
 
         // =======================================
