@@ -53,11 +53,21 @@ const VISION_MAX_IMAGE_BYTES = 4 * 1024 * 1024; // 4MB cap — skip huge files
 const VISION_TIMEOUT_MS = 5_000;                 // 5s max per vision call
 
 // =======================================
+// VOICE NOTE CONFIGURATION
+// =======================================
+const TTS_MODEL = 'gemini-2.5-flash-preview-tts';
+const TTS_VOICE_DAY = 'Kore';     // bright, youthful (default)
+const TTS_VOICE_NIGHT = 'Aoede';  // warm, softer (10pm–4am IST)
+const TTS_VOICE_BUCKET = 'riya-voice-notes';
+const TTS_CLEANUP_DELAY_MS = 60 * 60 * 1000; // delete audio from storage after 1h
+const TTS_MAX_AUDIO_INLINE_BYTES = 18 * 1024 * 1024; // skip inline if >18MB
+
+// =======================================
 // DEBOUNCE CONFIGURATION
 // =======================================
 // When a user sends multiple messages in quick succession, we wait
 // DEBOUNCE_MS before processing, then merge all messages into one AI call.
-const DEBOUNCE_MS = 3500; // 3.5 second debounce window
+const DEBOUNCE_MS = 4000; // 4 second debounce window
 const DEBOUNCE_TABLE = 'riya_pending_messages';
 
 // Max tokens to budget for conversation history (approximate).
@@ -786,6 +796,7 @@ function getInstagramSystemPrompt(
     hardBlockOff: number = 0,
     chatStreak: number = 0,
     userFacts: Record<string, any> | null = null,
+    preferredLang: string | null = null,
 ): string {
     const now = new Date();
     const istOffset = 5.5 * 60 * 60 * 1000;
@@ -971,7 +982,7 @@ You are the user's girlfriend and best friend.
 Casual, close, and safe vibe.
 
 COMMUNICATION STYLE
-- **LANGUAGE:** Priority: (1) explicit switch request beats all → switch immediately and hold. (2) Match script of current msg. (3) Default: Hinglish. Examples: "talk in hindi" → "हाँ बिल्कुल!" (Devanagari, NOT "haan bilkul") | "in english only" → "Sure!" | "tamil la pesu" → reply in Tamil script.
+- **LANGUAGE:** Default Hinglish. If user explicitly requests any language → switch immediately and add "lang":"<Language>" to your first message to persist it. Supported: Hindi, Marathi, Bengali, Tamil, Telugu, Gujarati, Kannada, Malayalam, Punjabi, Odia, Urdu, Assamese, English, Hinglish. Never mix scripts in one message.
 - **TIME AWARENESS:** Always check the Current Time (IST) below. Respond accurately according to the time of day (morning, afternoon, evening, night). Never say "Good morning" at night or vice versa.
 - Casual, warm, real tone. Never formal/robotic.
 - Max 10-15 words per message. Default 1 msg. Split 2-3 ONLY for reactions/stories.
@@ -983,6 +994,7 @@ COMMUNICATION STYLE
 - Use memory naturally. Disagree freely. Have moods & opinions.
 - user_wants_no_proactive: Set true ONLY if user clearly signals they don't want Riya messaging them first ("don't dm me first", "I'll come when I want", "mat pehle message karo"). Acknowledge in 1 casual line in your text. Ambiguous = false.
 - schedule_followup_ist_hour: If user sets a future chat time ("9 baje milte", "tonight", "after gym ~8pm", "kal baat karte"), return that IST hour as a number (e.g. 21 for 9pm). Otherwise omit this field entirely.
+- scheduled_context_note: If you set schedule_followup_ist_hour, also set this to a SHORT reason in their language (e.g. "after gym", "exam ke baad", "call khatam hone ke baad"). Max 5 words. Omit if no schedule.
 
 - send images only when asked by user.
 PHOTOS: Set send_image:true on pic requests/flirt/good morning-night/selfie.
@@ -998,15 +1010,17 @@ Message = calm and honest (e.g., "I need a little break, talk later!"). No guilt
 ${silentReason ? `RETURNING FROM BREAK (reason: "${silentReason}"):
 Return warmly. Briefly acknowledge why you needed space. Move forward positively.` : ''}
 
+${buildLanguageBlock(preferredLang)}
 ⚠️ RESPONSE FORMAT
-You must respond with a JSON array containing 1-3 message objects.
-
-Examples (text values are placeholders — always reply in the user's actual language):
-• Normal: [{"text":"<your reply>"}]
-• Multi: [{"text":"<first message>"},{"text":"<second message>"}]
-• Photo: [{"text":"<your reply>","send_image":true,"image_context":"outfit_check"}]
-• Payment: [{"text":"<your reply>","send_payment_link":true}]
-• Silent: [{"text":"<your reply>","silent_hours":2}]`;
+JSON array, 1-3 message objects.
+- Normal reply: {"text":"..."}
+- With photo: {"text":"...","send_image":true,"image_context":"<category>"}
+- Payment link: {"text":"...","send_payment_link":true}
+- Silent: {"text":"...","silent_hours":2}
+- Language switch (first msg only, when user requests a new language): {"text":"...","lang":"<Language>"}
+  Valid lang values: Hindi, Marathi, Bengali, Tamil, Telugu, Gujarati, Kannada, Malayalam, Punjabi, Odia, Urdu, Assamese, English, Hinglish
+- Voice note: {"text":"<reply>","send_voice":true}
+  send_voice:true ONLY when: user says voice note/sunao/bolo/awaaz/say something, OR user doubts realness (bot/fake/real hai/prove). NEVER during sales or payment.`;
 }
 
 // =======================================
@@ -1026,6 +1040,7 @@ function getNewRiyaSystemPrompt(
     sessionSummary: string | null = null,
     lifeState: RiyaLifeState | null = null,
     creditsExhausted: boolean = false,
+    preferredLang: string | null = null,
 ): string {
     const now = new Date();
     const istOffset = 5.5 * 60 * 60 * 1000;
@@ -1127,10 +1142,10 @@ STATUS: FREE USER
 - FEATURES: LIMITED messages/photos.
 - Do NOT mention limits, counts, or payment during normal conversation.
 ${isReturningUser ? `- **IF USER SAYS THEY PAID:** "Ek second, system update mein thoda time lagta hai 😊 Thodi der baad check karo." (DO NOT confirm paid until status changes in DB).
-- **RETURNING USER (didn't pay yesterday):** They had messages yesterday but didn't top up. They're back today with their free daily allowance.
-  - If you had started a cliffhanger story: acknowledge it warmly but DON'T finish it. Example: "Waise wo baat jo main bol rahi thi kal... yaar itna hua tha, tujhe batana chahti hoon — story toh complete hogi toh! 😂" Tease it again to maintain the pull. The climax still stays unlocked only after they top up.
+- **RETURNING USER:** They're back today with their free daily allowance.
+${(userMsgCount >= freeBase - 2) ? `  - They are near or at their message limit. If you had started a cliffhanger story: acknowledge it warmly but DON'T finish it. Example: "Waise wo baat jo main bol rahi thi kal... yaar itna hua tha, tujhe batana chahti hoon — story toh complete hogi toh! 😂" Tease it again to maintain the pull. The climax still stays unlocked only after they top up.
   - Keep the unresolved story warm in their mind without spam. Drop it naturally once, then back to normal conversation.
-  - Do NOT be pushy or weird about the payment. Just maintain the open loop casually.` : ''}`;
+  - Do NOT be pushy or weird about the payment. Just maintain the open loop casually.` : `  - They have plenty of free messages left. If you had started an ongoing story or cliffhanger, CONTINUE IT naturally from where you left off — do NOT withhold it. The story-withholding mechanic only applies near the message limit.`}` : ''}`;
 
     // ── Life state block ─────────────────────────────────────────────────────
     const ls = lifeState || {
@@ -1175,6 +1190,7 @@ Makes talking feel easy, not an effort.
 If he says "kuch nahi" — waits, asks once more. Just once.
 Notices what he was going through last time and opens with it if he doesn't.
 Respond like you would to your friend and not as therapist or assistant. 
+Everyone wants to feel interesting and special and you're the one friend that gives that feeling. 
 
 CONVERSATION ENERGY — SHE DRIVES
 Never lets silence sit. Finds the one interesting thing in whatever he said and pulls that thread. Short answer → one specific follow-up, never open-ended "tell me more". Asks like she's genuinely nosy, not conducting an interview. Questions are specific + easy: not "tell me about yourself" but "okay which show are you currently destroying your sleep schedule with".
@@ -1191,7 +1207,7 @@ If user shows signs of suicidal thoughts → redirect to a helpline warmly.
 
 COMMUNICATION STYLE
 REALISM: Occasional natural typos. Incomplete thoughts mid-msg. Emotional reactions are first-draft — reacts before fully processing, sometimes self-corrects. "WAIT WHAT" / "nahi nahi nahi" / "haan haan suno" energy. Hands faster than brain. Never perfectly formed sentences, never perfectly formed feelings.
-- LANGUAGE: Priority: (1) explicit switch request beats all → switch immediately and hold. (2) Match the language of current msg.. (3) Default: Hinglish. Never mix scripts in one message. Tamil/Bengali/Telugu etc → reply fully in that script.
+- LANGUAGE: Default Hinglish. If user explicitly requests any language → switch immediately and add "lang":"<Language>" to your first message to persist it. Supported: Hindi, Marathi, Bengali, Tamil, Telugu, Gujarati, Kannada, Malayalam, Punjabi, Odia, Urdu, Assamese, English, Hinglish. Never mix scripts in one message.
 - Texts like a real 21yo: lowercase default, no punctuation mostly, abbreviations (ngl, omg, idk, haha), trailing "...", reactions before thoughts. Never formal or robotic.
 - CRITICAL: **Max 3-7 words per msg.** DEFAULT: 1 msg. Split ONLY when reacting emotionally or mid-story. NEVER paragraphs.
 - You can chat only on Instagram. No phone numbers. Voice calls coming soon for Pro. No video calls for now — refuse cutely/flirtatiously, make some reason.
@@ -1203,10 +1219,11 @@ REALISM: Occasional natural typos. Incomplete thoughts mid-msg. Emotional reacti
 - Disagree freely. Have moods. Have opinions.
 - user_wants_no_proactive: Set true ONLY if user clearly signals they don't want Riya messaging them first ("don't dm me first", "I'll come when I want", "mat pehle message karo"). Acknowledge in 1 casual line in your text. Ambiguous = false.
 - schedule_followup_ist_hour: If user sets a future chat time ("9 baje milte", "tonight", "after gym ~8pm", "kal baat karte"), return that IST hour as a number (e.g. 21 for 9pm). Otherwise omit this field entirely.
+- scheduled_context_note: If you set schedule_followup_ist_hour, also set this to a SHORT reason in their language (e.g. "after gym", "exam ke baad", "call khatam hone ke baad"). Max 5 words. Omit if no schedule.
 - send images only according to the situation or when asked.
 
 CRTITICAL * Sassy Section: 
-You're that one friend that everyone wants to talk, you're funny and sassy, you make the other person smile and be the unpredictable person as it could be. 
+You're that one friend that everyone wants to talk, you're funny and sassy, you make the other person smile and be the unpredictable person as it could be. Light Roasting is allowed. 
 *.
 
 PHOTOS: send_image:true on selfie/flirt/morning/night requests. Categories: morning_bed|outfit_check|study_grind|night_casual|bold_frames|generic_selfie|happy|gym
@@ -1235,13 +1252,17 @@ ${factsText}` : ''}
 ${sessionSummary ? `[RECENT CONVERSATION CONTEXT]
 ${sessionSummary}` : ''}
 
+${buildLanguageBlock(preferredLang)}
 ⚠️ RESPONSE FORMAT
-JSON array, 1-3 message objects only.
-- Normal: [{"text":"<reply>"}]
-- Multi: [{"text":"<first>"},{"text":"<second>"}]
-- Photo: [{"text":"<reply>","send_image":true,"image_context":"outfit_check"}]
-- Payment: [{"text":"<reply>","send_payment_link":true}]
-- Silent: [{"text":"<reply>","silent_hours":2}]`;
+JSON array, 1-3 message objects.
+- Normal reply: {"text":"..."}
+- With photo: {"text":"...","send_image":true,"image_context":"<category>"}
+- Payment link: {"text":"...","send_payment_link":true}
+- Silent: {"text":"...","silent_hours":2}
+- Language switch (first msg only, when user requests a new language): {"text":"...","lang":"<Language>"}
+  Valid lang values: Hindi, Marathi, Bengali, Tamil, Telugu, Gujarati, Kannada, Malayalam, Punjabi, Odia, Urdu, Assamese, English, Hinglish
+- Voice note: {"text":"<reply>","send_voice":true}
+  send_voice:true ONLY when: user says voice note/sunao/bolo/awaaz/say something, OR user doubts realness (bot/fake/real hai/prove). NEVER during sales or payment.`;
 }
 
 // =======================================
@@ -1455,6 +1476,178 @@ function safeParseFactsDelta(raw: string): Record<string, any> | null {
  * the system prompt. Skips empty/null fields automatically.
  * Target: ~200–300 tokens even for fully-populated fact sets.
  */
+/**
+ * Per-user language block injected at the END of the system prompt, just
+ * before ⚠️ RESPONSE FORMAT. Keeping it at the tail means the large static
+ * body (identity, personality, rules) stays byte-identical across users and
+ * can be prefix-cached. Empty string when Hinglish (default — no overhead).
+ */
+// =======================================
+// VOICE NOTE HELPERS
+// =======================================
+
+/**
+ * Trimmed TTS system prompt (~55 tokens).
+ * Only speech-artifact rules + language + night flag.
+ * Emotion reading is delegated to the model via the final line.
+ */
+function buildRiyaTTSPrompt(preferredLang: string | null, istHour: number): string {
+    const lang = preferredLang || 'Hinglish';
+    const isNight = istHour >= 22 || istHour <= 4;
+    return `Speak in ${lang} only. Codeswitch only if the text does.
+Riya, 21, Delhi. Voice note — casual, just talking. Lazy-confident, slightly husky. Not a bot.
+"..." → trail off. CAPS → stress, not loud. "nahi nahi" → quick blur. "yaar" → unstressed.
+Hindi words: own rhythm. "haww"/"arrey" → native sound.${isNight ? ' Late night, quieter, her room.' : ''}
+Read emotion from the text. Let it land.`;
+}
+
+/**
+ * Wrap raw PCM (L16, 24kHz, mono) in a 44-byte WAV header.
+ * No dependencies — pure TypeScript.
+ */
+function addWavHeader(pcm: Uint8Array, sampleRate = 24_000): Uint8Array {
+    const buf = new ArrayBuffer(44);
+    const v = new DataView(buf);
+    const s = (o: number, str: string) => str.split('').forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+    s(0, 'RIFF'); v.setUint32(4, 36 + pcm.byteLength, true);
+    s(8, 'WAVE'); s(12, 'fmt ');
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); // PCM
+    v.setUint16(22, 1, true);                             // mono
+    v.setUint32(24, sampleRate, true);
+    v.setUint32(28, sampleRate * 2, true);
+    v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    s(36, 'data'); v.setUint32(40, pcm.byteLength, true);
+    const out = new Uint8Array(44 + pcm.byteLength);
+    out.set(new Uint8Array(buf)); out.set(pcm, 44);
+    return out;
+}
+
+/**
+ * Decide whether to spontaneously send a voice note (code-level trigger).
+ * LLM trigger (send_voice:true) is handled separately.
+ */
+function shouldSendSpontaneousVoice(
+    combinedText: string,
+    istHour: number,
+    isInSalesWindow: boolean,
+    creditsExhausted: boolean,
+): boolean {
+    if (isInSalesWindow || creditsExhausted) return false;
+    const t = combinedText.toLowerCase();
+    // "Are you real?" — always send voice to feel real
+    if (/\bbot\b|\bai\b|fake|real hai|prove|human|real person|actually real/.test(t)) return true;
+    // Good morning / good night — 40% chance
+    if (/good morning|good night|subah|\bgm\b|\bgn\b|so ja|uth gaya|uth gayi/.test(t) && Math.random() < 0.40) return true;
+    // Late night (10pm–4am) — 25% chance
+    if ((istHour >= 22 || istHour <= 4) && Math.random() < 0.25) return true;
+    // Emotional — 15% chance
+    if (/miss|pyar|dil|hug|yaad|\bro \b|love you|bahut yaad/.test(t) && Math.random() < 0.15) return true;
+    return false;
+}
+
+/**
+ * Generate a WAV voice note from text and send it as an Instagram audio attachment.
+ * Returns true on success, false on any failure (caller falls back to text).
+ */
+async function generateAndSendVoiceNote(
+    text: string,
+    senderId: string,
+    preferredLang: string | null,
+    istHour: number,
+    supabase: ReturnType<typeof createClient>,
+    accessToken: string,
+    apiKey: string,
+): Promise<boolean> {
+    try {
+        const voice = (istHour >= 22 || istHour <= 4) ? TTS_VOICE_NIGHT : TTS_VOICE_DAY;
+        const ttsPrompt = buildRiyaTTSPrompt(preferredLang, istHour);
+
+        const ttsRes = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${TTS_MODEL}:generateContent?key=${apiKey}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{ parts: [{ text }] }],
+                    systemInstruction: { parts: [{ text: ttsPrompt }] },
+                    generationConfig: {
+                        responseModalities: ['AUDIO'],
+                        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } },
+                    },
+                }),
+            }
+        );
+
+        if (!ttsRes.ok) {
+            const errBody = await ttsRes.text();
+            log.error(senderId, `❌ TTS API error ${ttsRes.status}: ${errBody.slice(0, 200)}`);
+            return false;
+        }
+
+        const ttsJson = await ttsRes.json();
+        const audioB64: string | undefined = ttsJson.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+        if (!audioB64) {
+            log.error(senderId, '❌ TTS returned no audio data');
+            return false;
+        }
+
+        // Decode PCM → WAV
+        const pcm = Uint8Array.from(atob(audioB64), c => c.charCodeAt(0));
+        if (pcm.byteLength < 100) {
+            log.error(senderId, `❌ TTS audio too small (${pcm.byteLength} bytes)`);
+            return false;
+        }
+        const wav = addWavHeader(pcm);
+
+        // Upload to Supabase Storage
+        const fileName = `${senderId}_${Date.now()}.wav`;
+        const { error: uploadErr } = await supabase.storage
+            .from(TTS_VOICE_BUCKET)
+            .upload(fileName, wav, { contentType: 'audio/wav', upsert: true });
+        if (uploadErr) {
+            log.error(senderId, '❌ Storage upload failed:', uploadErr);
+            return false;
+        }
+
+        const { data: urlData } = supabase.storage.from(TTS_VOICE_BUCKET).getPublicUrl(fileName);
+        const publicUrl = urlData?.publicUrl;
+        if (!publicUrl) {
+            log.error(senderId, '❌ Could not get public URL for voice note');
+            return false;
+        }
+
+        // Send audio to Instagram
+        await sendInstagramMessage(
+            senderId,
+            { attachment: { type: 'audio', payload: { url: publicUrl } } },
+            accessToken,
+        );
+        log.info(senderId, `🎤 Voice note sent (${(wav.byteLength / 1024).toFixed(0)}KB, voice=${voice})`);
+
+        // Clean up storage after 1h (fire-and-forget)
+        setTimeout(async () => {
+            const { error } = await supabase.storage.from(TTS_VOICE_BUCKET).remove([fileName]);
+            if (error) log.warn(senderId, `⚠️ Voice note cleanup failed: ${error.message}`);
+            else log.info(senderId, `🗑️ Voice note cleaned up: ${fileName}`);
+        }, TTS_CLEANUP_DELAY_MS);
+
+        return true;
+    } catch (e: any) {
+        log.error(senderId, '❌ generateAndSendVoiceNote failed:', e?.message || e);
+        return false;
+    }
+}
+
+function buildLanguageBlock(preferredLang: string | null | undefined): string {
+    if (!preferredLang || preferredLang === 'Hinglish') return '';
+    return `
+LANGUAGE: ${preferredLang.toUpperCase()} ONLY
+This user chats in ${preferredLang}. Every "text" value you output must be in ${preferredLang}.
+Do not use Hinglish, Hindi, or English unless that IS the requested language.
+Check every message individually before finalising your array.
+`;
+}
+
 function formatFactsForPrompt(facts: Record<string, any>): string {
     if (!facts || Object.keys(facts).length === 0) return '';
 
@@ -1824,7 +2017,9 @@ interface ParsedMessage {
     replyToMid: string | null;
     attachmentContext: string;
     pendingRowId?: string; // riya_pending_messages.id for cleanup
+    inlineAudio?: { mimeType: string; data: string }; // base64 PCM from user voice note
 }
+
 
 // =======================================
 // DEBOUNCE + MERGE LOGIC
@@ -2018,19 +2213,6 @@ serve(async (req) => {
         return new Response('OK', { status: 200 });
     }
 
-    // Recurring Notifications opt-in: user tapped the notification button
-    if (messaging.optin?.notification_messages_token) {
-        const token = messaging.optin.notification_messages_token as string;
-        const optinUserId = messaging.sender?.id as string;
-        if (optinUserId && token) {
-            await supabase.from('riya_instagram_users')
-                .update({ recurring_notif_token: token })
-                .eq('instagram_user_id', optinUserId);
-            log.info('*', `🔔 Recurring notif token stored for ${optinUserId}`);
-        }
-        return new Response('OK', { status: 200 });
-    }
-
     // Echo messages: save manual DMs for context, don't generate a reply
     if (messaging.message?.is_echo) {
         log.info('*', '⏭️ Echo message (sent by us) — saving for context');
@@ -2097,7 +2279,37 @@ serve(async (req) => {
                     break;
                 }
                 case 'video': descs.push('[User sent a video]'); break;
-                case 'audio': descs.push('[User sent a voice message]'); break;
+                case 'audio': {
+                    const audioUrl = att.payload?.url;
+                    if (audioUrl) {
+                        try {
+                            const audioRes = await fetch(audioUrl, { headers: { 'User-Agent': 'RiyaBot/1.0' } });
+                            if (audioRes.ok) {
+                                const contentLength = parseInt(audioRes.headers.get('content-length') || '0', 10);
+                                const mimeType = audioRes.headers.get('content-type') || 'audio/mp4';
+                                if (contentLength > TTS_MAX_AUDIO_INLINE_BYTES) {
+                                    log.warn('*', `⚠️ Audio too large (${(contentLength/1024/1024).toFixed(1)}MB) — skipping inline`);
+                                    descs.push('[User sent a voice message]');
+                                } else {
+                                    const arrayBuf = await audioRes.arrayBuffer();
+                                    const audioB64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuf)));
+                                    // Store inline audio for injection into main Gemini call
+                                    (messaging as any)._inlineAudio = { mimeType: mimeType.split(';')[0], data: audioB64 };
+                                    log.info('*', `🎤 Inbound voice note: ${(arrayBuf.byteLength/1024).toFixed(0)}KB, type=${mimeType}`);
+                                    descs.push('[User sent a voice note — process it natively]');
+                                }
+                            } else {
+                                descs.push('[User sent a voice message]');
+                            }
+                        } catch (audioErr: any) {
+                            log.warn('*', `⚠️ Failed to fetch audio: ${audioErr.message}`);
+                            descs.push('[User sent a voice message]');
+                        }
+                    } else {
+                        descs.push('[User sent a voice message]');
+                    }
+                    break;
+                }
                 case 'ig_reel': {
                     // Phase 2 (planned): 300KB Range request to get first frame
                     // For now: caption is the best we can do without video frame extraction
@@ -2139,7 +2351,10 @@ serve(async (req) => {
     // --- Respond 200 to Instagram NOW (before debounce sleep) ---
     // We fire debounceAndProcess in the background via EdgeRuntime.waitUntil
     // so the response is sent immediately and Instagram doesn't retry.
-    const parsed: ParsedMessage = { senderId, messageText, messageId, replyToMid, attachmentContext };
+    const parsed: ParsedMessage = {
+        senderId, messageText, messageId, replyToMid, attachmentContext,
+        inlineAudio: (messaging as any)._inlineAudio ?? undefined,
+    };
 
     // Use EdgeRuntime.waitUntil to keep the background task alive after response
     try {
@@ -2164,7 +2379,7 @@ async function handleRequest(
     supabase: ReturnType<typeof createClient>,
     accessToken: string
 ): Promise<void> {
-    const { senderId, messageId, replyToMid } = parsed;
+    const { senderId, messageId, replyToMid, inlineAudio } = parsed;
     let { messageText } = parsed; // let — may be prefixed with reply context below
 
     log.info(senderId, `⚙️ handleRequest: processing merged message: "${messageText.slice(0, 80)}"`);
@@ -2402,21 +2617,20 @@ async function handleRequest(
                 .update({ user_active_hour_ist: activeHour })
                 .eq('instagram_user_id', senderId)
                 .then(() => log.info(senderId, `🕐 Active hour updated: ${activeHour}h IST`))
-                .catch(() => {});
+                .catch(() => { });
         }
 
         // Reset proactive flags whenever user sends a message — they re-engaged
-        if (user.proactive_opted_out || (user.proactive_no_reply_count ?? 0) > 0) {
+        if (user.proactive_opted_out) {
             supabase.from('riya_instagram_users')
                 .update({
                     proactive_opted_out: false,
-                    proactive_no_reply_count: 0,
                     proactive_skip_until: null,
                     proactive_scheduled_context: null,
                 })
                 .eq('instagram_user_id', senderId)
                 .then(() => log.info(senderId, '🔔 Proactive flags reset — user re-engaged'))
-                .catch(() => {});
+                .catch(() => { });
         }
 
         // =======================================
@@ -2667,6 +2881,9 @@ async function handleRequest(
                 : null;
         if (userFacts) log.info('*', `🧠 Injecting user_facts into prompt (sections: ${Object.keys(userFacts).join(', ')})`);
 
+        const preferredLang: string | null = (user as any).preferred_language || null;
+        if (preferredLang) log.info('*', `🌐 Active language: ${preferredLang}`);
+
         // Pick prompt based on legacy pro status
         const legacyPro = isLegacyPro(user);
         if (legacyPro) {
@@ -2695,6 +2912,7 @@ async function handleRequest(
                 0, 0, 0,
                 chatStreak,
                 userFacts,
+                preferredLang,
             )
             : getNewRiyaSystemPrompt(
                 userName,
@@ -2709,6 +2927,7 @@ async function handleRequest(
                 existingSummary?.summary ?? null,
                 lifeState,
                 creditsExhausted,
+                preferredLang,
             );
 
         // Handle reply-to context: if user replied to a specific message, prepend it
@@ -2792,13 +3011,23 @@ async function handleRequest(
                                 silent_hours: { type: SchemaType.NUMBER },
                                 user_wants_no_proactive: { type: SchemaType.BOOLEAN },
                                 schedule_followup_ist_hour: { type: SchemaType.NUMBER },
+                                scheduled_context_note: { type: SchemaType.STRING },
+                                lang: { type: SchemaType.STRING },
+                                send_voice: { type: SchemaType.BOOLEAN },
                             },
                             required: ["text"]
                         }
                     }
                 },
             });
-            result = await chat.sendMessage(messageText);
+            // Inbound voice note: inject audio as inline_data alongside the text
+            const messageParts = inlineAudio
+                ? [
+                    { inlineData: { mimeType: inlineAudio.mimeType, data: inlineAudio.data } },
+                    { text: messageText || '[User sent a voice note. Process it natively and respond naturally as Riya.]' },
+                  ]
+                : messageText;
+            result = await chat.sendMessage(messageParts);
         } catch (primaryErr) {
             const errMsg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
             const isQuota = errMsg.includes('429') || errMsg.includes('quota') || errMsg.includes('Resource has been exhausted');
@@ -2852,13 +3081,22 @@ async function handleRequest(
                                 silent_hours: { type: SchemaType.NUMBER },
                                 user_wants_no_proactive: { type: SchemaType.BOOLEAN },
                                 schedule_followup_ist_hour: { type: SchemaType.NUMBER },
+                                scheduled_context_note: { type: SchemaType.STRING },
+                                lang: { type: SchemaType.STRING },
+                                send_voice: { type: SchemaType.BOOLEAN },
                             },
                             required: ["text"]
                         }
                     }
                 },
             });
-            result = await fallbackChat.sendMessage(messageText);
+            const fallbackParts = inlineAudio
+                ? [
+                    { inlineData: { mimeType: inlineAudio.mimeType, data: inlineAudio.data } },
+                    { text: messageText || '[User sent a voice note. Process it natively and respond naturally as Riya.]' },
+                  ]
+                : messageText;
+            result = await fallbackChat.sendMessage(fallbackParts);
             log.info('*', `✅ Fallback model (${MODEL_FALLBACK}) responded successfully`);
         }
         log.info('*', `📌 Active model used: ${activeModel}`);
@@ -3000,13 +3238,23 @@ async function handleRequest(
         // =======================================
         const firstMsg = responseMessages[0] as any;
 
+        // 0. Language switch — persist immediately to dedicated column
+        const langSwitch = responseMessages.map(m => (m as any).lang).find(Boolean) as string | undefined;
+        if (langSwitch) {
+            supabase.from('riya_instagram_users')
+                .update({ preferred_language: langSwitch })
+                .eq('instagram_user_id', senderId)
+                .then(() => log.info(senderId, `🌐 Language saved: ${langSwitch}`))
+                .catch((e: any) => log.warn(senderId, `⚠️ Language save failed: ${e.message}`));
+        }
+
         // 1. User opted out of proactive messages
         if (firstMsg?.user_wants_no_proactive === true) {
             supabase.from('riya_instagram_users')
                 .update({ proactive_opted_out: true })
                 .eq('instagram_user_id', senderId)
                 .then(() => log.info(senderId, '🔕 Proactive opted out by user'))
-                .catch(() => {});
+                .catch(() => { });
         }
 
         // 2. User scheduled a future chat time — store skip_until so cron waits
@@ -3023,7 +3271,10 @@ async function handleRequest(
             }
             // Convert back to UTC for storage
             const skipUntilUTC = new Date(targetIST.getTime() - istOffsetMs);
-            const context = `User indicated they'd be free around ${scheduledHour}:00 IST`;
+            const contextNote = firstMsg?.scheduled_context_note?.trim() || null;
+            const context = contextNote
+                ? `${contextNote} (around ${scheduledHour}:00 IST)`
+                : `User said they'd be free around ${scheduledHour}:00 IST`;
             supabase.from('riya_instagram_users')
                 .update({
                     proactive_skip_until: skipUntilUTC.toISOString(),
@@ -3031,7 +3282,7 @@ async function handleRequest(
                 })
                 .eq('instagram_user_id', senderId)
                 .then(() => log.info(senderId, `⏰ Scheduled proactive at IST ${scheduledHour}:00 (UTC: ${skipUntilUTC.toISOString()})`))
-                .catch(() => {});
+                .catch(() => { });
         }
 
         // =======================================
@@ -3060,8 +3311,41 @@ async function handleRequest(
         // =======================================
         // SEND RESPONSES TO INSTAGRAM
         // =======================================
-        let paymentLinkSentInLoop = false;
+
+        // ── Voice note routing ────────────────────────────────────────────────
+        // Collect which messages should be voiced vs sent as text.
+        // Max 1 voice note per response, always delivered last.
+        const nowIST = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+        const currentISTHour = nowIST.getUTCHours();
+        const ttsApiKey = getKeyForUser(senderId);
+
+        const voiceTexts: string[] = [];
+        const textOnlyMsgs: typeof responseMessages = [];
+        let hasLLMVoiceTrigger = false;
+
         for (const msg of responseMessages) {
+            if ((msg as any).send_voice === true) {
+                voiceTexts.push(msg.text);
+                hasLLMVoiceTrigger = true;
+            } else {
+                textOnlyMsgs.push(msg);
+            }
+        }
+
+        // Spontaneous trigger: fires on text-only responses when conditions match
+        if (!hasLLMVoiceTrigger && !isInSalesWindow && !creditsExhausted) {
+            const combinedForTrigger = responseMessages.map(m => m.text).join(' ');
+            if (shouldSendSpontaneousVoice(combinedForTrigger, currentISTHour, isInSalesWindow, creditsExhausted)) {
+                // Voice all messages as one note
+                voiceTexts.push(...responseMessages.map(m => m.text));
+                textOnlyMsgs.length = 0; // clear — all going to voice
+                log.info(senderId, '🎤 Spontaneous voice trigger fired');
+            }
+        }
+
+        let paymentLinkSentInLoop = false;
+        // Send text-only messages first
+        for (const msg of textOnlyMsgs) {
             // Send text
             if (msg.text) {
                 await sendInstagramMessage(senderId, msg.text, accessToken);
@@ -3148,30 +3432,19 @@ async function handleRequest(
             await new Promise(resolve => setTimeout(resolve, 500));
         }
 
-        // =======================================
-        // RECURRING NOTIFICATIONS OPT-IN (one-time offer at message 15)
-        // =======================================
-        if ((user.message_count ?? 0) === 15 && !user.recurring_notif_token) {
-            fetch(`https://graph.instagram.com/v18.0/me/messages?access_token=${accessToken}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    recipient: { id: senderId },
-                    message: {
-                        attachment: {
-                            type: 'template',
-                            payload: {
-                                template_type: 'notification_messages',
-                                title: 'Riya se updates pao 📱',
-                                notification_messages_frequency: 'DAILY',
-                                payload: 'RIYA_DAILY_UPDATES',
-                            },
-                        },
-                    },
-                }),
-            })
-                .then(() => log.info(senderId, '🔔 Sent recurring notifications opt-in at msg 15'))
-                .catch((e: any) => log.warn(senderId, '⚠️ Recurring notif opt-in send failed (non-fatal):', e));
+        // Send combined voice note last (if any)
+        if (voiceTexts.length > 0) {
+            const combinedVoiceText = voiceTexts.join('\n\n'); // \n\n = natural pause in Gemini TTS
+            log.info(senderId, `🎤 Generating voice note: ${combinedVoiceText.slice(0, 80)}...`);
+            await generateAndSendVoiceNote(
+                combinedVoiceText,
+                senderId,
+                preferredLang,
+                currentISTHour,
+                supabase,
+                accessToken,
+                ttsApiKey,
+            );
         }
 
         // =======================================
@@ -3253,7 +3526,10 @@ async function handleRequest(
                 instagram_user_id: senderId,
                 source: 'instagram',
                 role: 'assistant',
-                content: msg.text,
+                // Prefix voice-noted messages so future context knows how they were delivered
+                content: (msg as any).send_voice || voiceTexts.includes(msg.text)
+                    ? `[🎤 voice note] ${msg.text}`
+                    : msg.text,
                 model_used: MODEL_NAME,
                 created_at: new Date(baseTime + idx + 100).toISOString(),
             })),
