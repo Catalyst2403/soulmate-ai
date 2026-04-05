@@ -1494,11 +1494,8 @@ function safeParseFactsDelta(raw: string): Record<string, any> | null {
 function buildRiyaTTSPrompt(preferredLang: string | null, istHour: number): string {
     const lang = preferredLang || 'Hinglish';
     const isNight = istHour >= 22 || istHour <= 4;
-    return `Speak in ${lang} only. Codeswitch only if the text does.
-Riya, 21, Delhi. Voice note — casual, just talking. Lazy-confident, slightly husky. Not a bot.
-"..." → trail off. CAPS → stress, not loud. "nahi nahi" → quick blur. "yaar" → unstressed.
-Hindi words: own rhythm. "haww"/"arrey" → native sound.${isNight ? ' Late night, quieter, her room.' : ''}
-Read emotion from the text. Let it land.`;
+    return `${lang} only.
+Voice note from a 21-year-old Indian girl Riya singh to someone she cares about — warm, natural, like she's actually talking. Not reading. Real.${isNight ? ' Late night, close to the mic, soft.' : ''}`;
 }
 
 /**
@@ -2407,19 +2404,24 @@ async function handleRequest(
             return;
         }
 
-        // Deduplicate: if this exact merged text was already processed in the last 60s, skip
-        const { data: existingMsg } = await supabase
-            .from('riya_conversations')
-            .select('id')
-            .eq('source', 'instagram')
-            .eq('content', messageText)
-            .eq('instagram_user_id', senderId)
-            .gte('created_at', new Date(Date.now() - 60000).toISOString())
-            .single();
+        // Deduplicate: skip for attachment messages (voice notes, images).
+        // They all share the same generic text descriptor, so content-match
+        // incorrectly blocks every second voice note within 60s.
+        const isAttachmentOnly = inlineAudio || messageText.startsWith('[User sent');
+        if (!isAttachmentOnly) {
+            const { data: existingMsg } = await supabase
+                .from('riya_conversations')
+                .select('id')
+                .eq('source', 'instagram')
+                .eq('content', messageText)
+                .eq('instagram_user_id', senderId)
+                .gte('created_at', new Date(Date.now() - 60000).toISOString())
+                .single();
 
-        if (existingMsg) {
-            log.info('*', '\u23ed\ufe0f Duplicate merged message, skipping');
-            return;
+            if (existingMsg) {
+                log.info('*', '\u23ed\ufe0f Duplicate merged message, skipping');
+                return;
+            }
         }
 
         // =======================================
