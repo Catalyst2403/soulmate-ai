@@ -1562,7 +1562,7 @@ async function generateAndSendVoiceNote(
         const voice = (istHour >= 22 || istHour <= 4) ? TTS_VOICE_NIGHT : TTS_VOICE_DAY;
         const ttsPrompt = buildRiyaTTSPrompt(preferredLang, istHour);
 
-        const ttsRes = await fetch(
+        const ttsRes1 = await fetch(
             `https://generativelanguage.googleapis.com/v1beta/models/${TTS_MODEL}:generateContent?key=${apiKey}`,
             {
                 method: 'POST',
@@ -1578,13 +1578,35 @@ async function generateAndSendVoiceNote(
             }
         );
 
-        if (!ttsRes.ok) {
-            const errBody = await ttsRes.text();
-            log.error(senderId, `❌ TTS API error ${ttsRes.status}: ${errBody.slice(0, 200)}`);
+        // Retry once on 500/503 (preview model is occasionally flaky)
+        let ttsRes2 = ttsRes1;
+        if (!ttsRes1.ok && (ttsRes1.status === 500 || ttsRes1.status === 503)) {
+            log.warn(senderId, `⚠️ TTS ${ttsRes1.status} — retrying in 1.5s...`);
+            await new Promise(r => setTimeout(r, 1500));
+            ttsRes2 = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models/${TTS_MODEL}:generateContent?key=${apiKey}`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text }] }],
+                        systemInstruction: { parts: [{ text: ttsPrompt }] },
+                        generationConfig: {
+                            responseModalities: ['AUDIO'],
+                            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } },
+                        },
+                    }),
+                }
+            );
+        }
+
+        if (!ttsRes2.ok) {
+            const errBody = await ttsRes2.text();
+            log.error(senderId, `❌ TTS API error ${ttsRes2.status}: ${errBody.slice(0, 200)}`);
             return false;
         }
 
-        const ttsJson = await ttsRes.json();
+        const ttsJson = await ttsRes2.json();
         const audioB64: string | undefined = ttsJson.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
         if (!audioB64) {
             log.error(senderId, '❌ TTS returned no audio data');
