@@ -1620,25 +1620,30 @@ async function extractAndUpdateFacts(
         ? `HISTORICAL SUMMARY (from earlier conversations):\n${existingSummary}\n\nRECENT USER MESSAGES (last ${recentMessages.length} msgs):\n${userMessagesOnly}`
         : `RECENT USER MESSAGES:\n${userMessagesOnly}`;
 
-    const extractionPrompt = `You are Riya's memory assistant. Extract facts about the USER from the context below.
+    const extractionPrompt = `Extract facts about the USER from the messages below. Only extract what they explicitly said — no inferences from tone or vibe. When in doubt, omit.
 
-EXISTING KNOWN FACTS (do NOT re-extract these):
+EXISTING FACTS (skip these):
 ${JSON.stringify(existingFacts, null, 2)}
 
 ${contextBlock}
 
-RULES (follow strictly):
-- Return ONLY fields that are NEW or CHANGED vs existing facts. Return {} if nothing new.
-- key_events: ONLY real life events (job change, exam, family, travel, health, relationship milestone).
-  NEVER include: payment events, message limits, app subscriptions, or Riya system messages.
-- declared_love: only set to true if the user explicitly said "I love you" or equivalent. NEVER set false.
-- Do NOT extract negative/absent facts (e.g. no job, no city). Only extract confirmed positives.
-- For key_events: provide the full updated array capped at ${FACTS_MAX_KEY_EVENTS}. Keep only real life moments.
-- Today's date: ${today}
+FIELD DEFINITIONS:
+- language: script they actually TYPE in. "Hindi" = Devanagari script (हिंदी). "Hinglish" = Roman script Hindi words mixed with English ("yaar", "bhai", "aaj"). "English" = English only. If they explicitly ask to speak a language, that overrides.
+- interests: real activities/hobbies/topics only — cricket, gym, web series, cooking. NOT values like "authenticity", "connection", "transparency". NOT "talking to Riya".
+- communication_style: observable texting pattern — message length, pace, script. NOT relationship adjectives like "affectionate" or "playful".
+- current_mood_toward_riya: one short phrase, max 5 words. NOT a comma list.
+- key_events: real life only — job, exam, travel, health, family, breakup. NOT app events, payments, or anything about Riya.
 
-JSON schema (return delta only):
+RULES:
+- Return delta only (new/changed fields). Return {} if nothing new.
+- declared_love: true only if user explicitly said "I love you". Never set false.
+- No negative facts ("no job", "not from Delhi"). Confirmed positives only.
+- key_events: full updated array, max ${FACTS_MAX_KEY_EVENTS} entries.
+- Today: ${today}
+
+JSON schema:
 {
-  "profile": { "name": "string", "age": number, "city": "string", "language": "Hinglish|Hindi|English" },
+  "profile": { "name": "string", "age": number, "city": "string", "language": "Hindi|Hinglish|English" },
   "life": { "job": "string", "living": "string", "college": "string" },
   "personality": { "interests": ["string"], "dislikes": ["string"], "communication_style": "string" },
   "relationship_with_riya": { "current_mood_toward_riya": "string", "declared_love": true, "nickname_for_riya": "string" },
