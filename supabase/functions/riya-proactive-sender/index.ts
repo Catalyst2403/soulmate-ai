@@ -6,9 +6,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
 // =======================================
 const PROACTIVE_MODEL        = "gemini-2.5-flash-lite";   // cheap + fast for proactive decisions
 const MAX_USERS_PER_RUN      = 25;                         // Instagram: 200 DMs/hr limit; 25×2 runs = 50/hr
-const COOLDOWN_HOURS         = 4;                          // min gap between proactive sends per user
 const MIN_MESSAGES_REQUIRED  = 5;                          // don't proactive on brand-new users
-const MAX_NO_REPLY_COUNT     = 5;                          // auto-stop after 5 ignored proactives
 const SCORE_THRESHOLD        = 30;                         // skip Gemini call below this score
 const LOCK_TTL_MS            = 5 * 60 * 1000;             // 5-minute lock to prevent concurrent runs
 const WINDOW_RESCUE_HOURS    = 22;                         // hours after which window rescue kicks in
@@ -301,7 +299,7 @@ Example: "bhai meri roommate ne aaj jo kiya na 😂 guess karo"
 RULES:
 - 1-2 lines max. WhatsApp energy.
 - Do NOT start with "Hey", "Hi", "Miss kiya", "Kahan tha", "Just checking in".
-- Match language style: ${languageStyle}
+- LANGUAGE: Write ONLY in ${languageStyle}. Do not use any other language.
 - image_flag: true only if interest hook genuinely calls for a visual reaction
 
 Return JSON:
@@ -344,7 +342,8 @@ Example: "yaar sun, aaj kuch hua mujhe 💀 tu bata toh sahi"
 ABSOLUTE RULES:
 - FORBIDDEN phrases: "miss kiya", "kahan tha/thi", "long time", "checking in", "itne din", "hi/hey".
 - Be specific. A question about THEIR life beats anything generic.
-- 1-2 lines. Casual. ${languageStyle}.
+- 1-2 lines. Casual.
+- LANGUAGE: Write ONLY in ${languageStyle}. Do not use any other language.
 - image_flag: false unless an interest hook specifically calls for a meme/photo.
 
 Return JSON: { "message_now": true, "text": "...", "image_flag": false, "image_context": "", "msg_type": "callback|interest_hook|gossip" }`;
@@ -397,7 +396,6 @@ serve(async (req) => {
     }, { onConflict: 'id' });
 
     // ─── Query eligible users ──────────────────────────────────────────────
-    const cooldownCutoff = new Date(Date.now() - COOLDOWN_HOURS * 60 * 60 * 1000).toISOString();
     const windowOpenCutoff = new Date(Date.now() - (WINDOW_RESCUE_HOURS + 1.75) * 60 * 60 * 1000).toISOString(); // >23h 45m = expired
     const minActivityCutoff = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(); // last msg <2h ago = active
 
@@ -406,17 +404,15 @@ serve(async (req) => {
         .select(`
             instagram_user_id, instagram_name, instagram_username,
             last_message_at, last_proactive_sent_at,
-            proactive_no_reply_count, proactive_opted_out,
-            proactive_skip_until, proactive_scheduled_context,
-            user_active_hour_ist, user_facts, recurring_notif_token,
-            is_pro, message_credits, message_count
+            proactive_opted_out, proactive_skip_until, proactive_scheduled_context,
+            user_active_hour_ist, user_facts,
+            is_pro, message_credits, message_count,
+            preferred_language
         `)
-        .gt('last_message_at', windowOpenCutoff)   // window not yet expired
-        .lt('last_message_at', minActivityCutoff)   // not in an active conversation
-        .eq('proactive_opted_out', false)
-        .lt('proactive_no_reply_count', MAX_NO_REPLY_COUNT)
+        .gt('last_message_at', windowOpenCutoff)   // window not yet expired (< 23h 45m ago)
+        .lt('last_message_at', minActivityCutoff)   // not in an active conversation (> 2h ago)
+        .eq('proactive_opted_out', false)           // only explicit opt-out stops proactives
         .gte('message_count', MIN_MESSAGES_REQUIRED)
-        .or(`last_proactive_sent_at.is.null,last_proactive_sent_at.lt.${cooldownCutoff}`)
         .or('proactive_skip_until.is.null,proactive_skip_until.lte.' + now.toISOString())
         .or('is_pro.eq.true,message_credits.gt.0,message_count.lt.100')
         .order('last_message_at', { ascending: true })
@@ -444,6 +440,18 @@ serve(async (req) => {
         const userName = user.instagram_name || user.instagram_username || 'yaar';
         const hoursAgo = (Date.now() - new Date(user.last_message_at).getTime()) / 3600000;
         const isWindowRescue = hoursAgo > WINDOW_RESCUE_HOURS;
+
+        // Per-window dedup: only 1 proactive per 24h window (since user's last message).
+        // Window rescue bypasses this — it's the last-chance send even if we already sent once.
+        if (!isWindowRescue && user.last_proactive_sent_at) {
+            const alreadySentThisWindow =
+                new Date(user.last_proactive_sent_at) > new Date(user.last_message_at);
+            if (alreadySentThisWindow) {
+                log.info(userId, '⏭️ Already proactived in this window — skipping (not rescue)');
+                skipped++;
+                continue;
+            }
+        }
 
         // Score filter — skip Gemini call if user scores too low this cycle
         const score = scoreUser(user, currentISTHour);
@@ -486,8 +494,8 @@ serve(async (req) => {
         const hasTimedEvent = timedEvents.length > 0;
         const timedEventText = timedEvents.map(e => e.event).join('; ');
 
-        // Language style from facts
-        const languageStyle = facts?.profile?.language || 'Hinglish';
+        // Language style — preferred_language column is authoritative, facts is fallback
+        const languageStyle = (user as any).preferred_language || facts?.profile?.language || 'Hinglish';
 
         // Build prompt
         let decision: any;
@@ -571,14 +579,11 @@ serve(async (req) => {
         // Update proactive tracking columns
         await supabase.from('riya_instagram_users').update({
             last_proactive_sent_at: new Date().toISOString(),
-            proactive_no_reply_count: (user.proactive_no_reply_count || 0) + 1,
             proactive_skip_until: null,
             proactive_scheduled_context: null,
-            // Auto-stop when count hits the limit
-            proactive_opted_out: (user.proactive_no_reply_count || 0) + 1 >= MAX_NO_REPLY_COUNT,
         }).eq('instagram_user_id', userId);
 
-        log.info(userId, `✅ Proactive sent (type=${decision.msg_type}, no_reply_count=${(user.proactive_no_reply_count || 0) + 1}): "${messageText.slice(0, 60)}"`);
+        log.info(userId, `✅ Proactive sent (type=${decision.msg_type}): "${messageText.slice(0, 60)}"`);
         sent++;
 
         // Small inter-user delay to avoid burst

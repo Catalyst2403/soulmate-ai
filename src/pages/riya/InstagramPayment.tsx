@@ -481,8 +481,8 @@ const InstagramPayment = () => {
                             </h2>
                             <p className="text-xs text-gray-400 text-center mb-5">
                                 {lang === 'hi'
-                                    ? 'अपना username type करें — हम आपका account खोज लेंगे'
-                                    : "Type your username — we'll find your account"}
+                                    ? 'अपना नाम या username type करें — हम आपको खोज लेंगे'
+                                    : "Type your name or @username — we'll find you"}
                             </p>
 
                             {/* Search input */}
@@ -492,7 +492,7 @@ const InstagramPayment = () => {
                                     type="text"
                                     value={query}
                                     onChange={e => { setQuery(e.target.value); setConfirmed(null); }}
-                                    placeholder={lang === 'hi' ? 'username लिखें...' : 'Type your username...'}
+                                    placeholder={lang === 'hi' ? 'नाम या username से खोजें...' : 'Search by name or username...'}
                                     className="w-full bg-white/5 border border-white/15 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-pink-500 transition-colors"
                                     autoFocus
                                     autoCapitalize="none"
