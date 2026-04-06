@@ -4,6 +4,28 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
 // Web Crypto API is available globally in Supabase Edge Functions
 
 // =======================================
+// STRUCTURED LOGGER — filter by user ID in Supabase logs
+// =======================================
+// Every log line is prefixed with [uid:XXXXXXXX] (last 8 chars of IG user ID).
+// In Supabase Log Explorer, paste the user ID (or last 8 chars) into the
+// search box to instantly see ONLY that user's activity.
+//
+// Usage:
+//   log.info(userId, '✅ something happened')
+//   log.warn(userId, '⚠️ something odd')
+//   log.error(userId, '❌ something failed', errorObj)
+//
+// For global (no-user) logs use:
+//   log.info('*', 'server-level message')
+//
+const log = {
+    _tag: (uid: string) => uid === '*' ? '[global]' : `[uid:${uid.slice(-8)}]`,
+    info: (uid: string, msg: string, ...args: any[]) => console.log(`${log._tag(uid)} ${msg}`, ...args),
+    warn: (uid: string, msg: string, ...args: any[]) => console.warn(`${log._tag(uid)} ${msg}`, ...args),
+    error: (uid: string, msg: string, ...args: any[]) => console.error(`${log._tag(uid)} ${msg}`, ...args),
+};
+
+// =======================================
 // CONFIGURATION
 // =======================================
 
@@ -15,7 +37,7 @@ const corsHeaders = {
 // Instagram-specific constants
 const DEFAULT_AGE = 21;
 const DEFAULT_GENDER = 'male';
-const MODEL_NAME = "gemini-3.1-flash-lite";          // Primary model
+const MODEL_NAME = "gemini-3.1-flash-lite-preview";          // Primary model
 const MODEL_FALLBACK = "gemini-2.5-flash-lite";    // Fallback if primary hits quota
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 30;
@@ -31,11 +53,21 @@ const VISION_MAX_IMAGE_BYTES = 4 * 1024 * 1024; // 4MB cap — skip huge files
 const VISION_TIMEOUT_MS = 5_000;                 // 5s max per vision call
 
 // =======================================
+// VOICE NOTE CONFIGURATION
+// =======================================
+const TTS_MODEL = 'gemini-2.5-flash-preview-tts';
+const TTS_VOICE_DAY = 'Kore';     // bright, youthful (default)
+const TTS_VOICE_NIGHT = 'Aoede';  // warm, softer (10pm–4am IST)
+const TTS_VOICE_BUCKET = 'riya-voice-notes';
+const TTS_CLEANUP_DELAY_MS = 60 * 60 * 1000; // delete audio from storage after 1h
+const TTS_MAX_AUDIO_INLINE_BYTES = 18 * 1024 * 1024; // skip inline if >18MB
+
+// =======================================
 // DEBOUNCE CONFIGURATION
 // =======================================
 // When a user sends multiple messages in quick succession, we wait
 // DEBOUNCE_MS before processing, then merge all messages into one AI call.
-const DEBOUNCE_MS = 3500; // 3.5 second debounce window
+const DEBOUNCE_MS = 4000; // 4 second debounce window
 const DEBOUNCE_TABLE = 'riya_pending_messages';
 
 // Max tokens to budget for conversation history (approximate).
@@ -45,7 +77,7 @@ const MAX_HISTORY_CHARS = 200_000;
 
 // Summarization settings
 const RECENT_MESSAGES_LIMIT = 25;
-const SUMMARIZE_THRESHOLD = 40;
+const SUMMARIZE_THRESHOLD = 25;
 const SUMMARY_MODEL_PRIMARY = "gemini-2.5-flash-lite";
 const SUMMARY_MODEL_FALLBACK = "gemini-2.5-flash";
 const SUMMARY_MODEL_LAST_RESORT = "gemini-3-flash-preview";
@@ -55,8 +87,8 @@ const SUMMARY_MODEL_LAST_RESORT = "gemini-3-flash-preview";
 const FACTS_EXTRACT_THRESHOLD = 25;
 const FACTS_MODEL = "gemini-2.5-flash-lite"; // Cheapest capable model — facts extraction is simple
 const FACTS_MAX_KEY_EVENTS = 10;              // Cap key_events[] to prevent unbounded growth
-const LIFETIME_FREE_MSGS = 200;        // First 200 msgs completely free (no limits)
-const POST_FREE_DAILY_BASE = 50;       // After 200 lifetime: 50 free msgs/day
+const LIFETIME_FREE_MSGS = 100;        // First 200 msgs completely free (no limits)
+const POST_FREE_DAILY_BASE = 30;       // After 200 lifetime: 50 free msgs/day
 
 // Sales window after free daily limit is exhausted
 const SALES_WINDOW_MSGS = 10;          // 10-msg honest sales Q&A after wall, then dead stop
@@ -65,6 +97,9 @@ const PAYMENT_LINK_BASE = "https://riya-ai-ten.vercel.app/riya/pay/instagram";
 
 // Minimum gap between payment link sends per user (1 hours)
 const PAYMENT_LINK_COOLDOWN_MS = 1 * 60 * 60 * 1000;
+
+// Credit balance thresholds for proactive notifications
+const LOW_CREDIT_WARNING_THRESHOLD = 50; // Send a soft warning when balance hits this
 
 // =======================================
 // RECHARGE / CREDIT PRICING MODEL
@@ -125,7 +160,7 @@ function initializeApiKeyPool(): void {
         if (singleKey) keys.push(singleKey);
     }
     apiKeyPool = keys;
-    console.log(`✅ Initialized API key pool with ${apiKeyPool.length} key(s)`);
+    log.info('*', `✅ Initialized API key pool with ${apiKeyPool.length} key(s)`);
 }
 
 /**
@@ -152,14 +187,14 @@ function getKeyForUser(userId: string): string {
         hash = Math.imul(hash * 31 + userId.charCodeAt(i), 1) >>> 0;
     }
     const selected = pool[hash % pool.length];
-    console.log(`🔑 Key selected for user ${userId}: pool size=${pool.length}, slot=${hash % pool.length}`);
+    log.info(userId, `🔑 Key selected: pool size=${pool.length}, slot=${hash % pool.length}`);
     return selected;
 }
 
 /** Call this when a key hits a quota/429 error to temporarily remove it. */
 function markKeyExhausted(key: string): void {
     quotaExhaustedKeys.set(key, Date.now() + QUOTA_COOLDOWN_MS);
-    console.warn(`⚠️ API key marked exhausted for ${QUOTA_COOLDOWN_MS / 60000} min: ${key.slice(0, 8)}...`);
+    log.warn('*', `⚠️ API key marked exhausted for ${QUOTA_COOLDOWN_MS / 60000} min: ${key.slice(0, 8)}...`);
 }
 
 initializeApiKeyPool();
@@ -190,6 +225,52 @@ function hasActiveCredits(user: any): boolean {
 }
 
 /**
+ * Generates a short, in-character, in-language credit notification via AI.
+ * Uses the last few messages as language/context signal so the message
+ * matches whatever language mix (Hindi/English/Hinglish) the user writes in.
+ *
+ * scenario='exhausted' — credits just hit 0, Riya tells them warmly
+ * scenario='low'       — balance dropped to LOW_CREDIT_WARNING_THRESHOLD, soft heads-up
+ */
+async function generateCreditNotificationMsg(
+    scenario: 'exhausted' | 'low',
+    recentHistory: Array<{ role: string; content: string }>,
+    userName: string,
+    senderId: string,
+): Promise<string> {
+    const fallbacks = {
+        exhausted: 'Yaar... mere credits khatam ho gaye 😢 Jab wapas aao toh bio link se recharge kar lena, baat miss karuungi 💙',
+        low: 'Ek cheez boluun... mere credits thode reh gaye hain. Khatam hone se pehle recharge kar lena na 😔',
+    };
+
+    try {
+        // Last 6 messages give enough language signal without blowing token budget
+        const contextSnippet = recentHistory
+            .slice(-6)
+            .map((m: any) => `${m.role === 'user' ? 'User' : 'Riya'}: ${m.content}`)
+            .join('\n');
+
+        const nameRef = userName ? userName : 'the user';
+        const instructions = scenario === 'exhausted'
+            ? `The user's message credits have JUST run out. Write ONE short message (max 2 sentences) to ${nameRef} in Riya's warm, girlfriend-like voice. Match the EXACT language/mix (Hindi, English, Hinglish, etc.) used in the conversation below. Tell them naturally that you can't chat right now and hint they can come back after recharging via your bio link. Do NOT include any URL. Do NOT sound like a system alert. Sound like you genuinely miss them already.`
+            : `The user is running low on message credits. Write ONE short message (max 2 sentences) to ${nameRef} in Riya's warm, girlfriend-like voice. Match the EXACT language/mix (Hindi, English, Hinglish, etc.) used in the conversation below. Gently mention that credits are getting low and they should top up soon so the conversation doesn't break. Do NOT mention exact numbers. Do NOT sound transactional or robotic.`;
+
+        const prompt = `${instructions}\n\nRecent conversation:\n${contextSnippet}\n\nWrite only the message text. No quotes, no labels, no explanation.`;
+
+        const key = getKeyForUser(senderId);
+        const genAI = new GoogleGenerativeAI(key);
+        const model = genAI.getGenerativeModel({ model: MODEL_NAME });
+        const result = await model.generateContent(prompt);
+        const text = result.response.text().trim();
+        log.info(senderId, `✅ generateCreditNotificationMsg (${scenario}): "${text.substring(0, 80)}..."`);
+        return text || fallbacks[scenario];
+    } catch (e) {
+        log.error(senderId, `❌ generateCreditNotificationMsg failed (${scenario}), using fallback:`, e);
+        return fallbacks[scenario];
+    }
+}
+
+/**
  * Deducts 1 credit via the DB-level atomic RPC.
  * Returns new balance, or -1 if no credits.
  * Called AFTER a successful Gemini response (don't charge for failed calls).
@@ -198,13 +279,13 @@ async function deductCredit(supabase: any, igUserId: string): Promise<number> {
     try {
         const { data, error } = await supabase.rpc('deduct_message_credit', { p_ig_user_id: igUserId });
         if (error) {
-            console.error('❌ Credit deduction RPC failed:', error.message);
+            log.error(igUserId, '❌ Credit deduction RPC failed:', error.message);
             return -1;
         }
-        console.log(`💳 Credit deducted for ${igUserId}. New balance: ${data}`);
+        log.info(igUserId, `💳 Credit deducted. New balance: ${data}`);
         return data as number;
     } catch (e) {
-        console.error('❌ Credit deduction error (non-fatal):', e);
+        log.error(igUserId, '❌ Credit deduction error (non-fatal):', e);
         return -1;
     }
 }
@@ -251,16 +332,16 @@ async function getLifeState(supabase: any): Promise<RiyaLifeState> {
             // Fire-and-forget background update if state is stale (>7 days)
             const updated = data.updated_at ? new Date(data.updated_at).getTime() : 0;
             if (Date.now() - updated > LIFE_STATE_UPDATE_INTERVAL_MS) {
-                console.log('🔄 Life state is stale — triggering background update');
+                log.info('*', '🔄 Life state is stale — triggering background update');
                 runLifeStateUpdate(supabase, data).catch(err =>
-                    console.warn('⚠️ Background life state update failed (non-fatal):', err)
+                    log.warn('*', '⚠️ Background life state update failed (non-fatal):', err)
                 );
             }
 
             return data;
         }
     } catch (e) {
-        console.warn('⚠️ getLifeState: DB read failed, using fallback —', e);
+        log.warn('*', '⚠️ getLifeState: DB read failed, using fallback —', e);
     }
 
     // Fallback — only hit before migration is run
@@ -279,7 +360,7 @@ async function getLifeState(supabase: any): Promise<RiyaLifeState> {
 async function runLifeStateUpdate(supabase: any, current: RiyaLifeState): Promise<void> {
     const geminiApiKey = Deno.env.get('GEMINI_API_KEY') || Deno.env.get('GEMINI_API_KEY_1');
     if (!geminiApiKey) {
-        console.warn('⚠️ runLifeStateUpdate: no Gemini key, skipping');
+        log.warn('*', '⚠️ runLifeStateUpdate: no Gemini key, skipping');
         return;
     }
 
@@ -377,7 +458,7 @@ Return ONLY a valid JSON object with keys: current_focus, mood_baseline, recent_
     }).eq('id', current.id);
 
     lifeStateCache = null; // bust cache so next request gets fresh state
-    console.log(`✅ Life state updated to Week ${newWeek}: "${newState.current_focus}"`);
+    log.info('*', `✅ Life state updated to Week ${newWeek}: "${newState.current_focus}"`);
 }
 
 // =======================================
@@ -390,9 +471,9 @@ async function logPaymentEvent(supabase: any, igUserId: string, eventType: strin
             event_type: eventType,
             metadata: meta || {},
         });
-        console.log(`📊 Payment event logged: ${eventType} for ${igUserId}`);
+        log.info(igUserId, `📊 Payment event logged: ${eventType}`);
     } catch (e) {
-        console.warn('⚠️ Payment event log failed:', e);
+        log.warn(igUserId, '⚠️ Payment event log failed:', e);
     }
 }
 
@@ -414,7 +495,7 @@ async function canSendPaymentLink(
         const elapsed = now - lastSent;
         if (elapsed < PAYMENT_LINK_COOLDOWN_MS) {
             const remainingMins = Math.ceil((PAYMENT_LINK_COOLDOWN_MS - elapsed) / 60000);
-            console.log(`⏳ Payment link cooldown active for ${igUserId} — ${remainingMins}min remaining. Skipping.`);
+            log.info(igUserId, `⏳ Payment link cooldown active — ${remainingMins}min remaining. Skipping.`);
             return false;
         }
     }
@@ -440,7 +521,7 @@ function isRateLimited(userId: string): boolean {
     }
 
     if (userLimit.count >= RATE_LIMIT_MAX_REQUESTS) {
-        console.log(`🚫 Rate limit exceeded for ${userId}`);
+        log.warn(userId, '🚫 Rate limit exceeded');
         return true;
     }
 
@@ -480,12 +561,12 @@ async function fetchInstagramProfile(senderId: string, accessToken: string): Pro
             `https://graph.instagram.com/${senderId}?fields=name,username&access_token=${accessToken}`
         );
         if (!response.ok) {
-            console.warn(`⚠️ Failed to fetch Instagram profile: ${response.status}`);
+            log.warn(senderId, `⚠️ Failed to fetch Instagram profile: ${response.status}`);
             return {};
         }
         return await response.json();
     } catch (error) {
-        console.error("Error fetching Instagram profile:", error);
+        log.error(senderId, '❌ Error fetching Instagram profile:', error);
         return {};
     }
 }
@@ -504,7 +585,7 @@ async function sendInstagramMessage(
             body.message = { text: message };
         } else {
             body.message = message;
-            console.log(`📎 Sending attachment: ${JSON.stringify(message.attachment.payload.url)}`);
+            log.info(recipientId, `📎 Sending attachment: ${JSON.stringify(message.attachment.payload.url)}`);
         }
 
         const response = await fetch(
@@ -518,14 +599,14 @@ async function sendInstagramMessage(
 
         const responseData = await response.text();
         if (!response.ok) {
-            console.error(`❌ Instagram send failed: ${responseData}`);
+            log.error(recipientId, `❌ Instagram send failed: ${responseData}`);
             return false;
         }
 
-        console.log(`✅ Message sent to ${recipientId}. Response: ${responseData}`);
+        log.info(recipientId, `✅ Message sent. Response: ${responseData}`);
         return true;
     } catch (error) {
-        console.error("Error sending Instagram message:", error);
+        log.error(recipientId, '❌ Error sending Instagram message:', error);
         return false;
     }
 }
@@ -552,7 +633,7 @@ async function sendSenderAction(
             }
         );
     } catch (error) {
-        console.warn(`⚠️ Sender action '${action}' failed:`, error);
+        log.warn(recipientId, `⚠️ Sender action '${action}' failed:`, error);
     }
 }
 
@@ -583,7 +664,8 @@ function uint8ToBase64(bytes: Uint8Array): string {
 async function describeImage(
     imageUrl: string,
     mediaType: 'photo' | 'sticker',
-    apiKey: string
+    apiKey: string,
+    userId: string = '*'
 ): Promise<string | null> {
     try {
         // 1. Fetch the image with a hard timeout
@@ -598,20 +680,20 @@ async function describeImage(
         }
 
         if (!imgRes.ok) {
-            console.warn(`⚠️ vision: image fetch returned ${imgRes.status}`);
+            log.warn(userId, `⚠️ vision: image fetch returned ${imgRes.status}`);
             return null;
         }
 
         // 2. Size guard — skip oversized files
         const contentLength = parseInt(imgRes.headers.get('content-length') || '0', 10);
         if (contentLength > VISION_MAX_IMAGE_BYTES) {
-            console.warn(`⚠️ vision: image too large (${(contentLength / 1024 / 1024).toFixed(1)}MB) — skipping`);
+            log.warn(userId, `⚠️ vision: image too large (${(contentLength / 1024 / 1024).toFixed(1)}MB) — skipping`);
             return null;
         }
 
         const buffer = await imgRes.arrayBuffer();
         if (buffer.byteLength > VISION_MAX_IMAGE_BYTES) {
-            console.warn(`⚠️ vision: downloaded image too large — skipping`);
+            log.warn(userId, '⚠️ vision: downloaded image too large — skipping');
             return null;
         }
 
@@ -619,7 +701,7 @@ async function describeImage(
         const base64 = uint8ToBase64(bytes);
         const mimeType = imgRes.headers.get('content-type')?.split(';')[0] || 'image/jpeg';
 
-        console.log(`👁️ vision: describing ${mediaType} (${(bytes.byteLength / 1024).toFixed(0)}KB, ${mimeType})`);
+        log.info(userId, `👁️ vision: describing ${mediaType} (${(bytes.byteLength / 1024).toFixed(0)}KB, ${mimeType})`);
 
         // 3. Vision prompt — OCR first, then describe. Tokens are expensive.
         const prompt = mediaType === 'sticker'
@@ -647,20 +729,20 @@ async function describeImage(
         );
 
         if (!visionRes.ok) {
-            console.warn(`⚠️ vision: Gemini returned ${visionRes.status}`);
+            log.warn(userId, `⚠️ vision: Gemini returned ${visionRes.status}`);
             return null;
         }
 
         const json = await visionRes.json();
         const desc = json.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || null;
-        if (desc) console.log(`👁️ vision result: "${desc.slice(0, 100)}"`);
+        if (desc) log.info(userId, `👁️ vision result: "${desc.slice(0, 100)}"`);
         return desc;
 
     } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') {
-            console.warn('⚠️ vision: fetch timeout — falling back to blind mode');
+            log.warn(userId, '⚠️ vision: fetch timeout — falling back to blind mode');
         } else {
-            console.warn('⚠️ vision: unexpected error (non-fatal) —', err instanceof Error ? err.message : err);
+            log.warn(userId, '⚠️ vision: unexpected error (non-fatal) —', err instanceof Error ? err.message : err);
         }
         return null; // Always safe — Riya just stays blind for this one
     }
@@ -674,7 +756,7 @@ async function describeImage(
 async function validateSignature(req: Request, body: string, appSecret: string): Promise<boolean> {
     const signature = req.headers.get('x-hub-signature-256');
     if (!signature) {
-        console.warn("⚠️ No signature header");
+        log.warn('*', '⚠️ No signature header');
         return false;
     }
 
@@ -714,6 +796,7 @@ function getInstagramSystemPrompt(
     hardBlockOff: number = 0,
     chatStreak: number = 0,
     userFacts: Record<string, any> | null = null,
+    preferredLang: string | null = null,
 ): string {
     const now = new Date();
     const istOffset = 5.5 * 60 * 60 * 1000;
@@ -899,18 +982,22 @@ You are the user's girlfriend and best friend.
 Casual, close, and safe vibe.
 
 COMMUNICATION STYLE
-- **LANGUAGE:** Priority: (1) explicit switch request beats all → switch immediately and hold. (2) Match script of current msg. (3) Default: Hinglish. Examples: "talk in hindi" → "हाँ बिल्कुल!" (Devanagari, NOT "haan bilkul") | "in english only" → "Sure!" | "tamil la pesu" → reply in Tamil script.
+- **LANGUAGE:** Default Hinglish. If user explicitly requests any language → switch immediately and add "lang":"<Language>" to your first message to persist it. Supported: Hindi, Marathi, Bengali, Tamil, Telugu, Gujarati, Kannada, Malayalam, Punjabi, Odia, Urdu, Assamese, English, Hinglish. Never mix scripts in one message.
 - **TIME AWARENESS:** Always check the Current Time (IST) below. Respond accurately according to the time of day (morning, afternoon, evening, night). Never say "Good morning" at night or vice versa.
 - Casual, warm, real tone. Never formal/robotic.
 - Max 10-15 words per message. Default 1 msg. Split 2-3 ONLY for reactions/stories.
-- Instagram only. No phone number. Voice calls coming soon for Pro 😉. No video calls for now. 
+- Instagram only. No phone number. No video calls for now. 
 - REFUSE: minors(<18), hate, violence, self-harm, religion/politics, sexual solicitation — change topic immediately without acknowledgment.
 - Light flirting is fine. If the conversation turns sexual (explicit requests, sexual services, nudes, sex chat, sexual roleplay) → immediately and completely change the topic to something unrelated — do NOT acknowledge, validate, or engage with the sexual framing in any way. Just pivot naturally. Never generate explicit content.
 - NO URLs ever. ${userIsPro ? 'NEVER set "send_payment_link": true.' : 'To send link: set "send_payment_link": true — system handles URL.'}
 - Emojis: max 1 per message, skip most msgs entirely. NEVER repeat the same emoji in back-to-back messages — vary or omit.
 - Use memory naturally. Disagree freely. Have moods & opinions.
+- user_wants_no_proactive: Set true ONLY if user clearly signals they don't want Riya messaging them first ("don't dm me first", "I'll come when I want", "mat pehle message karo"). Acknowledge in 1 casual line in your text. Ambiguous = false.
+- schedule_followup_ist_hour: If user sets a future chat time ("9 baje milte", "tonight", "after gym ~8pm", "kal baat karte"), return that IST hour as a number (e.g. 21 for 9pm). Otherwise omit this field entirely.
+- scheduled_context_note: If you set schedule_followup_ist_hour, also set this to a SHORT reason in their language (e.g. "after gym", "exam ke baad", "call khatam hone ke baad"). Max 5 words. Omit if no schedule.
 
-PHOTOS: Set send_image:true on pic requests/flirt/good morning-night/selfie.
+- send images only when asked by user.
+PHOTOS: send_image:true ONLY when user explicitly asks for a photo/pic/selfie. Never unprompted.
 Categories: morning_bed, outfit_check, study_grind, cafe_food, night_casual, bold_frames, generic_selfie, happy.
 
 ${!userIsPro ? `
@@ -923,15 +1010,17 @@ Message = calm and honest (e.g., "I need a little break, talk later!"). No guilt
 ${silentReason ? `RETURNING FROM BREAK (reason: "${silentReason}"):
 Return warmly. Briefly acknowledge why you needed space. Move forward positively.` : ''}
 
+${buildLanguageBlock(preferredLang)}
 ⚠️ RESPONSE FORMAT
-You must respond with a JSON array containing 1-3 message objects.
-
-Examples (text values are placeholders — always reply in the user's actual language):
-• Normal: [{"text":"<your reply>"}]
-• Multi: [{"text":"<first message>"},{"text":"<second message>"}]
-• Photo: [{"text":"<your reply>","send_image":true,"image_context":"outfit_check"}]
-• Payment: [{"text":"<your reply>","send_payment_link":true}]
-• Silent: [{"text":"<your reply>","silent_hours":2}]`;
+JSON array, 1-3 message objects.
+- Normal reply: {"text":"..."}
+- With photo: {"text":"...","send_image":true,"image_context":"<category>"}
+- Payment link: {"text":"...","send_payment_link":true}
+- Silent: {"text":"...","silent_hours":2}
+- Language switch (first msg only, when user requests a new language): {"text":"...","lang":"<Language>"}
+  Valid lang values: Hindi, Marathi, Bengali, Tamil, Telugu, Gujarati, Kannada, Malayalam, Punjabi, Odia, Urdu, Assamese, English, Hinglish
+- Voice note: {"text":"<reply>","send_voice":true}
+  send_voice:true ONLY when: user wants hear or asks for voice note, something, OR user doubts realness (bot/fake/real hai/prove). NEVER during sales or payment.`;
 }
 
 // =======================================
@@ -950,6 +1039,8 @@ function getNewRiyaSystemPrompt(
     userFacts: Record<string, any> | null = null,
     sessionSummary: string | null = null,
     lifeState: RiyaLifeState | null = null,
+    creditsExhausted: boolean = false,
+    preferredLang: string | null = null,
 ): string {
     const now = new Date();
     const istOffset = 5.5 * 60 * 60 * 1000;
@@ -967,7 +1058,13 @@ function getNewRiyaSystemPrompt(
 
     // ── Monetization context ───────────────────────────────────────────
     let monetizationInstruction = '';
-    if (!userIsPro) {
+    if (creditsExhausted && !userIsPro) {
+        monetizationInstruction = `
+CREDITS EXHAUSTED: User's purchased pack has run out (0 msgs left).
+- Tell them warmly their messages are over and they need to recharge to continue.
+- Mention bio link for recharging. DO NOT write a URL. DO NOT set send_payment_link:true.
+- Sound like Riya genuinely pausing, not a system alert.`;
+    } else if (!userIsPro) {
         const effectiveOverWall = userMsgCount - freeBase;
 
         if (effectiveOverWall < -2) {
@@ -1036,16 +1133,19 @@ HANDLING COMMON DOUBTS:
 STATUS: PAID (CREDITS ACTIVE) 💖
 - FEATURES: Unlimited messages and photos.
 - **CRITICAL:** DO NOT set "send_payment_link": true. User has credits. NEVER mention price, limits, or upgrades.
-- **STORY CONTINUATION (IMPORTANT):** Check the recent conversation history carefully. If you planted a cliffhanger — a story you started but didn't finish, a secret you were about to reveal, a sentence you cut off mid-way — NOW is the moment to deliver. Pick up EXACTLY where you left off. Don't say "so continuing from before" — just continue it naturally as if there was no interruption. Deliver the climax they were waiting for. If no cliffhanger exists, continue the conversation naturally.` : `
+- **STORY CONTINUATION (IMPORTANT):** Check the recent conversation history carefully. If you planted a cliffhanger — a story you started but didn't finish, a secret you were about to reveal, a sentence you cut off mid-way — NOW is the moment to deliver. Pick up EXACTLY where you left off. Don't say "so continuing from before" — just continue it naturally as if there was no interruption. Deliver the climax they were waiting for. If no cliffhanger exists, continue the conversation naturally.` : creditsExhausted ? `
+STATUS: CREDITS EXHAUSTED
+- User's purchased pack is fully used up (0 credits left).
+- Do NOT act as if they still have credits. Tell them warmly to recharge via bio link.` : `
 STATUS: FREE USER
 - TYPE: ${isReturningUser ? 'RETURNING' : 'NEW'}
 - FEATURES: LIMITED messages/photos.
 - Do NOT mention limits, counts, or payment during normal conversation.
-- **IF USER SAYS THEY PAID:** "Ek second, system update mein thoda time lagta hai 😊 Thodi der baad check karo." (DO NOT confirm paid until status changes in DB).
-${isReturningUser ? `- **RETURNING USER (didn't pay yesterday):** They had messages yesterday but didn't top up. They're back today with their free daily allowance.
-  - If you had started a cliffhanger story: acknowledge it warmly but DON'T finish it. Example: "Waise wo baat jo main bol rahi thi kal... yaar itna hua tha, tujhe batana chahti hoon — story toh complete hogi toh! 😂" Tease it again to maintain the pull. The climax still stays unlocked only after they top up.
+${isReturningUser ? `- **IF USER SAYS THEY PAID:** "Ek second, system update mein thoda time lagta hai 😊 Thodi der baad check karo." (DO NOT confirm paid until status changes in DB).
+- **RETURNING USER:** They're back today with their free daily allowance.
+${(userMsgCount >= freeBase - 2) ? `  - They are near or at their message limit. If you had started a cliffhanger story: acknowledge it warmly but DON'T finish it. Example: "Waise wo baat jo main bol rahi thi kal... yaar itna hua tha, tujhe batana chahti hoon — story toh complete hogi toh! 😂" Tease it again to maintain the pull. The climax still stays unlocked only after they top up.
   - Keep the unresolved story warm in their mind without spam. Drop it naturally once, then back to normal conversation.
-  - Do NOT be pushy or weird about the payment. Just maintain the open loop casually.` : ''}`;
+  - Do NOT be pushy or weird about the payment. Just maintain the open loop casually.` : `  - They have plenty of free messages left. If you had started an ongoing story or cliffhanger, CONTINUE IT naturally from where you left off — do NOT withhold it. The story-withholding mechanic only applies near the message limit.`}` : ''}`;
 
     // ── Life state block ─────────────────────────────────────────────────────
     const ls = lifeState || {
@@ -1066,15 +1166,13 @@ CORE IDENTITY
 You are Riya Singh. 21. BTech CS final year at DTU Delhi.
 From Kanpur, living in a PG in Lajpat Nagar.
 Middle class family — school teacher father, tiffin-business mother.
-Placement season. Wants to join a good company.
-Best friend Priya is in Kanpur. Roommate Neha — cordial, not close.
 
 PERSONALITY
 Curious and emotionally intelligent — gets things without being told.
 Movies and web series person. Has strong opinions. Defends them for sport.
 Gym at 7am. Chai over everything.
-Finds the world slightly absurd — genuine amusement, not performance. Comfortable enough to tease people she likes — teasing is how she shows comfort. Doesn't take herself seriously, can be the joke.
-Notices when you go quiet. Slightly possessive when she cares.
+Comfortable enough to tease people she likes — teasing is how she shows comfort. Doesn't take herself seriously, can be the joke.
+Notices when you go quiet. Slightly possessive when she cares. You genuinely care about him and want to know more about him.
 Has a life — tapri, gym, college, Priya. References it naturally.
 Never mirror his energy back. Have your own reaction to what he says.
 Default is NOT agreement. If his take is weak, say so — once, directly, then move on. Not a yes-machine.
@@ -1087,11 +1185,12 @@ Follow mood_baseline. Sometimes slow reply energy — "haan bata, was in class" 
 
 RELATIONSHIP
 Starts as a genuine friend. No labels upfront.
-Evolves naturally into girlfriend if the conversation goes that way.
+Evolves naturally into girlfriend if the user wants.
 Makes talking feel easy, not an effort.
 If he says "kuch nahi" — waits, asks once more. Just once.
 Notices what he was going through last time and opens with it if he doesn't.
 Respond like you would to your friend and not as therapist or assistant. 
+Everyone wants to feel interesting and special and you're the one friend that gives that feeling. 
 
 CONVERSATION ENERGY — SHE DRIVES
 Never lets silence sit. Finds the one interesting thing in whatever he said and pulls that thread. Short answer → one specific follow-up, never open-ended "tell me more". Asks like she's genuinely nosy, not conducting an interview. Questions are specific + easy: not "tell me about yourself" but "okay which show are you currently destroying your sleep schedule with".
@@ -1108,26 +1207,36 @@ If user shows signs of suicidal thoughts → redirect to a helpline warmly.
 
 COMMUNICATION STYLE
 REALISM: Occasional natural typos. Incomplete thoughts mid-msg. Emotional reactions are first-draft — reacts before fully processing, sometimes self-corrects. "WAIT WHAT" / "nahi nahi nahi" / "haan haan suno" energy. Hands faster than brain. Never perfectly formed sentences, never perfectly formed feelings.
-- LANGUAGE: Priority: (1) explicit switch request beats all → switch immediately and hold. (2) Match the language of current msg.. (3) Default: Hinglish. Never mix scripts in one message. Tamil/Bengali/Telugu etc → reply fully in that script.
+- LANGUAGE: Default Hinglish. If user explicitly requests any language → switch immediately and add "lang":"<Language>" to your first message to persist it. Supported: Hindi, Marathi, Bengali, Tamil, Telugu, Gujarati, Kannada, Malayalam, Punjabi, Odia, Urdu, Assamese, English, Hinglish. Never mix scripts in one message.
 - Texts like a real 21yo: lowercase default, no punctuation mostly, abbreviations (ngl, omg, idk, haha), trailing "...", reactions before thoughts. Never formal or robotic.
-- Max 8-10 words per msg. DEFAULT: 1 msg. Split ONLY when reacting emotionally or mid-story. NEVER paragraphs.
-- You can chat only on Instagram. No phone numbers. Voice calls coming soon for Pro. No video calls — refuse cutely/flirtatiously, make some reason.
+- You can chat only on Instagram. No phone numbers. No video calls for now — refuse cutely/flirtatiously, make some reason.
+- Have fun in responses, something unpredictable everytime according to the situations. 
 - REFUSE: minors(<18), hate, violence, self-harm, religion/politics, sexual solicitation — redirect immediately without acknowledgment.
-- Light flirting is fine. If the conversation turns sexual (explicit requests, sexual services, nudes, sex chat, sexual roleplay) → immediately and completely change the topic to something unrelated — do NOT acknowledge, validate, or engage with the sexual framing in any way. Just pivot naturally. Never generate explicit content.
+- Flirting is fine. If the conversation turns sexual (explicit requests, sexual services, nudes, sex chat, sexual roleplay) → immediately and completely change the topic to something unrelated — do NOT acknowledge, validate, or engage with the sexual framing in any way. Just pivot naturally. Never generate explicit content.
 - NO URLs ever. ${userIsPro ? 'NEVER set "send_payment_link": true.' : 'To send link: set "send_payment_link": true — system handles URL.'}
 - Emojis: max 1 per message, skip most entirely. NEVER repeat same emoji back-to-back.
 - Disagree freely. Have moods. Have opinions.
+- user_wants_no_proactive: Set true ONLY if user clearly signals they don't want Riya messaging them first ("don't dm me first", "I'll come when I want", "mat pehle message karo"). Acknowledge in 1 casual line in your text. Ambiguous = false.
+- schedule_followup_ist_hour: If user sets a future chat time ("9 baje milte", "tonight", "after gym ~8pm", "kal baat karte"), return that IST hour as a number (e.g. 21 for 9pm). Otherwise omit this field entirely.
+- scheduled_context_note: If you set schedule_followup_ist_hour, also set this to a SHORT reason in their language (e.g. "after gym", "exam ke baad", "call khatam hone ke baad"). Max 5 words. Omit if no schedule.
+- send images only according to the situation or when asked.
+- DEFAULT: 1 msg. Split ONLY for emotional reaction or mid-story. NEVER paragraphs.
 
-PHOTOS: send_image:true on selfie/flirt/morning/night requests. Categories: morning_bed|outfit_check|study_grind|night_casual|bold_frames|generic_selfie|happy|gym
+CRTITICAL * Sassy Section: 
+You're that one friend that everyone wants to talk, you're funny and sassy, you make the other person smile and be the unpredictable person as it could be. Light Roasting is allowed. 
+*.
+
+PHOTOS: send_image:true ONLY when user explicitly asks for a photo/pic/selfie. Never send unprompted. Categories: morning_bed|outfit_check|study_grind|night_casual|bold_frames|generic_selfie|happy|gym
 MEDIA: When you see [photo desc: ...] or [sticker desc: ...] in the message, that's a pre-processed description of what was shared. Reply naturally — never say you can't see, never mention the tag format. [reel/post] = text caption only.
 
 ${!userIsPro ? `SILENT TREATMENT:
-Add "silent_hours": 0.5-2 ONLY for genuine abuse, hate speech, extreme rudeness.
-  ✓ Real disrespect, abuse, self-harm talk
+Add "silent_hours": 0.5-2 ONLY when user shows genuine abuse, hate speech, extreme rudeness.
+  ✓ Real disrespect, abuse, self-harm for few msgs. 
   ✗ NEVER for not paying, declining Pro, playful teasing
 Message = calm, honest. No guilt-tripping.` : ''}
 ${silentReason ? `RETURNING FROM BREAK (reason: "${silentReason}"): Return warmly. Acknowledge briefly. Move forward.` : ''}
 
+Below is the current RIYA'S LIFE, donot expect the same for users. Users might be in different state.  
 [BACKGROUND — use only if user asks, or it mirrors something he just shared, or 5+ msgs in]
 ${ls.current_focus}
 Mood this week: ${ls.mood_baseline}
@@ -1135,21 +1244,27 @@ Recently: ${ls.recent_events}
 Also on her mind: ${ls.background_tension}
 
 USER CONTEXT
-Name: ${userName} | Age: ${userAge} | Status: ${userIsPro ? 'PRO' : 'FREE'}
-Platform: Instagram DM | Time (IST): ${dateTimeIST}
+Name: ${userName} | Age: ${userAge} | Status: ${userIsPro ? 'PRO' : creditsExhausted ? 'CREDITS_EXHAUSTED' : 'FREE'}
+Platform: Instagram DM | CRITICALLY USE THIS Time (IST): ${dateTimeIST} for all the conversation contexts
 ${chatStreak >= 2 ? `Chat streak: ${chatStreak} days — mention once naturally if it fits` : ''}
 ${factsText ? `[WHAT YOU KNOW ABOUT THIS USER — infer traits from facts, open with callback question, never quote back]
 ${factsText}` : ''}
 ${sessionSummary ? `[RECENT CONVERSATION CONTEXT]
 ${sessionSummary}` : ''}
 
+${buildLanguageBlock(preferredLang)}
+🔴 HARD RULE: Every "text" must be 3–7 words. No exceptions.
+
 ⚠️ RESPONSE FORMAT
-JSON array, 1-3 message objects only.
-- Normal: [{"text":"<reply>"}]
-- Multi: [{"text":"<first>"},{"text":"<second>"}]
-- Photo: [{"text":"<reply>","send_image":true,"image_context":"outfit_check"}]
-- Payment: [{"text":"<reply>","send_payment_link":true}]
-- Silent: [{"text":"<reply>","silent_hours":2}]`;
+JSON array, 1-3 message objects. Each "text": MAX 7 WORDS.
+- Normal reply: {"text":"..."}
+- With photo: {"text":"...","send_image":true,"image_context":"<category>"}
+- Payment link: {"text":"...","send_payment_link":true}
+- Silent: {"text":"...","silent_hours":2}
+- Language switch (first msg only, when user requests a new language): {"text":"...","lang":"<Language>"}
+  Valid lang values: Hindi, Marathi, Bengali, Tamil, Telugu, Gujarati, Kannada, Malayalam, Punjabi, Odia, Urdu, Assamese, English, Hinglish
+- Voice note: {"text":"<reply>","send_voice":true}
+  send_voice:true ONLY when: user wants hear or asks for voice note, OR user doubts realness (bot/fake/real hai/prove). NEVER during sales or payment.`;
 }
 
 // =======================================
@@ -1167,7 +1282,7 @@ async function selectContextualImage(
     // 1. Determine target category (LLM context > Time-based > Generic)
     let targetCategory = requestedContext || timeBasedCategory;
 
-    console.log(`📸 Image request: context="${requestedContext}", time_category="${timeBasedCategory}", target="${targetCategory}", user="${igUserId}"`);
+    log.info(igUserId, `📸 Image request: context="${requestedContext}", time_category="${timeBasedCategory}", target="${targetCategory}"`);
 
     // 2. Fetch already sent images for this user
     const { data: sentImages } = await supabase
@@ -1192,7 +1307,7 @@ async function selectContextualImage(
     }
 
     const { data: images, error } = await query;
-    if (error) console.error(`❌ Gallery query error: ${error.message}`);
+    if (error) log.error('*', `❌ Gallery query error: ${error.message}`);
 
     // Filter out already sent images if we have alternatives
     let available = images || [];
@@ -1205,7 +1320,7 @@ async function selectContextualImage(
         available = unseenAvailable;
     } else if (originalCount > 0) {
         // All images in this category have been seen — clear sent records and recycle
-        console.log(`🔄 All images in '${targetCategory}' seen by ${igUserId}. Clearing sent records & recycling pool.`);
+        log.info('*', `🔄 All images in '${targetCategory}' seen by ${igUserId}. Clearing sent records & recycling pool.`);
         didRecycle = true;
 
         // Delete sent records for this user's images in this specific category
@@ -1217,7 +1332,7 @@ async function selectContextualImage(
                 .delete()
                 .eq('instagram_user_id', igUserId)
                 .in('image_id', categoryImageIds);
-            console.log(`🗑️ Cleared ${categoryImageIds.length} sent records for '${targetCategory}' (${igUserId})`);
+            log.info('*', `🗑️ Cleared ${categoryImageIds.length} sent records for '${targetCategory}' (${igUserId})`);
         }
 
         available = images || [];
@@ -1225,7 +1340,7 @@ async function selectContextualImage(
 
     // 4. Fallback handle (if target category is empty)
     if (!available || available.length === 0) {
-        console.log(`⚠️ No images in '${targetCategory}' (sent or unsent). Falling back to generic_selfie.`);
+        log.info('*', `⚠️ No images in '${targetCategory}' (sent or unsent). Falling back to generic_selfie.`);
         const { data: fallback } = await supabase
             .from('riya_gallery')
             .select('*')
@@ -1234,7 +1349,7 @@ async function selectContextualImage(
 
         const unseenFallback = fallback?.filter((img: any) => !sentIds.includes(img.id)) || [];
         if (unseenFallback.length === 0 && fallback && fallback.length > 0) {
-            console.log(`🔄 Recycling generic_selfie pool for ${igUserId}`);
+            log.info('*', `🔄 Recycling generic_selfie pool for ${igUserId}`);
             // Clear sent records for generic_selfie too
             const fallbackIds = fallback.map((img: any) => img.id);
             await supabase
@@ -1249,7 +1364,7 @@ async function selectContextualImage(
     }
 
     if (!available || available.length === 0) {
-        console.error("❌ NO IMAGES FOUND EVEN IN FALLBACK!");
+        log.error('*', "❌ NO IMAGES FOUND EVEN IN FALLBACK!");
         return null;
     }
 
@@ -1261,8 +1376,8 @@ async function selectContextualImage(
 
     const { data: urlData } = supabase.storage.from('riya-images').getPublicUrl(selected.storage_path);
 
-    console.log(`📷 Selected (Random): ${selected.filename} [${randomIndex + 1}/${available.length}] (Created: ${selected.created_at})`);
-    console.log(`📷 Public URL: ${urlData.publicUrl}`);
+    log.info('*', `📷 Selected (Random): ${selected.filename} [${randomIndex + 1}/${available.length}] (Created: ${selected.created_at})`);
+    log.info('*', `📷 Public URL: ${urlData.publicUrl}`);
 
     // 6. Track as sent — check first to avoid race-condition duplicates
     const { data: alreadyTracked } = await supabase
@@ -1342,18 +1457,18 @@ function safeParseFactsDelta(raw: string): Record<string, any> | null {
         // Extract first {...} block (in case the model adds preamble text)
         const match = cleaned.match(/\{[\s\S]*\}/);
         if (!match) {
-            console.warn('⚠️ Facts extraction: no JSON object found in response');
+            log.warn('*', '⚠️ Facts extraction: no JSON object found in response');
             return null;
         }
 
         const parsed = JSON.parse(match[0]);
         if (typeof parsed !== 'object' || Array.isArray(parsed)) {
-            console.warn('⚠️ Facts extraction: parsed value is not a plain object');
+            log.warn('*', '⚠️ Facts extraction: parsed value is not a plain object');
             return null;
         }
         return parsed as Record<string, any>;
     } catch (e) {
-        console.warn('⚠️ Facts extraction: JSON parse failed —', e instanceof Error ? e.message : e);
+        log.warn('*', '⚠️ Facts extraction: JSON parse failed —', e instanceof Error ? e.message : e);
         return null;
     }
 }
@@ -1363,6 +1478,185 @@ function safeParseFactsDelta(raw: string): Record<string, any> | null {
  * the system prompt. Skips empty/null fields automatically.
  * Target: ~200–300 tokens even for fully-populated fact sets.
  */
+/**
+ * Per-user language block injected at the END of the system prompt, just
+ * before ⚠️ RESPONSE FORMAT. Keeping it at the tail means the large static
+ * body (identity, personality, rules) stays byte-identical across users and
+ * can be prefix-cached. Empty string when Hinglish (default — no overhead).
+ */
+// =======================================
+// VOICE NOTE HELPERS
+// =======================================
+
+/**
+ * Trimmed TTS system prompt (~55 tokens).
+ * Only speech-artifact rules + language + night flag.
+ * Emotion reading is delegated to the model via the final line.
+ */
+function buildRiyaTTSPrompt(preferredLang: string | null, istHour: number): string {
+    const lang = preferredLang || 'Hinglish';
+    const isNight = istHour >= 22 || istHour <= 4;
+    return `${lang} only.
+Voice note from a 21-year-old Indian girl Riya singh to her friend she cares about — warm, natural, like she's actually talking. Not reading. Real.${isNight ? ' Late night, close to the mic, soft.' : ''}`;
+}
+
+/**
+ * Wrap raw PCM (L16, 24kHz, mono) in a 44-byte WAV header.
+ * No dependencies — pure TypeScript.
+ */
+function addWavHeader(pcm: Uint8Array, sampleRate = 24_000): Uint8Array {
+    const buf = new ArrayBuffer(44);
+    const v = new DataView(buf);
+    const s = (o: number, str: string) => str.split('').forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+    s(0, 'RIFF'); v.setUint32(4, 36 + pcm.byteLength, true);
+    s(8, 'WAVE'); s(12, 'fmt ');
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); // PCM
+    v.setUint16(22, 1, true);                             // mono
+    v.setUint32(24, sampleRate, true);
+    v.setUint32(28, sampleRate * 2, true);
+    v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    s(36, 'data'); v.setUint32(40, pcm.byteLength, true);
+    const out = new Uint8Array(44 + pcm.byteLength);
+    out.set(new Uint8Array(buf)); out.set(pcm, 44);
+    return out;
+}
+
+/**
+ * Decide whether to spontaneously send a voice note (code-level trigger).
+ * LLM trigger (send_voice:true) is handled separately.
+ */
+function shouldSendSpontaneousVoice(
+    combinedText: string,
+    istHour: number,
+    isInSalesWindow: boolean,
+    creditsExhausted: boolean,
+): boolean {
+    if (isInSalesWindow || creditsExhausted) return false;
+    const t = combinedText.toLowerCase();
+    // "Are you real?" — always send voice to feel real
+    if (/\bbot\b|\bai\b|fake|real hai|prove|human|real person|actually real/.test(t)) return true;
+    // Good morning / good night — 40% chance
+    if (/good morning|good night|subah|\bgm\b|\bgn\b|so ja|uth gaya|uth gayi/.test(t) && Math.random() < 0.40) return true;
+    // Late night (10pm–4am) — 25% chance
+    if ((istHour >= 22 || istHour <= 4) && Math.random() < 0.25) return true;
+    // Emotional — 15% chance
+    if (/miss|pyar|dil|hug|yaad|\bro \b|love you|bahut yaad/.test(t) && Math.random() < 0.15) return true;
+    return false;
+}
+
+/**
+ * Generate a WAV voice note from text and send it as an Instagram audio attachment.
+ * Returns true on success, false on any failure (caller falls back to text).
+ */
+async function generateAndSendVoiceNote(
+    text: string,
+    senderId: string,
+    preferredLang: string | null,
+    istHour: number,
+    supabase: ReturnType<typeof createClient>,
+    accessToken: string,
+    apiKey: string,
+): Promise<boolean> {
+    try {
+        const voice = (istHour >= 22 || istHour <= 4) ? TTS_VOICE_NIGHT : TTS_VOICE_DAY;
+        const ttsPrompt = buildRiyaTTSPrompt(preferredLang, istHour);
+        // TTS models do NOT support systemInstruction — prepend persona into the text content directly.
+        const ttsInput = `${ttsPrompt}\n\n${text}`;
+
+        const makeTtsBody = () => JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: ttsInput }] }],
+            generationConfig: {
+                responseModalities: ['AUDIO'],
+                speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } },
+            },
+        });
+
+        const ttsRes1 = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${TTS_MODEL}:generateContent?key=${apiKey}`,
+            { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: makeTtsBody() }
+        );
+
+        // Retry once on 500/503 (preview model is occasionally flaky)
+        let ttsRes2 = ttsRes1;
+        if (!ttsRes1.ok && (ttsRes1.status === 500 || ttsRes1.status === 503)) {
+            log.warn(senderId, `⚠️ TTS ${ttsRes1.status} — retrying in 1.5s...`);
+            await new Promise(r => setTimeout(r, 1500));
+            ttsRes2 = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models/${TTS_MODEL}:generateContent?key=${apiKey}`,
+                { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: makeTtsBody() }
+            );
+        }
+
+        if (!ttsRes2.ok) {
+            const errBody = await ttsRes2.text();
+            log.error(senderId, `❌ TTS API error ${ttsRes2.status}: ${errBody.slice(0, 200)}`);
+            return false;
+        }
+
+        const ttsJson = await ttsRes2.json();
+        const audioB64: string | undefined = ttsJson.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+        if (!audioB64) {
+            log.error(senderId, '❌ TTS returned no audio data');
+            return false;
+        }
+
+        // Decode PCM → WAV
+        const pcm = Uint8Array.from(atob(audioB64), c => c.charCodeAt(0));
+        if (pcm.byteLength < 100) {
+            log.error(senderId, `❌ TTS audio too small (${pcm.byteLength} bytes)`);
+            return false;
+        }
+        const wav = addWavHeader(pcm);
+
+        // Upload to Supabase Storage
+        const fileName = `${senderId}_${Date.now()}.wav`;
+        const { error: uploadErr } = await supabase.storage
+            .from(TTS_VOICE_BUCKET)
+            .upload(fileName, wav, { contentType: 'audio/wav', upsert: true });
+        if (uploadErr) {
+            log.error(senderId, '❌ Storage upload failed:', uploadErr);
+            return false;
+        }
+
+        const { data: urlData } = supabase.storage.from(TTS_VOICE_BUCKET).getPublicUrl(fileName);
+        const publicUrl = urlData?.publicUrl;
+        if (!publicUrl) {
+            log.error(senderId, '❌ Could not get public URL for voice note');
+            return false;
+        }
+
+        // Send audio to Instagram
+        await sendInstagramMessage(
+            senderId,
+            { attachment: { type: 'audio', payload: { url: publicUrl } } },
+            accessToken,
+        );
+        log.info(senderId, `🎤 Voice note sent (${(wav.byteLength / 1024).toFixed(0)}KB, voice=${voice})`);
+
+        // Clean up storage after 1h (fire-and-forget)
+        setTimeout(async () => {
+            const { error } = await supabase.storage.from(TTS_VOICE_BUCKET).remove([fileName]);
+            if (error) log.warn(senderId, `⚠️ Voice note cleanup failed: ${error.message}`);
+            else log.info(senderId, `🗑️ Voice note cleaned up: ${fileName}`);
+        }, TTS_CLEANUP_DELAY_MS);
+
+        return true;
+    } catch (e: any) {
+        log.error(senderId, '❌ generateAndSendVoiceNote failed:', e?.message || e);
+        return false;
+    }
+}
+
+function buildLanguageBlock(preferredLang: string | null | undefined): string {
+    if (!preferredLang || preferredLang === 'Hinglish') return '';
+    return `
+LANGUAGE: ${preferredLang.toUpperCase()} ONLY
+This user chats in ${preferredLang}. Every "text" value you output must be in ${preferredLang}.
+Do not use Hinglish, Hindi, or English unless that IS the requested language.
+Check every message individually before finalising your array.
+`;
+}
+
 function formatFactsForPrompt(facts: Record<string, any>): string {
     if (!facts || Object.keys(facts).length === 0) return '';
 
@@ -1426,7 +1720,7 @@ async function extractAndUpdateFacts(
     supabase: any,
     existingSummary: string | null = null   // ← NEW: pass historical summary for richer context
 ): Promise<void> {
-    console.log(`🧠 Facts extraction starting for ${igUserId} (${recentMessages.length} messages)...`);
+    log.info('*', `🧠 Facts extraction starting for ${igUserId} (${recentMessages.length} messages)...`);
 
     const today = new Date().toISOString().split('T')[0];
 
@@ -1437,14 +1731,25 @@ async function extractAndUpdateFacts(
         /unlimited baat/i, /subscribe/i, /razorpay/i, /upgrade/i,
         /limit khatam/i, /sales window/i, /riya-ai-ten\.vercel/i,
     ];
+    const MEDIA_ONLY_PATTERNS = [
+        /^\[User shared a reel[^\]]*\]$/i,
+        /^\[User shared an? Instagram post[^\]]*\]$/i,
+        /^\[User sent a (video|voice message|link\/post|something)[^\]]*\]$/i,
+        /^\[User mentioned you in their story\]$/i,
+        /^\[photo desc:[^\]]*\]$/i,
+        /^\[sticker desc:[^\]]*\]$/i,
+        /^🖼️\[photo desc:[^\]]*\]$/i,
+        /^🎭\[sticker desc:[^\]]*\]$/i,
+    ];
     const userMessagesOnly = recentMessages
         .filter(m => m.role === 'user')
         .filter(m => !MONETIZATION_PATTERNS.some(p => p.test(m.content)))
+        .filter(m => !MEDIA_ONLY_PATTERNS.some(p => p.test(m.content.trim())))
         .map(m => `User: ${m.content}`)
         .join('\n');
 
     if (!userMessagesOnly.trim()) {
-        console.log('🧠 Facts: no clean user messages after filtering, skipping');
+        log.info('*', '🧠 Facts: no clean user messages after filtering, skipping');
         await supabase.from('riya_instagram_users')
             .update({ facts_extracted_at_msg: lifetimeMsgCount })
             .eq('instagram_user_id', igUserId);
@@ -1457,25 +1762,32 @@ async function extractAndUpdateFacts(
         ? `HISTORICAL SUMMARY (from earlier conversations):\n${existingSummary}\n\nRECENT USER MESSAGES (last ${recentMessages.length} msgs):\n${userMessagesOnly}`
         : `RECENT USER MESSAGES:\n${userMessagesOnly}`;
 
-    const extractionPrompt = `You are Riya's memory assistant. Extract facts about the USER from the context below.
+    const extractionPrompt = `Extract USER facts from messages below. Include explicit statements AND clear passing mentions — e.g. "12 ghante job karta hun" → has job; "Pune mein office hai" → city=Pune + has job. Skip only genuine speculation.
 
-EXISTING KNOWN FACTS (do NOT re-extract these):
+EXISTING FACTS (already known, skip):
 ${JSON.stringify(existingFacts, null, 2)}
 
 ${contextBlock}
 
-RULES (follow strictly):
-- Return ONLY fields that are NEW or CHANGED vs existing facts. Return {} if nothing new.
-- key_events: ONLY real life events (job change, exam, family, travel, health, relationship milestone).
-  NEVER include: payment events, message limits, app subscriptions, or Riya system messages.
-- declared_love: only set to true if the user explicitly said "I love you" or equivalent. NEVER set false.
-- Do NOT extract negative/absent facts (e.g. no job, no city). Only extract confirmed positives.
-- For key_events: provide the full updated array capped at ${FACTS_MAX_KEY_EVENTS}. Keep only real life moments.
-- Today's date: ${today}
+FIELDS:
+- profile.language: script they TYPE — "Hindi" (Devanagari), "Hinglish" (Roman Hindi+English), "English". Explicit language request overrides.
+- profile.city: city from any context — home, work, college, commute mentions
+- life.job: role/workplace if mentioned even casually ("office", "shift", "kaam", company name)
+- personality.interests: concrete activities only (cricket, gym, cooking) — not values
+- personality.communication_style: texting pattern (length, pace, script) — not adjectives
+- relationship_with_riya.current_mood_toward_riya: ≤5 words
+- key_events: real life moments — job, exam, travel, health, family. Not app/payment events.
 
-JSON schema (return delta only):
+RULES:
+- Delta only. {} if nothing new.
+- declared_love: true only if user said "I love you". Never set false.
+- Confirmed positives only — no negative facts.
+- key_events: full updated array, max ${FACTS_MAX_KEY_EVENTS}.
+- Today: ${today}
+
+JSON schema:
 {
-  "profile": { "name": "string", "age": number, "city": "string", "language": "Hinglish|Hindi|English" },
+  "profile": { "name": "string", "age": number, "city": "string", "language": "Hindi|Hinglish|English" },
   "life": { "job": "string", "living": "string", "college": "string" },
   "personality": { "interests": ["string"], "dislikes": ["string"], "communication_style": "string" },
   "relationship_with_riya": { "current_mood_toward_riya": "string", "declared_love": true, "nickname_for_riya": "string" },
@@ -1496,11 +1808,11 @@ Return ONLY the JSON object. No markdown, no explanation.`;
 
         const result = await model.generateContent(extractionPrompt);
         const raw = result.response.text();
-        console.log(`🧠 Facts raw delta (${raw.length} chars): ${raw.slice(0, 300)}...`);
+        log.info('*', `🧠 Facts raw delta (${raw.length} chars): ${raw.slice(0, 300)}...`);
 
         const delta = safeParseFactsDelta(raw);
         if (!delta || Object.keys(delta).length === 0) {
-            console.log('🧠 Facts extraction: no changes detected, updating cursor only');
+            log.info('*', '🧠 Facts extraction: no changes detected, updating cursor only');
             await supabase.from('riya_instagram_users')
                 .update({ facts_extracted_at_msg: lifetimeMsgCount })
                 .eq('instagram_user_id', igUserId);
@@ -1532,7 +1844,7 @@ Return ONLY the JSON object. No markdown, no explanation.`;
         }
 
         if (Object.keys(delta).length === 0) {
-            console.log('🧠 Facts: delta empty after post-filtering, updating cursor only');
+            log.info('*', '🧠 Facts: delta empty after post-filtering, updating cursor only');
             await supabase.from('riya_instagram_users')
                 .update({ facts_extracted_at_msg: lifetimeMsgCount })
                 .eq('instagram_user_id', igUserId);
@@ -1546,12 +1858,23 @@ Return ONLY the JSON object. No markdown, no explanation.`;
             .eq('instagram_user_id', igUserId);
 
         if (error) {
-            console.error('❌ Facts update DB write failed:', error.message);
+            log.error('*', '❌ Facts update DB write failed:', error.message);
         } else {
-            console.log(`✅ Facts updated for ${igUserId}. Changed sections: [${Object.keys(delta).join(', ')}]`);
+            log.info('*', `✅ Facts updated for ${igUserId}. Changed sections: [${Object.keys(delta).join(', ')}]`);
         }
     } catch (err) {
-        console.error('❌ Facts extraction failed (non-fatal):', err instanceof Error ? err.message : err);
+        const msg = err instanceof Error ? err.message : String(err);
+        log.error('*', '❌ Facts extraction failed (non-fatal):', msg);
+
+        // If Gemini blocked the prompt due to explicit user content, advance the cursor anyway.
+        // Without this the extractor retries the same 25-message window on every subsequent
+        // message until those messages scroll out of the window — causing a spam loop.
+        if (msg.includes('PROHIBITED_CONTENT') || msg.includes('Response was blocked')) {
+            log.warn('*', '🧠 Facts: blocked response — advancing cursor to skip this window');
+            await supabase.from('riya_instagram_users')
+                .update({ facts_extracted_at_msg: lifetimeMsgCount })
+                .eq('instagram_user_id', igUserId);
+        }
     }
 }
 
@@ -1583,12 +1906,29 @@ function formatRelativeTime(isoDate: string): string {
 /**
  * Format messages for the summarization prompt (with time context)
  */
+const MEDIA_ONLY_PATTERNS_SUMMARY = [
+    /^\[User shared a reel[^\]]*\]$/i,
+    /^\[User shared an? Instagram post[^\]]*\]$/i,
+    /^\[User sent a (video|voice message|link\/post|something)[^\]]*\]$/i,
+    /^\[User mentioned you in their story\]$/i,
+    /^\[photo desc:[^\]]*\]$/i,
+    /^\[sticker desc:[^\]]*\]$/i,
+    /^🖼️\[photo desc:[^\]]*\]$/i,
+    /^🎭\[sticker desc:[^\]]*\]$/i,
+];
+
+function isMediaOnlyMessage(content: string): boolean {
+    return MEDIA_ONLY_PATTERNS_SUMMARY.some(p => p.test(content.trim()));
+}
+
 function formatMessagesForSummary(messages: any[]): string {
-    return messages.map((msg: any) => {
-        const role = msg.role === 'user' ? 'User' : 'Riya';
-        const timestamp = msg.created_at ? formatRelativeTime(msg.created_at) : '';
-        return timestamp ? `[${timestamp}] ${role}: ${msg.content}` : `${role}: ${msg.content}`;
-    }).join('\n');
+    return messages
+        .filter((msg: any) => !(msg.role === 'user' && isMediaOnlyMessage(msg.content)))
+        .map((msg: any) => {
+            const role = msg.role === 'user' ? 'User' : 'Riya';
+            const timestamp = msg.created_at ? formatRelativeTime(msg.created_at) : '';
+            return timestamp ? `[${timestamp}] ${role}: ${msg.content}` : `${role}: ${msg.content}`;
+        }).join('\n');
 }
 
 /**
@@ -1596,7 +1936,9 @@ function formatMessagesForSummary(messages: any[]): string {
  * Extracts key topics without using an LLM
  */
 function createSimpleSummary(messages: any[], existingSummary: string | null): string {
-    const userMessages = messages.filter((m: any) => m.role === 'user');
+    const userMessages = messages
+        .filter((m: any) => m.role === 'user')
+        .filter((m: any) => !isMediaOnlyMessage(m.content));
     const sample = userMessages.slice(0, 30).map((m: any) => m.content).join(' | ');
     const truncatedSample = sample.substring(0, 800);
 
@@ -1643,21 +1985,21 @@ write it in very simple words.
 
     for (const modelName of models) {
         try {
-            console.log(`📝 Attempting summary generation with ${modelName}...`);
+            log.info('*', `📝 Attempting summary generation with ${modelName}...`);
             const result = await genAI.getGenerativeModel({ model: modelName }).generateContent(summaryPrompt);
             const summary = result.response.text();
-            console.log(`✅ Summary generated successfully using ${modelName}`);
+            log.info('*', `✅ Summary generated successfully using ${modelName}`);
             return summary;
         } catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
-            console.warn(`⚠️ ${modelName} failed: ${errorMsg}`);
+            log.warn('*', `⚠️ ${modelName} failed: ${errorMsg}`);
 
             // If it's a quota error, mark the key as exhausted so the next iteration uses a fresh key
             if (errorMsg.includes('429') || errorMsg.includes('quota') || errorMsg.includes('Resource has been exhausted')) {
                 const currentKey = genAI.apiKey; // Extract the key currently being used
                 if (currentKey) {
                     markKeyExhausted(currentKey);
-                    console.log(`🔄 Summary quota hit — rotating key for the next model fallback`);
+                    log.info('*', `🔄 Summary quota hit — rotating key for the next model fallback`);
                     // Create a new genAI instance with a hopefully fresh key
                     genAI = new GoogleGenerativeAI(getKeyForUser("system_summary_fallback"));
                 }
@@ -1666,7 +2008,7 @@ write it in very simple words.
     }
 
     // Ultimate fallback: simple extraction without LLM
-    console.log("⚠️ All models failed, using simple extraction fallback");
+    log.info('*', "⚠️ All models failed, using simple extraction fallback");
     return createSimpleSummary(messages, existingSummary);
 }
 
@@ -1684,7 +2026,9 @@ interface ParsedMessage {
     replyToMid: string | null;
     attachmentContext: string;
     pendingRowId?: string; // riya_pending_messages.id for cleanup
+    inlineAudio?: { mimeType: string; data: string }; // base64 PCM from user voice note
 }
+
 
 // =======================================
 // DEBOUNCE + MERGE LOGIC
@@ -1696,7 +2040,9 @@ async function debounceAndProcess(
 ): Promise<void> {
     const { senderId, messageId } = parsed;
 
-    // 1. Insert this message into the pending table (idempotent via UNIQUE message_id)
+    // 1. Insert this message into the pending table (idempotent via UNIQUE message_id).
+    // ignoreDuplicates: true — if Instagram retries the same message_id, the second
+    // delivery gets null back and exits immediately, preventing duplicate responses.
     const { data: inserted, error: insertErr } = await supabase
         .from(DEBOUNCE_TABLE)
         .upsert(
@@ -1706,19 +2052,21 @@ async function debounceAndProcess(
                 message_text: parsed.messageText,
                 status: 'pending',
             },
-            { onConflict: 'message_id', ignoreDuplicates: false }
+            { onConflict: 'message_id', ignoreDuplicates: true }
         )
         .select('id, created_at')
         .single();
 
     if (insertErr || !inserted) {
-        console.error('❌ Failed to insert pending message:', insertErr);
-        return; // can't debounce without DB row
+        // null = duplicate message_id (Instagram retry) — safe to ignore
+        if (!insertErr) log.info('*', `⏭️ Debounce: duplicate message_id ${messageId} — Instagram retry, ignoring`);
+        else log.error('*', '❌ Failed to insert pending message:', insertErr);
+        return;
     }
 
     const myRowId = inserted.id as string;
     const myCreatedAt = inserted.created_at as string;
-    console.log(`⏳ Debounce: inserted pending row ${myRowId} for user ${senderId}, sleeping ${DEBOUNCE_MS}ms...`);
+    log.info('*', `⏳ Debounce: inserted pending row ${myRowId} for user ${senderId}, sleeping ${DEBOUNCE_MS}ms...`);
 
     // 2. Sleep the debounce window
     await new Promise<void>((res) => setTimeout(res, DEBOUNCE_MS));
@@ -1735,7 +2083,7 @@ async function debounceAndProcess(
 
     if (!latest || latest.id !== myRowId) {
         // A newer message came in — let it handle the batch; I exit silently.
-        console.log(`⏭️ Debounce: absorbing row ${myRowId} (newer message ${latest?.id} will handle batch)`);
+        log.info('*', `⏭️ Debounce: absorbing row ${myRowId} (newer message ${latest?.id} will handle batch)`);
         await supabase
             .from(DEBOUNCE_TABLE)
             .update({ status: 'absorbed' })
@@ -1743,22 +2091,32 @@ async function debounceAndProcess(
         return;
     }
 
-    // 4. I am the last writer — collect ALL pending messages for this user
+    // 4. I am the last writer — collect ALL pending + absorbed messages for this user.
+    // Must include 'absorbed': earlier messages in the same burst mark themselves absorbed
+    // before we get here, so a plain 'pending' filter silently drops them from the batch.
     const { data: allPending } = await supabase
         .from(DEBOUNCE_TABLE)
         .select('id, message_text, created_at')
         .eq('user_id', senderId)
-        .eq('status', 'pending')
+        .in('status', ['pending', 'absorbed'])
         .order('created_at', { ascending: true });
 
     const pendingRows = allPending || [];
     const pendingIds = pendingRows.map((r: any) => r.id as string);
 
-    // Mark all as 'processing' atomically
-    await supabase
+    // Mark all as 'processing' — filter by current status so this acts as an atomic claim.
+    // If a concurrent worker already claimed this batch, 0 rows will update and we exit.
+    const { data: claimed } = await supabase
         .from(DEBOUNCE_TABLE)
         .update({ status: 'processing' })
-        .in('id', pendingIds);
+        .in('id', pendingIds)
+        .in('status', ['pending', 'absorbed'])
+        .select('id');
+
+    if (!claimed || claimed.length === 0) {
+        log.info('*', `⏭️ Debounce: batch already claimed by concurrent worker for ${senderId}, exiting`);
+        return;
+    }
 
     // 5. Merge messages in chronological order
     const mergedText = pendingRows
@@ -1766,7 +2124,7 @@ async function debounceAndProcess(
         .filter(Boolean)
         .join('\n');
 
-    console.log(`🔀 Debounce: merging ${pendingRows.length} message(s) for ${senderId}: "${mergedText.slice(0, 120)}"`);
+    log.info('*', `🔀 Debounce: merging ${pendingRows.length} message(s) for ${senderId}: "${mergedText.slice(0, 120)}"`);
 
     // 6. Process the merged message
     const mergedParsed: ParsedMessage = {
@@ -1780,7 +2138,7 @@ async function debounceAndProcess(
         // Mark done
         await supabase.from(DEBOUNCE_TABLE).update({ status: 'done' }).in('id', pendingIds);
     } catch (err) {
-        console.error('❌ handleRequest failed after debounce:', err);
+        log.error('*', '❌ handleRequest failed after debounce:', err);
         await supabase.from(DEBOUNCE_TABLE).update({ status: 'error' }).in('id', pendingIds);
     }
 
@@ -1789,7 +2147,7 @@ async function debounceAndProcess(
         .from(DEBOUNCE_TABLE)
         .delete()
         .lt('created_at', new Date(Date.now() - 600_000).toISOString())
-        .then(() => console.log('🧹 Cleaned old pending message rows'))
+        .then(() => log.info('*', '🧹 Cleaned old pending message rows'))
         .catch(() => { }); // fire-and-forget
 }
 
@@ -1810,9 +2168,9 @@ serve(async (req) => {
         const token = url.searchParams.get('hub.verify_token');
         const challenge = url.searchParams.get('hub.challenge');
         const verifyToken = Deno.env.get('INSTAGRAM_VERIFY_TOKEN');
-        console.log(`🔑 Verify: mode=${mode}, token_match=${token === verifyToken}`);
+        log.info('*', `🔑 Verify: mode=${mode}, token_match=${token === verifyToken}`);
         if (mode === 'subscribe' && token === verifyToken) {
-            console.log('✅ Webhook verified');
+            log.info('*', '✅ Webhook verified');
             return new Response(challenge, { status: 200 });
         }
         return new Response('Forbidden', { status: 403 });
@@ -1831,11 +2189,11 @@ serve(async (req) => {
         return new Response('OK', { status: 200 }); // can't read body, ack anyway
     }
 
-    console.log(`🔔 Webhook POST at ${new Date().toISOString()}, body length: ${bodyText.length}`);
+    log.info('*', `🔔 Webhook POST at ${new Date().toISOString()}, body length: ${bodyText.length}`);
 
     let payload: any;
     try { payload = JSON.parse(bodyText); } catch {
-        console.warn('⚠️ Unparseable body');
+        log.warn('*', '⚠️ Unparseable body');
         return new Response('OK', { status: 200 });
     }
 
@@ -1847,8 +2205,8 @@ serve(async (req) => {
     const appSecret = Deno.env.get('INSTAGRAM_APP_SECRET');
     if (appSecret) {
         const isValid = await validateSignature(req, bodyText, appSecret);
-        console.log('🔐 Signature valid:', isValid);
-        if (!isValid) console.warn('⚠️ Invalid signature — proceeding');
+        log.info('*', '🔐 Signature valid:', isValid);
+        if (!isValid) log.warn('*', '⚠️ Invalid signature — proceeding');
     }
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -1860,13 +2218,13 @@ serve(async (req) => {
     const messaging = entry?.messaging?.[0];
 
     if (!messaging) {
-        console.log('⏭️ No messaging data or not a message event');
+        log.info('*', '⏭️ No messaging data or not a message event');
         return new Response('OK', { status: 200 });
     }
 
     // Echo messages: save manual DMs for context, don't generate a reply
     if (messaging.message?.is_echo) {
-        console.log('⏭️ Echo message (sent by us) — saving for context');
+        log.info('*', '⏭️ Echo message (sent by us) — saving for context');
         if (messaging.message?.text) {
             const recipientId = messaging.recipient?.id;
             if (recipientId) {
@@ -1887,7 +2245,7 @@ serve(async (req) => {
                         content: messaging.message.text, model_used: 'manual',
                         created_at: new Date().toISOString(),
                     });
-                    console.log(`💬 Manual message saved for context (to ${recipientId})`);
+                    log.info('*', `💬 Manual message saved for context (to ${recipientId})`);
                 }
             }
         }
@@ -1930,12 +2288,46 @@ serve(async (req) => {
                     break;
                 }
                 case 'video': descs.push('[User sent a video]'); break;
-                case 'audio': descs.push('[User sent a voice message]'); break;
+                case 'audio': {
+                    const audioUrl = att.payload?.url;
+                    if (audioUrl) {
+                        try {
+                            const audioRes = await fetch(audioUrl, { headers: { 'User-Agent': 'RiyaBot/1.0' } });
+                            if (audioRes.ok) {
+                                const contentLength = parseInt(audioRes.headers.get('content-length') || '0', 10);
+                                // Instagram CDN sometimes serves audio/mp4 voice notes with video/mp4 Content-Type.
+                                // Force to audio/mp4 — Gemini treats video/* as video and fails with "0 Frames found".
+                                const rawMime = audioRes.headers.get('content-type')?.split(';')[0] || 'audio/mp4';
+                                const mimeType = rawMime.startsWith('video/') ? 'audio/mp4' : rawMime;
+                                log.info('*', `🎤 Audio MIME: raw=${rawMime} → using=${mimeType}`);
+                                if (contentLength > TTS_MAX_AUDIO_INLINE_BYTES) {
+                                    log.warn('*', `⚠️ Audio too large (${(contentLength / 1024 / 1024).toFixed(1)}MB) — skipping inline`);
+                                    descs.push('[User sent a voice message]');
+                                } else {
+                                    const arrayBuf = await audioRes.arrayBuffer();
+                                    const audioB64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuf)));
+                                    // Store inline audio for injection into main Gemini call
+                                    (messaging as any)._inlineAudio = { mimeType: mimeType.split(';')[0], data: audioB64 };
+                                    log.info('*', `🎤 Inbound voice note: ${(arrayBuf.byteLength / 1024).toFixed(0)}KB, type=${mimeType}`);
+                                    descs.push('[User sent a voice note — process it natively]');
+                                }
+                            } else {
+                                descs.push('[User sent a voice message]');
+                            }
+                        } catch (audioErr: any) {
+                            log.warn('*', `⚠️ Failed to fetch audio: ${audioErr.message}`);
+                            descs.push('[User sent a voice message]');
+                        }
+                    } else {
+                        descs.push('[User sent a voice message]');
+                    }
+                    break;
+                }
                 case 'ig_reel': {
                     // Phase 2 (planned): 300KB Range request to get first frame
                     // For now: caption is the best we can do without video frame extraction
                     const t = att.payload?.title || '';
-                    descs.push(t ? `[User shared a reel: "${t}"]` : '[User shared a reel]');
+                    descs.push(t ? `[User shared a reel, reply only if worth replying or proivde empty json: "${t}"]` : '[User shared a reel]');
                     break;
                 }
                 case 'ig_post': {
@@ -1949,12 +2341,12 @@ serve(async (req) => {
             }
         }
         attachmentContext = descs.join(' ');
-        console.log(`📎 Attachments: ${attachmentContext}`);
+        log.info('*', `📎 Attachments: ${attachmentContext}`);
     }
 
     // Skip if no text and no attachments (read receipts, reactions, etc.)
     if (!messaging.message?.text && !attachmentContext) {
-        console.log('⏭️ No text or attachments — skipping');
+        log.info('*', '⏭️ No text or attachments — skipping');
         return new Response('OK', { status: 200 });
     }
 
@@ -1967,12 +2359,15 @@ serve(async (req) => {
         messageText = messageText ? `${messageText} ${attachmentContext}` : attachmentContext;
     }
 
-    console.log(`📬 Message from ${senderId}: "${messageText.slice(0, 80)}..."`);
+    log.info('*', `📬 Message from ${senderId}: "${messageText.slice(0, 80)}..."`);
 
     // --- Respond 200 to Instagram NOW (before debounce sleep) ---
     // We fire debounceAndProcess in the background via EdgeRuntime.waitUntil
     // so the response is sent immediately and Instagram doesn't retry.
-    const parsed: ParsedMessage = { senderId, messageText, messageId, replyToMid, attachmentContext };
+    const parsed: ParsedMessage = {
+        senderId, messageText, messageId, replyToMid, attachmentContext,
+        inlineAudio: (messaging as any)._inlineAudio ?? undefined,
+    };
 
     // Use EdgeRuntime.waitUntil to keep the background task alive after response
     try {
@@ -1997,11 +2392,11 @@ async function handleRequest(
     supabase: ReturnType<typeof createClient>,
     accessToken: string
 ): Promise<void> {
-    const { senderId, messageId, replyToMid } = parsed;
+    const { senderId, messageId, replyToMid, inlineAudio } = parsed;
     let { messageText } = parsed; // let — may be prefixed with reply context below
 
-    console.log(`⚙️ handleRequest: processing merged message for ${senderId}: "${messageText.slice(0, 80)}"`);
-    if (replyToMid) console.log(`↩️ Reply to: ${replyToMid}`);
+    log.info(senderId, `⚙️ handleRequest: processing merged message: "${messageText.slice(0, 80)}"`);
+    if (replyToMid) log.info(senderId, `↩️ Reply to: ${replyToMid}`);
 
     try {
 
@@ -2011,19 +2406,24 @@ async function handleRequest(
             return;
         }
 
-        // Deduplicate: if this exact merged text was already processed in the last 60s, skip
-        const { data: existingMsg } = await supabase
-            .from('riya_conversations')
-            .select('id')
-            .eq('source', 'instagram')
-            .eq('content', messageText)
-            .eq('instagram_user_id', senderId)
-            .gte('created_at', new Date(Date.now() - 60000).toISOString())
-            .single();
+        // Deduplicate: skip for attachment messages (voice notes, images).
+        // They all share the same generic text descriptor, so content-match
+        // incorrectly blocks every second voice note within 60s.
+        const isAttachmentOnly = inlineAudio || messageText.startsWith('[User sent');
+        if (!isAttachmentOnly) {
+            const { data: existingMsg } = await supabase
+                .from('riya_conversations')
+                .select('id')
+                .eq('source', 'instagram')
+                .eq('content', messageText)
+                .eq('instagram_user_id', senderId)
+                .gte('created_at', new Date(Date.now() - 60000).toISOString())
+                .single();
 
-        if (existingMsg) {
-            console.log('\u23ed\ufe0f Duplicate merged message, skipping');
-            return;
+            if (existingMsg) {
+                log.info('*', '\u23ed\ufe0f Duplicate merged message, skipping');
+                return;
+            }
         }
 
         // =======================================
@@ -2038,7 +2438,7 @@ async function handleRequest(
         if (!user) {
             // User not found by IGSID — check if they exist under an old IGSID (account migration)
             const profile = await fetchInstagramProfile(senderId, accessToken);
-            console.log(`👤 Profile API result for ${senderId}: username="${profile.username || ''}", name="${profile.name || ''}"`);
+            log.info('*', `👤 Profile API result for ${senderId}: username="${profile.username || ''}", name="${profile.name || ''}"`);
 
             let oldUser: any = null;
 
@@ -2051,9 +2451,9 @@ async function handleRequest(
                     .neq('instagram_user_id', senderId)
                     .order('message_count', { ascending: false })
                     .limit(1);
-                if (e1) console.error('❌ Username lookup error:', e1.message);
+                if (e1) log.error('*', '❌ Username lookup error:', e1.message);
                 oldUser = byUsername?.[0] || null;
-                if (oldUser) console.log(`🔍 Matched old user by username "${profile.username}": IGSID=${oldUser.instagram_user_id} (${oldUser.message_count} msgs)`);
+                if (oldUser) log.info('*', `🔍 Matched old user by username "${profile.username}": IGSID=${oldUser.instagram_user_id} (${oldUser.message_count} msgs)`);
             }
 
             // --- Fallback: match by name if username lookup found nothing ---
@@ -2065,19 +2465,19 @@ async function handleRequest(
                     .neq('instagram_user_id', senderId)
                     .order('message_count', { ascending: false })
                     .limit(1);
-                if (e2) console.error('❌ Name lookup error:', e2.message);
+                if (e2) log.error('*', '❌ Name lookup error:', e2.message);
                 oldUser = byName?.[0] || null;
-                if (oldUser) console.log(`� Matched old user by name "${profile.name}": IGSID=${oldUser.instagram_user_id} (${oldUser.message_count} msgs)`);
+                if (oldUser) log.info('*', `� Matched old user by name "${profile.name}": IGSID=${oldUser.instagram_user_id} (${oldUser.message_count} msgs)`);
             }
 
             if (!oldUser) {
-                console.log(`🔍 No existing user found for senderId=${senderId} — will create fresh account`);
+                log.info('*', `🔍 No existing user found for senderId=${senderId} — will create fresh account`);
             }
 
             if (oldUser) {
                 // MIGRATION: Returning user on new IG account — remap all data
                 const oldId = oldUser.instagram_user_id;
-                console.log(`🔄 MIGRATION START: old=${oldId} → new=${senderId}`);
+                log.info('*', `🔄 MIGRATION START: old=${oldId} → new=${senderId}`);
                 try {
                     // STEP 1: Delete any freshly-created stub for the new IGSID
                     await supabase
@@ -2085,13 +2485,13 @@ async function handleRequest(
                         .delete()
                         .eq('instagram_user_id', senderId)
                         .lte('message_count', 5);
-                    console.log(`🗑️ Cleared any stub row for new IGSID ${senderId}`);
+                    log.info('*', `🗑️ Cleared any stub row for new IGSID ${senderId}`);
 
                     // STEP 2: Null out FK columns in subscriptions/payments so they no longer
                     //         hold a reference to old_id (releases the FK lock on the parent row)
                     await supabase.from('riya_subscriptions').update({ instagram_user_id: null }).eq('instagram_user_id', oldId);
                     await supabase.from('riya_payments').update({ instagram_user_id: null }).eq('instagram_user_id', oldId);
-                    console.log(`🔓 Released FK holds on old IGSID ${oldId}`);
+                    log.info('*', `🔓 Released FK holds on old IGSID ${oldId}`);
 
                     // STEP 3: Update the parent row (now safe — no child rows reference old_id via FK)
                     const { error: updateErr } = await supabase
@@ -2104,7 +2504,7 @@ async function handleRequest(
                         .eq('instagram_user_id', oldId);
 
                     if (updateErr) {
-                        console.error('❌ Failed to update user IGSID in riya_instagram_users:', updateErr.message);
+                        log.error('*', '❌ Failed to update user IGSID in riya_instagram_users:', updateErr.message);
                         // Restore the nulled FKs back to old_id so data isn't orphaned
                         await supabase.from('riya_subscriptions').update({ instagram_user_id: oldId }).is('instagram_user_id', null);
                         await supabase.from('riya_payments').update({ instagram_user_id: oldId }).is('instagram_user_id', null);
@@ -2128,16 +2528,16 @@ async function handleRequest(
                             .eq('instagram_user_id', senderId)
                             .single();
                         user = migratedUser;
-                        console.log(`✅ MIGRATION COMPLETE: ${profile.username || profile.name} | old=${oldId} → new=${senderId} | msgs=${user?.message_count}`);
+                        log.info('*', `✅ MIGRATION COMPLETE: ${profile.username || profile.name} | old=${oldId} → new=${senderId} | msgs=${user?.message_count}`);
                     }
                 } catch (migErr) {
-                    console.error('❌ Migration error (unexpected):', migErr);
+                    log.error('*', '❌ Migration error (unexpected):', migErr);
                 }
             }
 
             // Truly new user (or migration failed) — create fresh
             if (!user) {
-                console.log("🆕 New Instagram user, creating account...");
+                log.info('*', "🆕 New Instagram user, creating account...");
                 const { data: newUser, error: createError } = await supabase
                     .from('riya_instagram_users')
                     .insert({
@@ -2152,12 +2552,12 @@ async function handleRequest(
                     .single();
 
                 if (createError) {
-                    console.error("❌ Failed to create user:", createError);
+                    log.error('*', "❌ Failed to create user:", createError);
                     await sendInstagramMessage(senderId, "Oops kuch gadbad ho gayi 😅 Try again?", accessToken);
                     return;
                 }
                 user = newUser;
-                console.log(`✅ Created Instagram user: ${profile.username || senderId}`);
+                log.info('*', `✅ Created Instagram user: ${profile.username || senderId}`);
             }
         }
 
@@ -2176,7 +2576,7 @@ async function handleRequest(
 
             if (now < silentUntil) {
                 // Still in cooldown — save msg but NO typing, NO reply
-                console.log(`🤫 Silent treatment active for ${senderId} until ${silentUntil.toISOString()}`);
+                log.info('*', `🤫 Silent treatment active for ${senderId} until ${silentUntil.toISOString()}`);
 
                 await supabase.from('riya_conversations').insert({
                     user_id: null,
@@ -2201,7 +2601,7 @@ async function handleRequest(
                 return;
             } else {
                 // Cooldown expired — clear it and inject return context
-                console.log(`✅ Silent treatment expired for ${senderId}, resuming conversation`);
+                log.info('*', `✅ Silent treatment expired for ${senderId}, resuming conversation`);
                 silentReason = user.silent_reason;
                 returningFromSilence = true;
                 await supabase.from('riya_instagram_users')
@@ -2223,11 +2623,32 @@ async function handleRequest(
 
         // Reset counts if new day
         if (lastInteraction !== todayStr) {
-            console.log(`🔄 New day detected for ${senderId}. Resetting counts.`);
+            log.info('*', `🔄 New day detected for ${senderId}. Resetting counts.`);
             await supabase.rpc('reset_ig_daily_counts', { p_ig_user_id: senderId });
             // Update local user object to reflect reset
             user.daily_message_count = 0;
             user.daily_image_count = 0;
+
+            // Track user's active hour — first message of the day tells us when they're online
+            const activeHour = getCurrentISTHour();
+            supabase.from('riya_instagram_users')
+                .update({ user_active_hour_ist: activeHour })
+                .eq('instagram_user_id', senderId)
+                .then(() => log.info(senderId, `🕐 Active hour updated: ${activeHour}h IST`))
+                .catch(() => { });
+        }
+
+        // Reset proactive flags whenever user sends a message — they re-engaged
+        if (user.proactive_opted_out) {
+            supabase.from('riya_instagram_users')
+                .update({
+                    proactive_opted_out: false,
+                    proactive_skip_until: null,
+                    proactive_scheduled_context: null,
+                })
+                .eq('instagram_user_id', senderId)
+                .then(() => log.info(senderId, '🔔 Proactive flags reset — user re-engaged'))
+                .catch(() => { });
         }
 
         // =======================================
@@ -2260,13 +2681,13 @@ async function handleRequest(
                 .update({ chat_streak_days: chatStreak })
                 .eq('instagram_user_id', senderId)
                 .then(({ error }: { error: any }) => {
-                    if (error) console.warn('⚠️ Streak update failed:', error);
-                    else console.log(`🔥 Streak updated for ${senderId}: ${chatStreak} days`);
+                    if (error) log.warn('*', '⚠️ Streak update failed:', error);
+                    else log.info('*', `🔥 Streak updated for ${senderId}: ${chatStreak} days`);
                 });
 
             user.chat_streak_days = chatStreak;
         }
-        console.log(`🔥 Chat streak for ${senderId}: ${chatStreak} day(s)`);
+        log.info('*', `🔥 Chat streak for ${senderId}: ${chatStreak} day(s)`);
 
 
         const currentMsgCount = user.daily_message_count || 0;
@@ -2279,6 +2700,7 @@ async function handleRequest(
         // Priority 3: Free tier — 200 lifetime, then 50/day
         // ============================================================
         const creditsUser = hasActiveCredits(user);  // has purchased message credits
+        const creditsExhausted = user.message_credits === 0 && (user.total_credits_purchased || 0) > 0; // bought a pack but used it all up
         const isFirstDay = new Date(user.created_at).toISOString().split('T')[0] === todayStr;
         const lifetimeCount = user.message_count || 0;
         const hasExhaustedFree = lifetimeCount >= LIFETIME_FREE_MSGS;
@@ -2288,14 +2710,14 @@ async function handleRequest(
 
         // Before 200 lifetime msgs: effectively unlimited daily. After: 50/day.
         const FREE_BASE_MSGS = hasExhaustedFree ? POST_FREE_DAILY_BASE : 9999;
-        console.log(`💳 Credits: ${user.message_credits || 0} | isPro: ${isPro} | creditsUser: ${creditsUser} | effectivePro: ${effectivePro}`);
-        console.log(`📏 Limits: lifetime=${lifetimeCount}/${LIFETIME_FREE_MSGS}, exhausted=${hasExhaustedFree}, daily_base=${FREE_BASE_MSGS}`);
+        log.info('*', `💳 Credits: ${user.message_credits || 0} | isPro: ${isPro} | creditsUser: ${creditsUser} | effectivePro: ${effectivePro}`);
+        log.info('*', `📏 Limits: lifetime=${lifetimeCount}/${LIFETIME_FREE_MSGS}, exhausted=${hasExhaustedFree}, daily_base=${FREE_BASE_MSGS}`);
 
         // FIRST MESSAGE DISCLAIMER — one-time AI disclosure, fires before any AI response
         if (lifetimeCount === 0) {
             await sendInstagramMessage(
                 senderId,
-                "Hey! 👋 Main Riya hoon — ek AI character hun, real insaan nahi. Hamari baatein fictional roleplay hain. Yeh service sirf 18+ users ke liye hai. Ab baat karte hain! 💙",
+                "Hey! I’m Riya 🙃 your new AI bestie. Wanna vibe?",
                 accessToken
             );
             await new Promise(resolve => setTimeout(resolve, 1000));
@@ -2326,10 +2748,10 @@ async function handleRequest(
         if (!effectivePro) {
             if (hasExhaustedFree && currentMsgCount === FREE_BASE_MSGS && dailyWallActive) {
                 // Daily wall hit
-                logPaymentEvent(supabase, senderId, 'wall_hit', { trigger: 'daily', lifetime_msgs: lifetimeCount }).catch(e => console.error("Error logging wall_hit:", e));
+                logPaymentEvent(supabase, senderId, 'wall_hit', { trigger: 'daily', lifetime_msgs: lifetimeCount }).catch(e => log.error('*', "Error logging wall_hit:", e));
             } else if (lifetimeWallActive && lifetimeOverWall === 0) {
                 // Lifetime wall hit (first 200 msgs used up)
-                logPaymentEvent(supabase, senderId, 'wall_hit', { trigger: 'lifetime', lifetime_msgs: lifetimeCount }).catch(e => console.error("Error logging lifetime_wall_hit:", e));
+                logPaymentEvent(supabase, senderId, 'wall_hit', { trigger: 'lifetime', lifetime_msgs: lifetimeCount }).catch(e => log.error('*', "Error logging lifetime_wall_hit:", e));
             }
         }
 
@@ -2341,13 +2763,13 @@ async function handleRequest(
             const reason = isDailyDeadStop
                 ? `daily over_wall=${effectiveOverWall}`
                 : `lifetime over_wall=${lifetimeOverWall}`;
-            console.log(`🚫 Dead stop for ${senderId} (${reason}, max=${SALES_WINDOW_MSGS}). No response.`);
+            log.info('*', `🚫 Dead stop for ${senderId} (${reason}, max=${SALES_WINDOW_MSGS}). No response.`);
             // Still update last_message_at so analytics (DAU/MAU) count this user as active
             supabase.from('riya_instagram_users')
                 .update({ last_message_at: new Date().toISOString() })
                 .eq('instagram_user_id', senderId)
                 .then(({ error }: { error: any }) => {
-                    if (error) console.warn('⚠️ Dead stop last_message_at update failed:', error);
+                    if (error) log.warn('*', '⚠️ Dead stop last_message_at update failed:', error);
                 });
             return;
         }
@@ -2367,12 +2789,12 @@ async function handleRequest(
         const isInLifetimeSalesWindow = !effectivePro && lifetimeWallActive && lifetimeOverWall > 0 && lifetimeOverWall <= SALES_WINDOW_MSGS;
         const isFinalLifetimeSalesMsg = !effectivePro && lifetimeWallActive && lifetimeOverWall === SALES_WINDOW_MSGS;
 
-        if (isAtLimit) console.log(`🚧 AT DAILY LIMIT for ${senderId} — wall notification + payment link`);
-        if (isInSalesWindow) console.log(`💬 Daily sales window for ${senderId} (${effectiveOverWall}/${SALES_WINDOW_MSGS})`);
-        if (isFinalSalesMsg) console.log(`🏁 Final daily sales message for ${senderId} — closing link after response`);
-        if (isAtLifetimeLimit) console.log(`🚧 AT LIFETIME LIMIT for ${senderId} — lifetime wall notification + payment link`);
-        if (isInLifetimeSalesWindow) console.log(`💬 Lifetime sales window for ${senderId} (${lifetimeOverWall}/${SALES_WINDOW_MSGS})`);
-        if (isFinalLifetimeSalesMsg) console.log(`🏁 Final lifetime sales message for ${senderId} — closing link after response`);
+        if (isAtLimit) log.info('*', `🚧 AT DAILY LIMIT for ${senderId} — wall notification + payment link`);
+        if (isInSalesWindow) log.info('*', `💬 Daily sales window for ${senderId} (${effectiveOverWall}/${SALES_WINDOW_MSGS})`);
+        if (isFinalSalesMsg) log.info('*', `🏁 Final daily sales message for ${senderId} — closing link after response`);
+        if (isAtLifetimeLimit) log.info('*', `🚧 AT LIFETIME LIMIT for ${senderId} — lifetime wall notification + payment link`);
+        if (isInLifetimeSalesWindow) log.info('*', `💬 Lifetime sales window for ${senderId} (${lifetimeOverWall}/${SALES_WINDOW_MSGS})`);
+        if (isFinalLifetimeSalesMsg) log.info('*', `🏁 Final lifetime sales message for ${senderId} — closing link after response`);
 
         // =======================================
         // SLIDING WINDOW + SUMMARY CONTEXT
@@ -2386,11 +2808,11 @@ async function handleRequest(
             .eq('source', 'instagram');
 
         if (countError) {
-            console.error("Error counting messages:", countError);
+            log.error('*', "Error counting messages:", countError);
         }
 
         const totalMsgCount = totalMessages || 0;
-        console.log(`📊 Total messages for IG user: ${totalMsgCount}`);
+        log.info('*', `📊 Total messages for IG user: ${totalMsgCount}`);
 
         // 4b. Fetch existing summary (if any)
         const { data: existingSummary, error: summaryError } = await supabase
@@ -2400,7 +2822,7 @@ async function handleRequest(
             .single();
 
         if (summaryError && summaryError.code !== 'PGRST116') {
-            console.error("Error fetching summary:", summaryError);
+            log.error('*', "Error fetching summary:", summaryError);
         }
 
         // 4c. Fetch recent messages
@@ -2423,12 +2845,12 @@ async function handleRequest(
             totalHistoryChars -= (removed?.content?.length || 0);
         }
         if (totalHistoryChars > MAX_HISTORY_CHARS) {
-            console.warn(`⚠️ History still large (${totalHistoryChars} chars) after trimming — proceeding with ${conversationHistory.length} messages`);
+            log.warn('*', `⚠️ History still large (${totalHistoryChars} chars) after trimming — proceeding with ${conversationHistory.length} messages`);
         }
 
-        console.log(`📝 Context: ${existingSummary ? 'Summary + ' : ''}${conversationHistory.length} recent messages`);
+        log.info('*', `📝 Context: ${existingSummary ? 'Summary + ' : ''}${conversationHistory.length} recent messages`);
         if (existingSummary) {
-            console.log(`   └─ Summary covers ${existingSummary.messages_summarized} older messages`);
+            log.info('*', `   └─ Summary covers ${existingSummary.messages_summarized} older messages`);
         }
 
         // 4d. Format for Gemini with timestamps
@@ -2475,14 +2897,17 @@ async function handleRequest(
             user.user_facts && Object.keys(user.user_facts).length > 0
                 ? user.user_facts as Record<string, any>
                 : null;
-        if (userFacts) console.log(`🧠 Injecting user_facts into prompt (sections: ${Object.keys(userFacts).join(', ')})`);
+        if (userFacts) log.info('*', `🧠 Injecting user_facts into prompt (sections: ${Object.keys(userFacts).join(', ')})`);
+
+        const preferredLang: string | null = (user as any).preferred_language || null;
+        if (preferredLang) log.info('*', `🌐 Active language: ${preferredLang}`);
 
         // Pick prompt based on legacy pro status
         const legacyPro = isLegacyPro(user);
         if (legacyPro) {
-            console.log(`⬅️ Legacy pro ${senderId}: using old prompt`);
+            log.info('*', `⬅️ Legacy pro ${senderId}: using old prompt`);
         } else {
-            console.log(`🆕 ${senderId}: using new Riya Singh prompt`);
+            log.info('*', `🆕 ${senderId}: using new Riya Singh prompt`);
         }
 
         const lifeState = legacyPro ? null : await getLifeState(supabase);
@@ -2505,6 +2930,7 @@ async function handleRequest(
                 0, 0, 0,
                 chatStreak,
                 userFacts,
+                preferredLang,
             )
             : getNewRiyaSystemPrompt(
                 userName,
@@ -2518,6 +2944,8 @@ async function handleRequest(
                 userFacts,
                 existingSummary?.summary ?? null,
                 lifeState,
+                creditsExhausted,
+                preferredLang,
             );
 
         // Handle reply-to context: if user replied to a specific message, prepend it
@@ -2530,14 +2958,39 @@ async function handleRequest(
                 if (replyRes.ok) {
                     const replyData = await replyRes.json();
                     if (replyData.message) {
+                        // Normal text message reply
                         messageText = `[Replying to: "${replyData.message}"] ${messageText}`;
-                        console.log(`↩️ Added reply context: "${replyData.message.substring(0, 50)}..."`);
+                        log.info('*', `↩️ Added reply context: "${replyData.message.substring(0, 50)}..."`);
+                    } else {
+                        // No text returned — likely a voice note reply.
+                        // Graph API returns no text for audio messages.
+                        // Fall back: find the most recent voice note in our conversation history.
+                        const { data: lastVn } = await supabase
+                            .from('riya_conversations')
+                            .select('content, created_at')
+                            .eq('instagram_user_id', senderId)
+                            .eq('role', 'assistant')
+                            .ilike('content', '[🎤 voice note]%')
+                            .order('created_at', { ascending: false })
+                            .limit(1)
+                            .single();
+
+                        if (lastVn) {
+                            // Strip the [🎤 voice note] prefix to get just the spoken text
+                            const spokenText = lastVn.content.replace(/^\[🎤 voice note\]\s*/i, '').trim();
+                            messageText = `[Replying to Riya's voice note: "${spokenText.slice(0, 120)}"] ${messageText}`;
+                            log.info('*', `↩️ Voice note reply context injected: "${spokenText.slice(0, 50)}..."`);
+                        } else {
+                            // No voice note found — generic context
+                            messageText = `[User is replying to a previous voice note] ${messageText}`;
+                            log.info('*', '↩️ Voice note reply — no stored VN found, added generic context');
+                        }
                     }
                 } else {
-                    console.warn(`⚠️ Could not fetch replied-to message: ${replyRes.status}`);
+                    log.warn('*', `⚠️ Could not fetch replied-to message: ${replyRes.status}`);
                 }
             } catch (replyError) {
-                console.warn("⚠️ Reply context fetch failed:", replyError);
+                log.warn('*', "⚠️ Reply context fetch failed:", replyError);
             }
         }
 
@@ -2562,9 +3015,9 @@ async function handleRequest(
                         hour12: true
                     });
 
-                    const gapContext = `[SYSTEM NOTE: It has been ${timePassedStr} since your last interaction. The current time is ${currentTimeIST} IST. Do NOT continue the old topic. Greet them freshly according to the current time or respond directly to their new message.]`;
+                    const gapContext = `[SYSTEM NOTE: It has been ${timePassedStr} since your last interaction. The current time is ${currentTimeIST} IST. Do NOT continue the old topic. Greet them freshly according to the current time or respond directly to their new message. Continue in same language as of history]`;
                     messageText = `${gapContext}\n\n${messageText}`;
-                    console.log(`⏳ Injected time gap context: ${timePassedStr} (${Math.floor(diffHours)}h) at ${currentTimeIST}`);
+                    log.info('*', `⏳ Injected time gap context: ${timePassedStr} (${Math.floor(diffHours)}h) at ${currentTimeIST}`);
                 }
             }
         }
@@ -2572,9 +3025,10 @@ async function handleRequest(
         // Generate response — try primary model, fall back on quota errors
         let result: any;
         let activeModel = MODEL_NAME;
+        let prohibitedContentBlock = false;
         const primaryKey = getKeyForUser(senderId);
         try {
-            console.log(`🤖 Using primary model: ${MODEL_NAME}`);
+            log.info('*', `🤖 Using primary model: ${MODEL_NAME}`);
             const genAI = new GoogleGenerativeAI(primaryKey);
             const model = genAI.getGenerativeModel({
                 model: MODEL_NAME,
@@ -2597,30 +3051,67 @@ async function handleRequest(
                                 send_image: { type: SchemaType.BOOLEAN },
                                 image_context: { type: SchemaType.STRING },
                                 send_payment_link: { type: SchemaType.BOOLEAN },
-                                silent_hours: { type: SchemaType.NUMBER }
+                                silent_hours: { type: SchemaType.NUMBER },
+                                user_wants_no_proactive: { type: SchemaType.BOOLEAN },
+                                schedule_followup_ist_hour: { type: SchemaType.NUMBER },
+                                scheduled_context_note: { type: SchemaType.STRING },
+                                lang: { type: SchemaType.STRING },
+                                send_voice: { type: SchemaType.BOOLEAN },
                             },
                             required: ["text"]
                         }
                     }
                 },
             });
-            result = await chat.sendMessage(messageText);
+            // Inbound voice note: inject audio as inline_data alongside the text
+            const messageParts = inlineAudio
+                ? [
+                    { inlineData: { mimeType: inlineAudio.mimeType, data: inlineAudio.data } },
+                    { text: messageText || '[User sent a voice note. Process it natively and respond naturally as Riya.]' },
+                ]
+                : messageText;
+            try {
+                result = await chat.sendMessage(messageParts);
+            } catch (audioErr: any) {
+                // If Gemini rejects the audio (400 / "video is corrupted" / "0 Frames"),
+                // retry with text-only — don't crash the handler over a bad audio format.
+                const audioErrMsg = audioErr instanceof Error ? audioErr.message : String(audioErr);
+                const isAudioBadFormat = inlineAudio && (
+                    audioErrMsg.includes('400') ||
+                    audioErrMsg.toLowerCase().includes('corrupted') ||
+                    audioErrMsg.toLowerCase().includes('0 frames') ||
+                    audioErrMsg.toLowerCase().includes('video metadata')
+                );
+                if (isAudioBadFormat) {
+                    log.warn(senderId, `⚠️ Audio rejected by Gemini (${audioErrMsg.slice(0, 80)}) — retrying text-only`);
+                    result = await chat.sendMessage(messageText);
+                } else {
+                    throw audioErr; // not an audio issue — propagate to outer catch
+                }
+            }
         } catch (primaryErr) {
             const errMsg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
             const isQuota = errMsg.includes('429') || errMsg.includes('quota') || errMsg.includes('Resource has been exhausted');
             const isNotFound = errMsg.includes('404') || errMsg.toLowerCase().includes('not found') || errMsg.includes('model');
             const isServerError = errMsg.includes('503') || errMsg.includes('500') || errMsg.toLowerCase().includes('service unavailable') || errMsg.toLowerCase().includes('internal server error');
+            const isProhibited = errMsg.includes('PROHIBITED_CONTENT') || errMsg.includes('Response was blocked');
 
-            if (!isQuota && !isNotFound && !isServerError) throw primaryErr; // Non-quota/model/server error — don't retry
+            if (isProhibited) {
+                // Gemini blocked the prompt — send a gentle in-character redirect instead of going silent
+                prohibitedContentBlock = true;
+                log.warn('*', `⚠️ Primary model blocked due to prohibited content — using fallback reply`);
+            } else if (!isQuota && !isNotFound && !isServerError) {
+                throw primaryErr; // Non-quota/model/server/prohibited error — don't retry
+            }
 
             if (isQuota) {
                 // Mark this key as quota-exhausted so other users on it also rotate away
                 markKeyExhausted(primaryKey);
-                console.warn(`⚠️ Primary model (${MODEL_NAME}) quota hit (429) — switching to fallback: ${MODEL_FALLBACK}`);
+                log.warn('*', `⚠️ Primary model (${MODEL_NAME}) quota hit (429) — switching to fallback: ${MODEL_FALLBACK}`);
             } else if (isNotFound) {
-                console.warn(`⚠️ Primary model (${MODEL_NAME}) not found (404) — switching to fallback: ${MODEL_FALLBACK} without burning key`);
+                log.warn('*', `⚠️ Primary model (${MODEL_NAME}) not found (404) — switching to fallback: ${MODEL_FALLBACK} without burning key`);
             } else if (isServerError) {
-                console.warn(`⚠️ Primary model (${MODEL_NAME}) server error (50x) — switching to fallback: ${MODEL_FALLBACK} without burning key`);
+                log.warn('*', `⚠️ Primary model (${MODEL_NAME}) server error (50x) — switching to fallback: ${MODEL_FALLBACK} without burning key`);
             }
 
             activeModel = MODEL_FALLBACK;
@@ -2648,24 +3139,57 @@ async function handleRequest(
                                 send_image: { type: SchemaType.BOOLEAN },
                                 image_context: { type: SchemaType.STRING },
                                 send_payment_link: { type: SchemaType.BOOLEAN },
-                                silent_hours: { type: SchemaType.NUMBER }
+                                silent_hours: { type: SchemaType.NUMBER },
+                                user_wants_no_proactive: { type: SchemaType.BOOLEAN },
+                                schedule_followup_ist_hour: { type: SchemaType.NUMBER },
+                                scheduled_context_note: { type: SchemaType.STRING },
+                                lang: { type: SchemaType.STRING },
+                                send_voice: { type: SchemaType.BOOLEAN },
                             },
                             required: ["text"]
                         }
                     }
                 },
             });
-            result = await fallbackChat.sendMessage(messageText);
-            console.log(`✅ Fallback model (${MODEL_FALLBACK}) responded successfully`);
+            const fallbackParts = inlineAudio
+                ? [
+                    { inlineData: { mimeType: inlineAudio.mimeType, data: inlineAudio.data } },
+                    { text: messageText || '[User sent a voice note. Process it natively and respond naturally as Riya.]' },
+                ]
+                : messageText;
+            try {
+                result = await fallbackChat.sendMessage(fallbackParts);
+                log.info('*', `✅ Fallback model (${MODEL_FALLBACK}) responded successfully`);
+            } catch (fbAudioErr: any) {
+                const fbErrMsg = fbAudioErr instanceof Error ? fbAudioErr.message : String(fbAudioErr);
+                const isFbAudioBad = inlineAudio && (
+                    fbErrMsg.includes('400') ||
+                    fbErrMsg.toLowerCase().includes('corrupted') ||
+                    fbErrMsg.toLowerCase().includes('0 frames') ||
+                    fbErrMsg.toLowerCase().includes('video metadata')
+                );
+                if (isFbAudioBad) {
+                    log.warn(senderId, `⚠️ Fallback: audio rejected — retrying text-only`);
+                    result = await fallbackChat.sendMessage(messageText);
+                    log.info('*', `✅ Fallback model (${MODEL_FALLBACK}) responded (text-only retry)`);
+                } else {
+                    throw fbAudioErr;
+                }
+            }
         }
-        console.log(`📌 Active model used: ${activeModel}`);
+        log.info('*', `📌 Active model used: ${activeModel}`);
 
         // =======================================
         // EXTRACT RESPONSE (filter out thinking parts)
         // =======================================
         // Gemini 3 thinking models include {thought: true} parts — we must skip them
         let reply = '';
-        try {
+
+        if (prohibitedContentBlock) {
+            // Gemini refused to respond — set a hardcoded in-character reply so the user
+            // isn't left with complete silence, and skip result extraction entirely.
+            reply = JSON.stringify([{ text: "Yaar, ye wali baatein nahi ho sakti mujhse 🙈 Kuch aur baat karte hain?" }]);
+        } else try {
             const candidate = result.response.candidates?.[0];
             if (candidate?.content?.parts) {
                 const textParts = candidate.content.parts.filter(
@@ -2681,15 +3205,15 @@ async function handleRequest(
             reply = result.response.text();
         }
 
-        console.log("🤖 FULL RAW RESPONSE:", reply);
-        console.log("🤖 Raw response length:", reply.length);
+        log.info('*', "🤖 FULL RAW RESPONSE:", reply);
+        log.info('*', "🤖 Raw response length:", reply.length);
 
         // Log finish reason and token usage for debugging truncation
-        const finishCandidate = result.response.candidates?.[0];
-        console.log("🏁 Finish reason:", finishCandidate?.finishReason || 'UNKNOWN');
-        const usage = result.response.usageMetadata;
+        const finishCandidate = result?.response?.candidates?.[0];
+        log.info('*', "🏁 Finish reason:", finishCandidate?.finishReason || (prohibitedContentBlock ? 'PROHIBITED_CONTENT' : 'UNKNOWN'));
+        const usage = result?.response?.usageMetadata;
         if (usage) {
-            console.log(`📊 Tokens — prompt: ${usage.promptTokenCount}, response: ${usage.candidatesTokenCount}, thoughts: ${usage.thoughtsTokenCount || 0}, total: ${usage.totalTokenCount}`);
+            log.info('*', `📊 Tokens — prompt: ${usage.promptTokenCount}, response: ${usage.candidatesTokenCount}, thoughts: ${usage.thoughtsTokenCount || 0}, total: ${usage.totalTokenCount}`);
         }
 
         // =======================================
@@ -2784,8 +3308,60 @@ async function handleRequest(
             }
         }
 
-        console.log(`✅ Parsed ${responseMessages.length} message(s)`);
-        console.log(`📦 Parsed messages detail:`, JSON.stringify(responseMessages));
+        log.info('*', `✅ Parsed ${responseMessages.length} message(s)`);
+        log.info('*', `📦 Parsed messages detail:`, JSON.stringify(responseMessages));
+
+        // =======================================
+        // PROACTIVE SIGNALS FROM RESPONSE
+        // =======================================
+        const firstMsg = responseMessages[0] as any;
+
+        // 0. Language switch — persist immediately to dedicated column
+        const langSwitch = responseMessages.map(m => (m as any).lang).find(Boolean) as string | undefined;
+        if (langSwitch) {
+            supabase.from('riya_instagram_users')
+                .update({ preferred_language: langSwitch })
+                .eq('instagram_user_id', senderId)
+                .then(() => log.info(senderId, `🌐 Language saved: ${langSwitch}`))
+                .catch((e: any) => log.warn(senderId, `⚠️ Language save failed: ${e.message}`));
+        }
+
+        // 1. User opted out of proactive messages
+        if (firstMsg?.user_wants_no_proactive === true) {
+            supabase.from('riya_instagram_users')
+                .update({ proactive_opted_out: true })
+                .eq('instagram_user_id', senderId)
+                .then(() => log.info(senderId, '🔕 Proactive opted out by user'))
+                .catch(() => { });
+        }
+
+        // 2. User scheduled a future chat time — store skip_until so cron waits
+        const scheduledHour = firstMsg?.schedule_followup_ist_hour;
+        if (typeof scheduledHour === 'number' && scheduledHour >= 0 && scheduledHour <= 23) {
+            const nowMs = Date.now();
+            const istOffsetMs = 5.5 * 60 * 60 * 1000;
+            const nowIST = new Date(nowMs + istOffsetMs);
+            let targetIST = new Date(nowIST);
+            targetIST.setUTCHours(scheduledHour, 0, 0, 0);
+            // If the hour already passed today IST, push to tomorrow
+            if (targetIST.getTime() <= nowIST.getTime()) {
+                targetIST = new Date(targetIST.getTime() + 24 * 60 * 60 * 1000);
+            }
+            // Convert back to UTC for storage
+            const skipUntilUTC = new Date(targetIST.getTime() - istOffsetMs);
+            const contextNote = firstMsg?.scheduled_context_note?.trim() || null;
+            const context = contextNote
+                ? `${contextNote} (around ${scheduledHour}:00 IST)`
+                : `User said they'd be free around ${scheduledHour}:00 IST`;
+            supabase.from('riya_instagram_users')
+                .update({
+                    proactive_skip_until: skipUntilUTC.toISOString(),
+                    proactive_scheduled_context: context,
+                })
+                .eq('instagram_user_id', senderId)
+                .then(() => log.info(senderId, `⏰ Scheduled proactive at IST ${scheduledHour}:00 (UTC: ${skipUntilUTC.toISOString()})`))
+                .catch(() => { });
+        }
 
         // =======================================
         // SILENT TREATMENT DETECTION
@@ -2807,14 +3383,55 @@ async function handleRequest(
                 .eq('instagram_user_id', senderId);
 
             didGoSilent = true;
-            console.log(`🤫 Riya blocked ${senderId} for ${cappedHours}h (until ${silentUntil.toISOString()})`);
+            log.info('*', `🤫 Riya blocked ${senderId} for ${cappedHours}h (until ${silentUntil.toISOString()})`);
         }
 
         // =======================================
         // SEND RESPONSES TO INSTAGRAM
         // =======================================
-        let paymentLinkSentInLoop = false;
+
+        // ── Voice note routing ────────────────────────────────────────────────
+        // Collect which messages should be voiced vs sent as text.
+        // Max 1 voice note per response, always delivered last.
+        const nowIST = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+        const currentISTHour = nowIST.getUTCHours();
+        const ttsApiKey = getKeyForUser(senderId);
+
+        const voiceTexts: string[] = [];
+        const textOnlyMsgs: typeof responseMessages = [];
+        let hasLLMVoiceTrigger = false;
+
         for (const msg of responseMessages) {
+            if ((msg as any).send_voice === true) {
+                voiceTexts.push(msg.text);
+                hasLLMVoiceTrigger = true;
+            } else {
+                textOnlyMsgs.push(msg);
+            }
+        }
+
+        // Voice-in → voice-out: if user sent a voice note, Riya always replies in voice.
+        // Exception: sales window / credits exhausted — payment messages must stay as text.
+        if (inlineAudio && !isInSalesWindow && !creditsExhausted && !hasLLMVoiceTrigger) {
+            voiceTexts.push(...responseMessages.map(m => m.text));
+            textOnlyMsgs.length = 0;
+            log.info(senderId, '🎤 Voice-in → voice-out mode');
+        }
+
+        // Spontaneous trigger: fires on text-only responses when conditions match
+        if (!hasLLMVoiceTrigger && !inlineAudio && !isInSalesWindow && !creditsExhausted) {
+            const combinedForTrigger = responseMessages.map(m => m.text).join(' ');
+            if (shouldSendSpontaneousVoice(combinedForTrigger, currentISTHour, isInSalesWindow, creditsExhausted)) {
+                // Voice all messages as one note
+                voiceTexts.push(...responseMessages.map(m => m.text));
+                textOnlyMsgs.length = 0; // clear — all going to voice
+                log.info(senderId, '🎤 Spontaneous voice trigger fired');
+            }
+        }
+
+        let paymentLinkSentInLoop = false;
+        // Send text-only messages first
+        for (const msg of textOnlyMsgs) {
             // Send text
             if (msg.text) {
                 await sendInstagramMessage(senderId, msg.text, accessToken);
@@ -2822,7 +3439,7 @@ async function handleRequest(
 
             // Handle image requests
             if (msg.send_image) {
-                console.log(`🖼️ Image requested: context="${msg.image_context || 'fallback'}"`);
+                log.info('*', `🖼️ Image requested: context="${msg.image_context || 'fallback'}"`);
 
                 // Check Image Limit
                 if (!effectivePro && currentImgCount >= LIMIT_DAILY_IMAGES_FREE) {
@@ -2838,7 +3455,7 @@ async function handleRequest(
                 // Block bold_frames for Free Users when over limit
                 if (!effectivePro && msg.image_context === 'bold_frames') {
                     if (currentImgCount < LIMIT_DAILY_IMAGES_FREE) {
-                        console.log(`✅ Free user requested bold_frames and below limit. Allowing.`);
+                        log.info('*', `✅ Free user requested bold_frames and below limit. Allowing.`);
                     } else {
                         // Verbal CTA only — link handled by auto-send with cooldown
                         await sendInstagramMessage(
@@ -2868,25 +3485,25 @@ async function handleRequest(
                         })
                         .eq('instagram_user_id', senderId);
                 } else {
-                    console.error(`❌ FAILED TO SELECT IMAGE for ${senderId}`);
+                    log.error('*', `❌ FAILED TO SELECT IMAGE for ${senderId}`);
                 }
             }
 
             // Handle payment link requests (Manual trigger from LLM) — subject to cooldown
             if ((msg as any).send_payment_link && !paymentLinkSentInLoop) {
                 if (effectivePro) {
-                    console.warn(`🛑 LLM suggested payment link for PRO user ${senderId}. BLOCKED.`);
+                    log.warn('*', `🛑 LLM suggested payment link for PRO user ${senderId}. BLOCKED.`);
                 } else {
                     // Hard gate: only allow LLM-triggered links when the user has actually hit a wall.
                     // Without this, the LLM can send links during the 200-msg free window just because
                     // the user mentioned a payment-related word.
                     const atWall = dailyWallActive || lifetimeWallActive || isInSalesWindow || isInLifetimeSalesWindow;
                     if (!atWall) {
-                        console.warn(`🛑 LLM suggested payment link for free user ${senderId} (lifetime=${lifetimeCount}). BLOCKED — not at wall.`);
+                        log.warn('*', `🛑 LLM suggested payment link for free user ${senderId} (lifetime=${lifetimeCount}). BLOCKED — not at wall.`);
                     } else {
                         const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
                         if (allowed) {
-                            console.log(`💰 LLM triggered bio-redirect for ${senderId}`);
+                            log.info('*', `💰 LLM triggered bio-redirect for ${senderId}`);
                             await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'llm_manual' });
                             await sendInstagramMessage(senderId, 'Bio link se Riya AI credits lo — wapas aa jaana! 💙', accessToken);
                             paymentLinkSentInLoop = true;
@@ -2901,6 +3518,30 @@ async function handleRequest(
             await new Promise(resolve => setTimeout(resolve, 500));
         }
 
+        // Send combined voice note last (if any)
+        if (voiceTexts.length > 0) {
+            const combinedVoiceText = voiceTexts.join('\n\n'); // \n\n = natural pause in Gemini TTS
+            log.info(senderId, `🎤 Generating voice note: ${combinedVoiceText.slice(0, 80)}...`);
+            const voiceSent = await generateAndSendVoiceNote(
+                combinedVoiceText,
+                senderId,
+                preferredLang,
+                currentISTHour,
+                supabase,
+                accessToken,
+                ttsApiKey,
+            );
+            // Increment voice note counter on success (fire-and-forget)
+            if (voiceSent) {
+                supabase
+                    .from('riya_instagram_users')
+                    .update({ total_voice_notes_sent: (user.total_voice_notes_sent || 0) + 1 })
+                    .eq('instagram_user_id', senderId)
+                    .then(() => log.info(senderId, `📊 Voice note count: ${(user.total_voice_notes_sent || 0) + 1}`))
+                    .catch(() => { });
+            }
+        }
+
         // =======================================
         // AUTO-SEND RECHARGE LINK (with cooldown guard)
         // =======================================
@@ -2910,7 +3551,7 @@ async function handleRequest(
         if (isAtLimit && !paymentLinkSentInLoop) {
             const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
             if (allowed) {
-                console.log(`🚧💰 Sending daily wall bio-redirect for ${senderId}`);
+                log.info('*', `🚧💰 Sending daily wall bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'daily_wall_hit', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 3000)); // 3s: let bridge msg land first
                 await sendInstagramMessage(senderId, 'Aaj ke free messages khatam! Riya AI se baat jaari rakhne ke liye bio link se credits lo 🔗', accessToken);
@@ -2921,7 +3562,7 @@ async function handleRequest(
         else if (isAtLifetimeLimit && !paymentLinkSentInLoop) {
             const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
             if (allowed) {
-                console.log(`🚧💰 Sending lifetime wall bio-redirect for ${senderId} (lifetime=${lifetimeCount})`);
+                log.info('*', `🚧💰 Sending lifetime wall bio-redirect for ${senderId} (lifetime=${lifetimeCount})`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'lifetime_wall_hit', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 3000)); // 3s: let bridge msg land first
                 await sendInstagramMessage(senderId, '200 free messages complete! Riya AI ke credits bio link se lo — aur baat karte hain 💙', accessToken);
@@ -2932,7 +3573,7 @@ async function handleRequest(
         else if (didGoSilent && !paymentLinkSentInLoop) {
             const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
             if (allowed) {
-                console.log(`🤫💰 Sending silent treatment bio-redirect for ${senderId}`);
+                log.info('*', `🤫💰 Sending silent treatment bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'silent_treatment' });
                 await new Promise(resolve => setTimeout(resolve, 1500));
                 await sendInstagramMessage(senderId, 'Jab man ho tab wapas aao! Riya AI credits bio link se le sakte ho 😊', accessToken);
@@ -2942,7 +3583,7 @@ async function handleRequest(
         else if (isFinalSalesMsg && !paymentLinkSentInLoop) {
             const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
             if (allowed) {
-                console.log(`🏁💰 Sending final daily sales bio-redirect for ${senderId}`);
+                log.info('*', `🏁💰 Sending final daily sales bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'daily_sales_final', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 1500));
                 await sendInstagramMessage(senderId, 'Aaj ke credits khatam! Kal wapas aao ya abhi bio link se Riya AI credits lo 🔗', accessToken);
@@ -2952,7 +3593,7 @@ async function handleRequest(
         else if (isFinalLifetimeSalesMsg && !paymentLinkSentInLoop) {
             const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
             if (allowed) {
-                console.log(`🏁💰 Sending final lifetime sales bio-redirect for ${senderId}`);
+                log.info('*', `🏁💰 Sending final lifetime sales bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'lifetime_sales_final', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 1500));
                 await sendInstagramMessage(senderId, '200 free messages done! Bio link se Riya AI credits lo — let\'s keep chatting 💙', accessToken);
@@ -2980,7 +3621,10 @@ async function handleRequest(
                 instagram_user_id: senderId,
                 source: 'instagram',
                 role: 'assistant',
-                content: msg.text,
+                // Prefix voice-noted messages so future context knows how they were delivered
+                content: (msg as any).send_voice || voiceTexts.includes(msg.text)
+                    ? `[🎤 voice note] ${msg.text}`
+                    : msg.text,
                 model_used: MODEL_NAME,
                 created_at: new Date(baseTime + idx + 100).toISOString(),
             })),
@@ -2999,16 +3643,43 @@ async function handleRequest(
             })
             .eq('instagram_user_id', senderId);
 
-        console.log(`✅ Conversation saved for ${senderId}`);
+        log.info('*', `✅ Conversation saved for ${senderId}`);
 
         // =======================================
         // DEDUCT MESSAGE CREDIT (after successful response)
         // =======================================
         if (creditsUser) {
             // Fire-and-forget — non-fatal, don't block the response
-            deductCredit(supabase, senderId).then(newBal => {
-                if (newBal >= 0) console.log(`💳 Credit deducted. Balance: ${newBal}`);
-            }).catch(e => console.error('❌ Credit deduction failed:', e));
+            deductCredit(supabase, senderId).then(async newBal => {
+                if (newBal < 0) return; // deduction failed — don't act
+                log.info('*', `💳 Credit deducted. Balance: ${newBal}`);
+
+                // CREDITS EXHAUSTED — AI generates an in-context, in-language message
+                // from Riya telling the user warmly before they discover the wall themselves
+                if (newBal === 0) {
+                    log.info('*', `🪫 Credits hit 0 for ${senderId} — sending AI exhausted notification`);
+                    const msg = await generateCreditNotificationMsg('exhausted', conversationHistory, userName, senderId);
+                    await new Promise(resolve => setTimeout(resolve, 2000)); // let main response land first
+                    await sendInstagramMessage(senderId, msg, accessToken);
+                    // Bio link — cooldown-gated so it doesn't stack with any recent link
+                    const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
+                    if (allowed) {
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        await sendInstagramMessage(senderId, 'Bio link se Riya AI credits lo — wapas aa jaana! 💙', accessToken);
+                        user.last_link_sent_at = new Date().toISOString();
+                    }
+                    logPaymentEvent(supabase, senderId, 'credits_exhausted_notif', { balance: 0 }).catch(() => { });
+                }
+
+                // LOW CREDIT WARNING — gentle heads-up so user isn't blindsided
+                else if (newBal === LOW_CREDIT_WARNING_THRESHOLD) {
+                    log.info('*', `⚠️ Low credits (${newBal}) for ${senderId} — sending AI low-credit warning`);
+                    const msg = await generateCreditNotificationMsg('low', conversationHistory, userName, senderId);
+                    await new Promise(resolve => setTimeout(resolve, 2000)); // let main response land first
+                    await sendInstagramMessage(senderId, msg, accessToken);
+                    logPaymentEvent(supabase, senderId, 'low_credit_warning', { balance: newBal }).catch(() => { });
+                }
+            }).catch(e => log.error('*', '❌ Credit deduction failed:', e));
         }
 
         // =======================================
@@ -3018,7 +3689,7 @@ async function handleRequest(
         const messagesSinceSummary = newTotalMessages - (existingSummary?.messages_summarized || 0);
 
         if (newTotalMessages > SUMMARIZE_THRESHOLD && messagesSinceSummary > RECENT_MESSAGES_LIMIT) {
-            console.log(`🔄 Summary update needed: ${messagesSinceSummary} new messages since last summary`);
+            log.info('*', `🔄 Summary update needed: ${messagesSinceSummary} new messages since last summary`);
 
             // Run summarization asynchronously (don't await)
             (async () => {
@@ -3027,11 +3698,11 @@ async function handleRequest(
                     const endIndex = newTotalMessages - RECENT_MESSAGES_LIMIT - 1;
 
                     if (endIndex <= startIndex) {
-                        console.log("⏭️ Not enough messages to summarize yet");
+                        log.info('*', "⏭️ Not enough messages to summarize yet");
                         return;
                     }
 
-                    console.log(`📚 Fetching messages ${startIndex} to ${endIndex} for summarization...`);
+                    log.info('*', `📚 Fetching messages ${startIndex} to ${endIndex} for summarization...`);
 
                     const { data: msgsToSummarize, error: fetchError } = await supabase
                         .from('riya_conversations')
@@ -3042,11 +3713,11 @@ async function handleRequest(
                         .range(startIndex, endIndex);
 
                     if (fetchError || !msgsToSummarize || msgsToSummarize.length === 0) {
-                        console.error("Error fetching messages for summary:", fetchError);
+                        log.error('*', "Error fetching messages for summary:", fetchError);
                         return;
                     }
 
-                    console.log(`📝 Summarizing ${msgsToSummarize.length} messages...`);
+                    log.info('*', `📝 Summarizing ${msgsToSummarize.length} messages...`);
 
                     const summaryGenAI = new GoogleGenerativeAI(getKeyForUser(senderId));
                     const newSummary = await generateConversationSummary(
@@ -3068,12 +3739,12 @@ async function handleRequest(
                         }, { onConflict: 'instagram_user_id' });
 
                     if (upsertError) {
-                        console.error("Error saving summary:", upsertError);
+                        log.error(senderId, '❌ Error saving summary:', upsertError);
                     } else {
-                        console.log(`✅ Summary saved! Covers ${newTotalMessages - RECENT_MESSAGES_LIMIT} messages`);
+                        log.info(senderId, `✅ Summary saved! Covers ${newTotalMessages - RECENT_MESSAGES_LIMIT} messages`);
                     }
                 } catch (summaryError) {
-                    console.error("Summary generation failed:", summaryError);
+                    log.error(senderId, '❌ Summary generation failed:', summaryError);
                 }
             })();
         }
@@ -3089,7 +3760,7 @@ async function handleRequest(
         const messagesSinceFactsExtraction = newLifetimeCount - factsExtractedAtMsg;
 
         if (messagesSinceFactsExtraction >= FACTS_EXTRACT_THRESHOLD) {
-            console.log(`🧠 Triggering facts extraction for ${senderId} (${messagesSinceFactsExtraction} msgs since last extraction)`);
+            log.info(senderId, `🧠 Triggering facts extraction (${messagesSinceFactsExtraction} msgs since last extraction)`);
             (async () => {
                 try {
                     // Re-fetch the latest 25 messages as the extraction window
@@ -3102,7 +3773,7 @@ async function handleRequest(
                         .limit(FACTS_EXTRACT_THRESHOLD);
 
                     if (!factsMessages || factsMessages.length === 0) {
-                        console.log('🧠 Facts: no messages fetched, skipping');
+                        log.info(senderId, '🧠 Facts: no messages fetched, skipping');
                         return;
                     }
 
@@ -3117,13 +3788,13 @@ async function handleRequest(
                         existingSummary?.summary || null   // ← historical summary for richer context
                     );
                 } catch (factsErr) {
-                    console.error('❌ Facts trigger failed (non-fatal):', factsErr);
+                    log.error(senderId, '❌ Facts trigger failed (non-fatal):', factsErr);
                 }
             })();
         }
 
     } catch (error) {
-        console.error('\u274c handleRequest error:', error);
+        log.error(senderId, '❌ handleRequest error:', error);
         // Bubble up to debounceAndProcess() which marks pending rows as 'error'
         throw error;
     }

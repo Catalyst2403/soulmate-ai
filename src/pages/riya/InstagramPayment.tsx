@@ -142,8 +142,8 @@ const ProfileHeader = () => (
 
 const FooterTrust = ({ lang, igUserId }: { lang: 'en' | 'hi'; igUserId?: string }) => (
     <div className="space-y-2 mt-auto pt-6">
-        <p className="text-center text-xs text-amber-600 font-medium">
-            {lang === 'hi' ? '⚠️ यह सेवा केवल 18 वर्ष और उससे अधिक आयु के उपयोगकर्ताओं के लिए है।' : '⚠️ This service is for users 18 years of age and older only.'}
+        <p className="text-center text-xs text-gray-500">
+            {lang === 'hi' ? 'इस सेवा का उपयोग करके आप पुष्टि करते हैं कि आपकी आयु 18 वर्ष या उससे अधिक है।' : 'By using this service you confirm you are 18 years of age or older.'}
         </p>
         <div className="flex items-center justify-center gap-1.5 text-gray-500">
             <Shield className="w-3 h-3" />
@@ -481,8 +481,8 @@ const InstagramPayment = () => {
                             </h2>
                             <p className="text-xs text-gray-400 text-center mb-5">
                                 {lang === 'hi'
-                                    ? 'अपना username type करें — हम आपका account खोज लेंगे'
-                                    : "Type your username — we'll find your account"}
+                                    ? 'अपना नाम या username type करें — हम आपको खोज लेंगे'
+                                    : "Type your name or @username — we'll find you"}
                             </p>
 
                             {/* Search input */}
@@ -492,7 +492,7 @@ const InstagramPayment = () => {
                                     type="text"
                                     value={query}
                                     onChange={e => { setQuery(e.target.value); setConfirmed(null); }}
-                                    placeholder={lang === 'hi' ? 'username लिखें...' : 'Type your username...'}
+                                    placeholder={lang === 'hi' ? 'नाम या username से खोजें...' : 'Search by name or username...'}
                                     className="w-full bg-white/5 border border-white/15 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-pink-500 transition-colors"
                                     autoFocus
                                     autoCapitalize="none"
@@ -620,8 +620,8 @@ const InstagramPayment = () => {
                                             />
                                             <span>
                                                 {lang === 'hi'
-                                                    ? 'मैं पुष्टि करता/करती हूँ कि मेरी आयु 18 वर्ष या उससे अधिक है।'
-                                                    : 'I confirm that I am 18 years of age or older.'}
+                                                    ? 'मैं 18 वर्ष या उससे अधिक आयु का/की हूँ और Terms of Service से सहमत हूँ।'
+                                                    : 'I am 18 or older and agree to the Terms of Service.'}
                                             </span>
                                         </label>
 

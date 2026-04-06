@@ -10,7 +10,19 @@
       "Bash(find /c/Users/vrsol/OneDrive/Desktop/AI Companion/soulmate-ai -type f \\\\\\(-name *.ts -o -name *.tsx \\\\\\))",
       "WebFetch(domain:www.spurnow.com)",
       "WebFetch(domain:transparency.meta.com)",
-      "Bash(grep -l riya_instagram_users /c/Users/vrsol/OneDrive/Desktop/AI Companion/soulmate-ai/supabase/migrations/*.sql)"
+      "Bash(grep -l riya_instagram_users /c/Users/vrsol/OneDrive/Desktop/AI Companion/soulmate-ai/supabase/migrations/*.sql)",
+      "Bash(grep:*)",
+      "Bash(find '/c/Users/vrsol/OneDrive/Desktop/AI Companion/soulmate-ai' -type f -name *.json -o -name *.env* -o -name *.config.*)",
+      "WebFetch(domain:thunderbit.com)",
+      "WebFetch(domain:playbooks.com)",
+      "WebFetch(domain:mailerfind.com)",
+      "WebFetch(domain:storrito.com)",
+      "WebFetch(domain:docs.openclaw.ai)",
+      "WebFetch(domain:levelup.gitconnected.com)",
+      "WebFetch(domain:news.ycombinator.com)",
+      "WebFetch(domain:help.apiyi.com)",
+      "WebFetch(domain:blog.laozhang.ai)",
+      "WebFetch(domain:composio.dev)"
     ]
   }
 }
