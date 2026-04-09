@@ -1297,15 +1297,39 @@ async function handleRequest(
         }
 
         // ── Extract reply ─────────────────────────────────────────────────────
+        const BLOCKED_REPLY = JSON.stringify([{ text: "Yaar, ye wali baatein nahi ho sakti 🙈 Kuch aur baat karte hain?" }]);
         let reply = '';
         if (prohibitedBlock) {
-            reply = JSON.stringify([{ text: "Yaar, ye wali baatein nahi ho sakti 🙈 Kuch aur baat karte hain?" }]);
+            reply = BLOCKED_REPLY;
         } else {
             try {
-                const candidate = result.response.candidates?.[0];
-                const textParts = candidate?.content?.parts?.filter((p: any) => p.text && !p.thought) || [];
-                reply = textParts.map((p: any) => p.text).join('') || result.response.text();
-            } catch { reply = result.response.text(); }
+                // Check if Gemini returned a blocked response without throwing.
+                // The SDK logs a warning but only throws when .text() is called — so
+                // we inspect promptFeedback first to avoid the crash.
+                const blockReason = (result?.response as any)?.promptFeedback?.blockReason;
+                if (blockReason) {
+                    log.warn(senderId, `⚠️ Response blocked (no-throw path): ${blockReason}`);
+                    reply = BLOCKED_REPLY;
+                } else {
+                    const candidate = result.response.candidates?.[0];
+                    const textParts = candidate?.content?.parts?.filter((p: any) => p.text && !p.thought) || [];
+                    reply = textParts.map((p: any) => p.text).join('');
+                    if (!reply) {
+                        try { reply = result.response.text(); } catch { reply = ''; }
+                    }
+                }
+            } catch (extractErr: any) {
+                const isBlockErr = extractErr?.message?.includes('PROHIBITED_CONTENT')
+                    || extractErr?.message?.includes('blocked')
+                    || extractErr?.message?.includes('Text not available');
+                if (isBlockErr) {
+                    log.warn(senderId, '⚠️ Response blocked (caught at .text())');
+                    reply = BLOCKED_REPLY;
+                } else {
+                    log.warn(senderId, '⚠️ Reply extraction error:', extractErr?.message);
+                    reply = '';
+                }
+            }
         }
 
         log.info(senderId, `🤖 Raw response (${reply.length} chars): ${reply.slice(0, 200)}`);
