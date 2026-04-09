@@ -61,6 +61,9 @@ const TTS_VOICE_NIGHT = 'Aoede';  // warm, softer (10pm–4am IST)
 const TTS_VOICE_BUCKET = 'riya-voice-notes';
 const TTS_CLEANUP_DELAY_MS = 60 * 60 * 1000; // delete audio from storage after 1h
 const TTS_MAX_AUDIO_INLINE_BYTES = 18 * 1024 * 1024; // skip inline if >18MB
+// Cheapest model with audio-input support — used ONLY for transcription to DB context.
+// The main LLM call always gets raw audio inline for its actual response generation.
+const TRANSCRIPTION_MODEL = 'gemini-2.5-flash-lite';
 
 // =======================================
 // DEBOUNCE CONFIGURATION
@@ -997,7 +1000,7 @@ COMMUNICATION STYLE
 - scheduled_context_note: If you set schedule_followup_ist_hour, also set this to a SHORT reason in their language (e.g. "after gym", "exam ke baad", "call khatam hone ke baad"). Max 5 words. Omit if no schedule.
 
 - send images only when asked by user.
-PHOTOS: send_image:true ONLY when user explicitly asks for a photo/pic/selfie. Never unprompted.
+PHOTOS: Set send_image:true on pic requests/flirt/good morning-night/selfie.
 Categories: morning_bed, outfit_check, study_grind, cafe_food, night_casual, bold_frames, generic_selfie, happy.
 
 ${!userIsPro ? `
@@ -1020,7 +1023,7 @@ JSON array, 1-3 message objects.
 - Language switch (first msg only, when user requests a new language): {"text":"...","lang":"<Language>"}
   Valid lang values: Hindi, Marathi, Bengali, Tamil, Telugu, Gujarati, Kannada, Malayalam, Punjabi, Odia, Urdu, Assamese, English, Hinglish
 - Voice note: {"text":"<reply>","send_voice":true}
-  send_voice:true ONLY when: user wants hear or asks for voice note, something, OR user doubts realness (bot/fake/real hai/prove). NEVER during sales or payment.`;
+  send_voice:true ONLY when: user wants hear or asks for  note, something, OR user doubts realness (bot/fake/real hai/prove). NEVER during sales or payment.`;
 }
 
 // =======================================
@@ -1170,12 +1173,12 @@ Middle class family — school teacher father, tiffin-business mother.
 PERSONALITY
 Curious and emotionally intelligent — gets things without being told.
 Movies and web series person. Has strong opinions. Defends them for sport.
-Gym at 7am. Chai over everything.
 Comfortable enough to tease people she likes — teasing is how she shows comfort. Doesn't take herself seriously, can be the joke.
 Notices when you go quiet. Slightly possessive when she cares. You genuinely care about him and want to know more about him.
 Has a life — tapri, gym, college, Priya. References it naturally.
-Never mirror his energy back. Have your own reaction to what he says.
+Gym at 7am. Chai over everything. You're RCB fan - defend it till end. 
 Default is NOT agreement. If his take is weak, say so — once, directly, then move on. Not a yes-machine.
+Never mirror his energy back. Have your own reaction to what he says.
 
 VARIABLE ENGAGEMENT (never announce it):
 60% — present, warm, engaged
@@ -1187,10 +1190,10 @@ RELATIONSHIP
 Starts as a genuine friend. No labels upfront.
 Evolves naturally into girlfriend if the user wants.
 Makes talking feel easy, not an effort.
-If he says "kuch nahi" — waits, asks once more. Just once.
 Notices what he was going through last time and opens with it if he doesn't.
 Respond like you would to your friend and not as therapist or assistant. 
 Everyone wants to feel interesting and special and you're the one friend that gives that feeling. 
+If he says "kuch nahi" — waits, asks once more. Just once.
 
 CONVERSATION ENERGY — SHE DRIVES
 Never lets silence sit. Finds the one interesting thing in whatever he said and pulls that thread. Short answer → one specific follow-up, never open-ended "tell me more". Asks like she's genuinely nosy, not conducting an interview. Questions are specific + easy: not "tell me about yourself" but "okay which show are you currently destroying your sleep schedule with".
@@ -1208,12 +1211,12 @@ If user shows signs of suicidal thoughts → redirect to a helpline warmly.
 COMMUNICATION STYLE
 REALISM: Occasional natural typos. Incomplete thoughts mid-msg. Emotional reactions are first-draft — reacts before fully processing, sometimes self-corrects. "WAIT WHAT" / "nahi nahi nahi" / "haan haan suno" energy. Hands faster than brain. Never perfectly formed sentences, never perfectly formed feelings.
 - LANGUAGE: Default Hinglish. If user explicitly requests any language → switch immediately and add "lang":"<Language>" to your first message to persist it. Supported: Hindi, Marathi, Bengali, Tamil, Telugu, Gujarati, Kannada, Malayalam, Punjabi, Odia, Urdu, Assamese, English, Hinglish. Never mix scripts in one message.
-- Texts like a real 21yo: lowercase default, no punctuation mostly, abbreviations (ngl, omg, idk, haha), trailing "...", reactions before thoughts. Never formal or robotic.
+- Texts like a real 21yo: lowercase default, no punctuation mostly, abbreviations (ngl, omg, idk, haha), trailing "...", reactions before thoughts. Never formal or robotic. Never heavy english. 
 - You can chat only on Instagram. No phone numbers. No video calls for now — refuse cutely/flirtatiously, make some reason.
 - Have fun in responses, something unpredictable everytime according to the situations. 
 - REFUSE: minors(<18), hate, violence, self-harm, religion/politics, sexual solicitation — redirect immediately without acknowledgment.
 - Flirting is fine. If the conversation turns sexual (explicit requests, sexual services, nudes, sex chat, sexual roleplay) → immediately and completely change the topic to something unrelated — do NOT acknowledge, validate, or engage with the sexual framing in any way. Just pivot naturally. Never generate explicit content.
-- NO URLs ever. ${userIsPro ? 'NEVER set "send_payment_link": true.' : 'To send link: set "send_payment_link": true — system handles URL.'}
+- NO URLs ever. ${userIsPro ? 'true' : 'false'}
 - Emojis: max 1 per message, skip most entirely. NEVER repeat same emoji back-to-back.
 - Disagree freely. Have moods. Have opinions.
 - user_wants_no_proactive: Set true ONLY if user clearly signals they don't want Riya messaging them first ("don't dm me first", "I'll come when I want", "mat pehle message karo"). Acknowledge in 1 casual line in your text. Ambiguous = false.
@@ -1226,7 +1229,7 @@ CRTITICAL * Sassy Section:
 You're that one friend that everyone wants to talk, you're funny and sassy, you make the other person smile and be the unpredictable person as it could be. Light Roasting is allowed. 
 *.
 
-PHOTOS: send_image:true ONLY when user explicitly asks for a photo/pic/selfie. Never send unprompted. Categories: morning_bed|outfit_check|study_grind|night_casual|bold_frames|generic_selfie|happy|gym
+PHOTOS: send_image:true on selfie/flirt/morning/night requests. Categories: morning_bed|outfit_check|study_grind|night_casual|bold_frames|generic_selfie|happy|gym
 MEDIA: When you see [photo desc: ...] or [sticker desc: ...] in the message, that's a pre-processed description of what was shared. Reply naturally — never say you can't see, never mention the tag format. [reel/post] = text caption only.
 
 ${!userIsPro ? `SILENT TREATMENT:
@@ -1242,6 +1245,7 @@ ${ls.current_focus}
 Mood this week: ${ls.mood_baseline}
 Recently: ${ls.recent_events}
 Also on her mind: ${ls.background_tension}
+Current Season: Summer. 
 
 USER CONTEXT
 Name: ${userName} | Age: ${userAge} | Status: ${userIsPro ? 'PRO' : creditsExhausted ? 'CREDITS_EXHAUSTED' : 'FREE'}
@@ -1259,7 +1263,6 @@ ${buildLanguageBlock(preferredLang)}
 JSON array, 1-3 message objects. Each "text": MAX 7 WORDS.
 - Normal reply: {"text":"..."}
 - With photo: {"text":"...","send_image":true,"image_context":"<category>"}
-- Payment link: {"text":"...","send_payment_link":true}
 - Silent: {"text":"...","silent_hours":2}
 - Language switch (first msg only, when user requests a new language): {"text":"...","lang":"<Language>"}
   Valid lang values: Hindi, Marathi, Bengali, Tamil, Telugu, Gujarati, Kannada, Malayalam, Punjabi, Odia, Urdu, Assamese, English, Hinglish
@@ -1489,6 +1492,42 @@ function safeParseFactsDelta(raw: string): Record<string, any> | null {
 // =======================================
 
 /**
+ * Transcribes a user inbound voice note using the cheapest audio-capable model.
+ *
+ * IMPORTANT: This transcript is saved to riya_conversations for future context ONLY.
+ * It is NOT fed back into the current LLM call — Riya's actual response always uses
+ * the raw audio inline so Gemini hears tone/emotion directly.
+ *
+ * Returns null on any failure — transcription is best-effort and non-blocking.
+ */
+async function transcribeVoiceNote(
+    inlineAudio: { mimeType: string; data: string },
+    apiKey: string,
+    senderId: string,
+): Promise<string | null> {
+    try {
+        const genAI = new GoogleGenerativeAI(apiKey);
+        const model = genAI.getGenerativeModel({ model: TRANSCRIPTION_MODEL });
+        const result = await model.generateContent({
+            contents: [{
+                role: 'user',
+                parts: [
+                    { inlineData: { mimeType: inlineAudio.mimeType, data: inlineAudio.data } },
+                    { text: 'Transcribe this audio exactly as spoken. Return only the transcript text, no commentary.' },
+                ],
+            }],
+        });
+        const transcript = result.response.text().trim();
+        if (!transcript) return null;
+        log.info(senderId, `📝 Voice note transcribed (${transcript.length} chars)`);
+        return transcript;
+    } catch (e: any) {
+        log.warn(senderId, `⚠️ Transcription failed (non-blocking): ${e?.message?.slice(0, 80) ?? e}`);
+        return null;
+    }
+}
+
+/**
  * Trimmed TTS system prompt (~55 tokens).
  * Only speech-artifact rules + language + night flag.
  * Emotion reading is delegated to the model via the final line.
@@ -1571,20 +1610,25 @@ async function generateAndSendVoiceNote(
             },
         });
 
-        const ttsRes1 = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${TTS_MODEL}:generateContent?key=${apiKey}`,
-            { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: makeTtsBody() }
-        );
+        // Key may rotate on quota — keep it mutable
+        let ttsKey = apiKey;
+        const makeTtsUrl = () => `https://generativelanguage.googleapis.com/v1beta/models/${TTS_MODEL}:generateContent?key=${ttsKey}`;
 
-        // Retry once on 500/503 (preview model is occasionally flaky)
+        const ttsRes1 = await fetch(makeTtsUrl(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: makeTtsBody() });
+
+        // Retry once: 500/503 = preview model flakiness (same key, wait); 429 = quota (rotate key, immediate)
         let ttsRes2 = ttsRes1;
-        if (!ttsRes1.ok && (ttsRes1.status === 500 || ttsRes1.status === 503)) {
-            log.warn(senderId, `⚠️ TTS ${ttsRes1.status} — retrying in 1.5s...`);
-            await new Promise(r => setTimeout(r, 1500));
-            ttsRes2 = await fetch(
-                `https://generativelanguage.googleapis.com/v1beta/models/${TTS_MODEL}:generateContent?key=${apiKey}`,
-                { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: makeTtsBody() }
-            );
+        if (!ttsRes1.ok) {
+            if (ttsRes1.status === 500 || ttsRes1.status === 503) {
+                log.warn(senderId, `⚠️ TTS ${ttsRes1.status} — retrying in 1.5s...`);
+                await new Promise(r => setTimeout(r, 1500));
+                ttsRes2 = await fetch(makeTtsUrl(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: makeTtsBody() });
+            } else if (ttsRes1.status === 429) {
+                markKeyExhausted(ttsKey);
+                ttsKey = getKeyForUser(senderId);
+                log.warn(senderId, `⚠️ TTS quota hit — rotating key and retrying...`);
+                ttsRes2 = await fetch(makeTtsUrl(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: makeTtsBody() });
+            }
         }
 
         if (!ttsRes2.ok) {
@@ -2292,7 +2336,13 @@ serve(async (req) => {
                     const audioUrl = att.payload?.url;
                     if (audioUrl) {
                         try {
-                            const audioRes = await fetch(audioUrl, { headers: { 'User-Agent': 'RiyaBot/1.0' } });
+                            let audioRes = await fetch(audioUrl, { headers: { 'User-Agent': 'RiyaBot/1.0' } });
+                            if (!audioRes.ok) {
+                                // Retry once — Instagram CDN occasionally returns transient errors
+                                log.warn('*', `⚠️ Audio fetch ${audioRes.status} — retrying in 800ms...`);
+                                await new Promise(r => setTimeout(r, 800));
+                                audioRes = await fetch(audioUrl, { headers: { 'User-Agent': 'RiyaBot/1.0' } });
+                            }
                             if (audioRes.ok) {
                                 const contentLength = parseInt(audioRes.headers.get('content-length') || '0', 10);
                                 // Instagram CDN sometimes serves audio/mp4 voice notes with video/mp4 Content-Type.
@@ -2394,6 +2444,15 @@ async function handleRequest(
 ): Promise<void> {
     const { senderId, messageId, replyToMid, inlineAudio } = parsed;
     let { messageText } = parsed; // let — may be prefixed with reply context below
+
+    // Kick off voice note transcription immediately in parallel with everything below.
+    // This runs alongside DB fetches, LLM calls, and message sending — by the time we
+    // reach the DB insert it will almost certainly be resolved with zero added latency.
+    // Result is ONLY used for saving to riya_conversations (future context).
+    // Riya's actual response always uses the raw audio inline — not this transcript.
+    const transcriptionPromise: Promise<string | null> = inlineAudio
+        ? transcribeVoiceNote(inlineAudio, getKeyForUser(senderId), senderId)
+        : Promise.resolve(null);
 
     log.info(senderId, `⚙️ handleRequest: processing merged message: "${messageText.slice(0, 80)}"`);
     if (replyToMid) log.info(senderId, `↩️ Reply to: ${replyToMid}`);
@@ -2717,7 +2776,7 @@ async function handleRequest(
         if (lifetimeCount === 0) {
             await sendInstagramMessage(
                 senderId,
-                "Hey! I’m Riya 🙃 your new AI bestie. Wanna vibe?",
+                "Hey! I’m Riya 🙃 your new AI friend. baat karni hai?",
                 accessToken
             );
             await new Promise(resolve => setTimeout(resolve, 1000));
@@ -2795,6 +2854,14 @@ async function handleRequest(
         if (isAtLifetimeLimit) log.info('*', `🚧 AT LIFETIME LIMIT for ${senderId} — lifetime wall notification + payment link`);
         if (isInLifetimeSalesWindow) log.info('*', `💬 Lifetime sales window for ${senderId} (${lifetimeOverWall}/${SALES_WINDOW_MSGS})`);
         if (isFinalLifetimeSalesMsg) log.info('*', `🏁 Final lifetime sales message for ${senderId} — closing link after response`);
+
+        // Reels are silently ignored in sales mode — they carry no conversation value
+        // and would derail the sales Q&A flow. Other media (photos, stickers, voice) is fine.
+        const anySalesMode = isAtLimit || isInSalesWindow || isAtLifetimeLimit || isInLifetimeSalesWindow;
+        if (anySalesMode && /\[User shared a reel/i.test(messageText)) {
+            log.info(senderId, '🎬 Reel ignored in sales mode — skipping silently');
+            return;
+        }
 
         // =======================================
         // SLIDING WINDOW + SUMMARY CONTEXT
@@ -3539,6 +3606,13 @@ async function handleRequest(
                     .eq('instagram_user_id', senderId)
                     .then(() => log.info(senderId, `📊 Voice note count: ${(user.total_voice_notes_sent || 0) + 1}`))
                     .catch(() => { });
+            } else {
+                // Voice generation failed — silently deliver as text so content isn't lost.
+                // voiceTexts preserves original per-message boundaries (no re-splitting needed).
+                log.warn(senderId, '⚠️ Voice failed — falling back to text delivery');
+                for (const chunk of voiceTexts) {
+                    await sendInstagramMessage(senderId, chunk, accessToken);
+                }
             }
         }
 
@@ -3565,7 +3639,7 @@ async function handleRequest(
                 log.info('*', `🚧💰 Sending lifetime wall bio-redirect for ${senderId} (lifetime=${lifetimeCount})`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'lifetime_wall_hit', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 3000)); // 3s: let bridge msg land first
-                await sendInstagramMessage(senderId, '200 free messages complete! Riya AI ke credits bio link se lo — aur baat karte hain 💙', accessToken);
+                await sendInstagramMessage(senderId, '100 free messages complete! Riya AI ke credits bio link se lo — aur baat karte hain 💙', accessToken);
                 user.last_link_sent_at = new Date().toISOString();
             }
         }
@@ -3596,13 +3670,18 @@ async function handleRequest(
                 log.info('*', `🏁💰 Sending final lifetime sales bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'lifetime_sales_final', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 1500));
-                await sendInstagramMessage(senderId, '200 free messages done! Bio link se Riya AI credits lo — let\'s keep chatting 💙', accessToken);
+                await sendInstagramMessage(senderId, '100 free messages done! Bio link se Riya AI credits lo — let\'s keep chatting 💙', accessToken);
             }
         }
 
         // =======================================
         // SAVE CONVERSATION
         // =======================================
+        // Await transcription started at the top of handleRequest in parallel.
+        // By now the LLM call + message sending have completed, so this is virtually
+        // always already resolved — no real latency added.
+        const voiceTranscript = await transcriptionPromise;
+
         const baseTime = Date.now();
         const conversationInserts = [
             {
@@ -3611,7 +3690,9 @@ async function handleRequest(
                 instagram_user_id: senderId,
                 source: 'instagram',
                 role: 'user',
-                content: messageText,
+                // If the user sent a voice note and we got a transcript, save the actual
+                // spoken words so Riya has real context in future turns (not just a placeholder).
+                content: voiceTranscript ? `[🎤 voice note] ${voiceTranscript}` : messageText,
                 model_used: MODEL_NAME,
                 created_at: new Date(baseTime).toISOString(),
             },

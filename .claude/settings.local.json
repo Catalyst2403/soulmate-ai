@@ -22,7 +22,9 @@
       "WebFetch(domain:news.ycombinator.com)",
       "WebFetch(domain:help.apiyi.com)",
       "WebFetch(domain:blog.laozhang.ai)",
-      "WebFetch(domain:composio.dev)"
+      "WebFetch(domain:composio.dev)",
+      "WebFetch(domain:discuss.ai.google.dev)",
+      "WebFetch(domain:www.aifreeapi.com)"
     ]
   }
 }
