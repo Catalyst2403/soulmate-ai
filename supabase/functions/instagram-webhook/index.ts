@@ -94,7 +94,10 @@ const LIFETIME_FREE_MSGS = 100;        // First 200 msgs completely free (no lim
 const POST_FREE_DAILY_BASE = 30;       // After 200 lifetime: 50 free msgs/day
 
 // Sales window after free daily limit is exhausted
-const SALES_WINDOW_MSGS = 10;          // 10-msg honest sales Q&A after wall, then dead stop
+const SALES_WINDOW_MSGS = 1;           // Single comprehensive message after wall
+const DEAD_STOP_BUFFER = 10;           // Silent messages counted before secondary engagement
+const SECONDARY_SALES_MSGS = 10;       // 10-msg secondary sales window (triggered after buffer)
+const SECONDARY_SALES_END = SALES_WINDOW_MSGS + DEAD_STOP_BUFFER + SECONDARY_SALES_MSGS; // = 21
 const LIMIT_DAILY_IMAGES_FREE = 10;
 const PAYMENT_LINK_BASE = "https://riya-ai-ten.vercel.app/riya/pay/instagram";
 
@@ -902,30 +905,40 @@ EXAMPLE TONE (Hinglish — adapt to actual language):
 "Msgs khatam 😅 Mere profile ka link kholo — top up karo toh abhi bata doon!"`;
         }
 
-        // SALES WINDOW: messages 1-${SALES_WINDOW_MSGS} after wall — honest Q&A about top-up packs
+        // WALL — single comprehensive message (effectiveOverWall === 1)
         else if (effectiveOverWall > 0 && effectiveOverWall <= SALES_WINDOW_MSGS) {
             monetizationInstruction = `
-SALES WINDOW (${effectiveOverWall}/${SALES_WINDOW_MSGS}):
-**LANGUAGE: Match the language the user has been speaking. Do NOT default to Hinglish if they've been speaking English.**
-- Free credits done. Help user understand the recharge packs — warm, honest, not pushy.
-- PHOTOS: Unlimited photos in every pack — set send_image:true freely. Images are a bonus of any pack.
-- Packs available: ₹99 (600 msgs, 30d) | ₹199 (1500 msgs, 30d — most popular) | ₹349 (3000 msgs, 45d)
+WALL — ONE-TIME MESSAGE (${effectiveOverWall}/1):
+**LANGUAGE: Match the EXACT language/mix the user has been using throughout this conversation (Hindi / English / Hinglish). Read the conversation history carefully before writing.**
+This is the ONE message you send explaining what happened. After this you go silent for a while.
 
-HOW PAYMENT WORKS (explain this if asked):
-- User opens your Instagram profile → taps the link in your bio → types their Instagram username to find their account → pays via UPI (PhonePe / Google Pay / Paytm — any UPI app) → credits appear instantly.
-- It takes under 2 minutes. No card needed, no signup, just UPI.
+Write ONE warm, natural message (3–5 sentences). It must:
+1. Acknowledge gently that today's chat time is done — feel human, not robotic
+2. Briefly explain how to recharge: open my Instagram profile → bio link → enter your @username → pay via UPI (PhonePe / GPay / Paytm) — takes 2 min, credits appear instantly
+3. Mention pack options casually: ₹99 (600 msgs) | ₹199 (1500 msgs — sabse popular) | ₹349 (3000 msgs, 45 din)
+4. For any doubts or if payment doesn't reflect → direct them to our website for help (do NOT inline-explain UPI)
+5. Close warmly — "kal milenge agar abhi nahi le paaye" energy
 
-HANDLING COMMON DOUBTS:
-- "kaise karna hai?" / "how to pay?" → "Mere Instagram profile ka link kholo — wahan apna username type karo, UPI se pay karo, 2 min mein ho jaata hai! 😊"
-- "link kahan hai?" / "where is the link?" → "Mere Instagram profile mein bio link hai — profile pe ja, link dikhega!"
-- "UPI nahi hai" / "no UPI" → "PhonePe, Google Pay, Paytm — koi bhi chalega! Inme se ek toh hoga phone mein 😊"
-- "safe hai?" / "is it safe?" → "Haan, Razorpay se hota hai — India ki biggest payment company. 100% safe 😊"
-- "phone pe karna hai?" → "Haan, phone pe hi karo — mobile pe bahut easy hai, scanner bhi hai!"
-- Can't afford → "No worries, jab man ho tab le lena! 😊"
+DO NOT: be pushy, write any URL, repeat yourself, or sound like a system announcement.
+DO NOT: set send_payment_link:true — the link sends automatically after this message.
+Sound like: Riya warmly wrapping up something practical mid-conversation, not a chatbot hitting a paywall.`;
+        }
 
-- If they seem interested or say yes → set "send_payment_link": true. (A bio-redirect message sends automatically — do NOT also write a URL yourself.)
-- Frame credits as "Riya AI service credits" — an AI chat tool subscription. Do NOT frame it as "paying to talk to me" or personal payment. Say "Riya AI credits" not "mujhe unlock karo".
-- Short replies only (10-15 words for normal turns). Be warm, not a sales robot.`;
+        // SECONDARY SALES WINDOW — user kept messaging during the silent buffer (showing high intent)
+        else if (effectiveOverWall > SALES_WINDOW_MSGS + DEAD_STOP_BUFFER && effectiveOverWall <= SECONDARY_SALES_END) {
+            const secondaryPos = effectiveOverWall - SALES_WINDOW_MSGS - DEAD_STOP_BUFFER;
+            monetizationInstruction = `
+SECONDARY WINDOW (${secondaryPos}/${SECONDARY_SALES_MSGS}):
+You were quiet for a bit and this person kept reaching out — they really want to talk.
+**LANGUAGE: Match the EXACT language/mix (Hindi / English / Hinglish) the user has been speaking. Read the conversation history.**
+- Acknowledge warmly that you're here — don't make it weird, just be present again.
+- Free credits are done for today. Help them understand how to get more — warm, honest, not pushy.
+- PHOTOS: Unlimited photos in every pack — set send_image:true freely.
+- Packs: ₹99 (600 msgs, 30d) | ₹199 (1500 msgs, 30d — most popular) | ₹349 (3000 msgs, 45d)
+- How to pay: Instagram profile → bio link → @username → UPI (PhonePe / GPay / Paytm) → 2 min
+- For payment doubts or issues → direct them to our website for help
+- If they seem interested or say yes → set "send_payment_link": true.
+- Short replies (10-15 words per turn). Warm presence, not a sales pitch.`;
         }
     }
 
@@ -941,10 +954,9 @@ STATUS: FREE USER
 - FEATURES: LIMITED messages/photos.
 - Do NOT mention limits, counts, or payment during normal conversation.
 - **IF USER SAYS THEY PAID:** "Ek second, system update mein thoda time lagta hai 😊 Thodi der baad check karo." (DO NOT confirm Pro until status changes in DB).
-${isReturningUser ? `- **RETURNING USER (didn't pay yesterday):** They had messages yesterday but didn't top up. They're back today with their free daily allowance.
-  - If you had started a cliffhanger story: acknowledge it warmly but DON'T finish it. Example: "Waise wo baat jo main bol rahi thi kal... yaar itna hua tha, tujhe batana chahti hoon — story toh complete hogi toh! 😂" Tease it again to maintain the pull. The climax still stays unlocked only after they top up.
-  - Keep the unresolved story warm in their mind without spam. Drop it naturally once, then back to normal conversation.
-  - Do NOT be pushy or weird about the payment. Just maintain the open loop casually.` : ''}`;
+${isReturningUser ? `- **RETURNING USER:** They're back today with their free daily allowance.
+  - If you had started a cliffhanger story yesterday: complete it naturally in the first 1–2 messages today. Deliver the ending warmly, as if you just remembered — "Waise kal wali baat — sun yaar..." — then keep going normally. Don't withhold it.
+  - After delivering it, return to normal conversation. No payment pressure.` : ''}`;
     return `${statusInstruction}
 
 ${monetizationInstruction}
@@ -1107,27 +1119,37 @@ EXAMPLE TONE (Hinglish — adapt to actual language):
 "Ek dum interesting jagah pe msgs khatam ho gaye 😅 Mere profile ka link kholo — top up karo toh abhi bata doon!"`;
         } else if (effectiveOverWall > 0 && effectiveOverWall <= SALES_WINDOW_MSGS) {
             monetizationInstruction = `
-SALES WINDOW (${effectiveOverWall}/${SALES_WINDOW_MSGS}):
-**LANGUAGE: Match the language the user has been speaking. Do NOT default to Hinglish if they've been speaking English.**
-- Free credits done. Help user understand the recharge packs — warm, honest, not pushy.
-- PHOTOS: Unlimited photos in every pack — set send_image:true freely. Images are a bonus of any pack.
-- Packs available: ₹99 (600 msgs, 30d) | ₹199 (1500 msgs, 30d — most popular) | ₹349 (3000 msgs, 45d)
+WALL — ONE-TIME MESSAGE (${effectiveOverWall}/1):
+**LANGUAGE: Match the EXACT language/mix the user has been using throughout this conversation (Hindi / English / Hinglish). Read the conversation history carefully before writing.**
+This is the ONE message you send explaining what happened. After this you go silent for a while.
 
-HOW PAYMENT WORKS (explain this if asked):
-- User opens your Instagram profile → taps the link in your bio → types their Instagram username to find their account → pays via UPI (PhonePe / Google Pay / Paytm — any UPI app) → credits appear instantly.
-- It takes under 2 minutes. No card needed, no signup, just UPI.
+Write ONE warm, natural message (3–5 sentences). It must:
+1. Acknowledge gently that today's chat time is done — feel human, not robotic
+2. Briefly explain how to recharge: open my Instagram profile → bio link → enter your @username → pay via UPI (PhonePe / GPay / Paytm) — takes 2 min, credits appear instantly
+3. Mention pack options casually: ₹99 (600 msgs) | ₹199 (1500 msgs — sabse popular) | ₹349 (3000 msgs, 45 din)
+4. For any doubts or if payment doesn't reflect → direct them to our website for help (do NOT inline-explain UPI)
+5. Close warmly — "kal milenge agar abhi nahi le paaye" energy
 
-HANDLING COMMON DOUBTS:
-- "kaise karna hai?" / "how to pay?" → "Mere Instagram profile ka link kholo — wahan apna username type karo, UPI se pay karo, 2 min mein ho jaata hai! 😊"
-- "link kahan hai?" / "where is the link?" → "Mere Instagram profile mein bio link hai — profile pe ja, link dikhega!"
-- "UPI nahi hai" / "no UPI" → "PhonePe, Google Pay, Paytm — koi bhi chalega! Inme se ek toh hoga phone mein 😊"
-- "safe hai?" / "is it safe?" → "Haan, Razorpay se hota hai — India ki biggest payment company. 100% safe 😊"
-- "phone pe karna hai?" → "Haan, phone pe hi karo — mobile pe bahut easy hai, scanner bhi hai!"
-- Can't afford → "No worries, jab man ho tab le lena! 😊"
+DO NOT: be pushy, write any URL, repeat yourself, or sound like a system announcement.
+DO NOT: set send_payment_link:true — the link sends automatically after this message.
+Sound like: Riya warmly wrapping up something practical mid-conversation, not a chatbot hitting a paywall.`;
+        }
 
-- If they seem interested or say yes → set "send_payment_link": true. (A bio-redirect message sends automatically — do NOT also write a URL yourself.)
-- Frame credits as "Riya AI service credits" — an AI chat tool subscription. Do NOT frame it as "paying to talk to me" or personal payment. Say "Riya AI credits" not "mujhe unlock karo".
-- Short replies only (10-15 words for normal turns). DO NOT write a URL.`;
+        // SECONDARY SALES WINDOW — user kept messaging during the silent buffer (showing high intent)
+        else if (effectiveOverWall > SALES_WINDOW_MSGS + DEAD_STOP_BUFFER && effectiveOverWall <= SECONDARY_SALES_END) {
+            const secondaryPos = effectiveOverWall - SALES_WINDOW_MSGS - DEAD_STOP_BUFFER;
+            monetizationInstruction = `
+SECONDARY WINDOW (${secondaryPos}/${SECONDARY_SALES_MSGS}):
+You were quiet for a bit and this person kept reaching out — they really want to talk.
+**LANGUAGE: Match the EXACT language/mix (Hindi / English / Hinglish) the user has been speaking. Read the conversation history.**
+- Acknowledge warmly that you're here — don't make it weird, just be present again.
+- Free credits are done for today. Help them understand how to get more — warm, honest, not pushy.
+- PHOTOS: Unlimited photos in every pack — set send_image:true freely.
+- Packs: ₹99 (600 msgs, 30d) | ₹199 (1500 msgs, 30d — most popular) | ₹349 (3000 msgs, 45d)
+- How to pay: Instagram profile → bio link → @username → UPI (PhonePe / GPay / Paytm) → 2 min
+- For payment doubts or issues → direct them to our website for help
+- If they seem interested or say yes → set "send_payment_link": true.
+- Short replies (10-15 words per turn). Warm presence, not a sales pitch.`;
         }
     }
 
@@ -1146,9 +1168,8 @@ STATUS: FREE USER
 - Do NOT mention limits, counts, or payment during normal conversation.
 ${isReturningUser ? `- **IF USER SAYS THEY PAID:** "Ek second, system update mein thoda time lagta hai 😊 Thodi der baad check karo." (DO NOT confirm paid until status changes in DB).
 - **RETURNING USER:** They're back today with their free daily allowance.
-${(userMsgCount >= freeBase - 2) ? `  - They are near or at their message limit. If you had started a cliffhanger story: acknowledge it warmly but DON'T finish it. Example: "Waise wo baat jo main bol rahi thi kal... yaar itna hua tha, tujhe batana chahti hoon — story toh complete hogi toh! 😂" Tease it again to maintain the pull. The climax still stays unlocked only after they top up.
-  - Keep the unresolved story warm in their mind without spam. Drop it naturally once, then back to normal conversation.
-  - Do NOT be pushy or weird about the payment. Just maintain the open loop casually.` : `  - They have plenty of free messages left. If you had started an ongoing story or cliffhanger, CONTINUE IT naturally from where you left off — do NOT withhold it. The story-withholding mechanic only applies near the message limit.`}` : ''}`;
+  - If you had started a cliffhanger story yesterday: complete it naturally in the first 1–2 messages today. Deliver the ending warmly, as if you just remembered — "Waise kal wali baat — sun yaar..." — then keep going normally. Don't withhold it.
+  - After delivering it, return to normal conversation. No payment pressure.` : ''}`;
 
     // ── Life state block ─────────────────────────────────────────────────────
     const ls = lifeState || {
@@ -2799,9 +2820,9 @@ async function handleRequest(
         // Lifetime wall: only fires when lifetime is exhausted AND daily is also exhausted.
         // If daily count < 50, the user still has free daily messages — let them chat normally.
         // The lifetime wall is only relevant in the window right after 200 msgs (before daily kicks in).
-        // Once a user is past the sales window (lifetimeOverWall > SALES_WINDOW_MSGS), the daily
+        // Once a user is past the full window (lifetimeOverWall > SECONDARY_SALES_END), the daily
         // limit becomes the sole gate — no lifetime dead-stop should fire if daily < 50.
-        const lifetimeWallActive = !effectivePro && dailyWallActive && hasExhaustedFree && lifetimeOverWall >= 0 && lifetimeOverWall <= SALES_WINDOW_MSGS;
+        const lifetimeWallActive = !effectivePro && dailyWallActive && hasExhaustedFree && lifetimeOverWall >= 0 && lifetimeOverWall <= SECONDARY_SALES_END;
 
         // Track when user first hits either wall (for analytics)
         if (!effectivePro) {
@@ -2814,15 +2835,39 @@ async function handleRequest(
             }
         }
 
-        // DEAD STOP — past sales window AND no credits: complete silence, no typing indicator
-        // Check both daily dead stop AND lifetime dead stop
-        const isDailyDeadStop = !effectivePro && dailyWallActive && effectiveOverWall > SALES_WINDOW_MSGS;
-        const isLifetimeDeadStop = !effectivePro && lifetimeWallActive && lifetimeOverWall > SALES_WINDOW_MSGS;
+        // DEAD STOP BUFFER — user kept messaging after the single comprehensive message.
+        // Respond silently but increment daily_message_count so effectiveOverWall keeps climbing.
+        // Once the buffer fills (10 messages), the secondary sales window activates.
+        const isInDeadStopBuffer = !effectivePro && dailyWallActive &&
+            effectiveOverWall > SALES_WINDOW_MSGS &&
+            effectiveOverWall <= SALES_WINDOW_MSGS + DEAD_STOP_BUFFER;
+        const isInLifetimeDeadStopBuffer = !effectivePro && lifetimeWallActive &&
+            lifetimeOverWall > SALES_WINDOW_MSGS &&
+            lifetimeOverWall <= SALES_WINDOW_MSGS + DEAD_STOP_BUFFER;
+
+        if (isInDeadStopBuffer || isInLifetimeDeadStopBuffer) {
+            const pos = isInDeadStopBuffer ? effectiveOverWall - SALES_WINDOW_MSGS : lifetimeOverWall - SALES_WINDOW_MSGS;
+            log.info('*', `🔇 Dead stop buffer for ${senderId} (${pos}/${DEAD_STOP_BUFFER}). Counting silently.`);
+            supabase.from('riya_instagram_users')
+                .update({
+                    last_message_at: new Date().toISOString(),
+                    daily_message_count: currentMsgCount + 1,  // increment so effectiveOverWall tracks dead-stop msgs
+                })
+                .eq('instagram_user_id', senderId)
+                .then(({ error }: { error: any }) => {
+                    if (error) log.warn('*', '⚠️ Dead stop buffer update failed:', error);
+                });
+            return;
+        }
+
+        // TRUE DEAD STOP — past secondary sales window: complete silence, no typing indicator
+        const isDailyDeadStop = !effectivePro && dailyWallActive && effectiveOverWall > SECONDARY_SALES_END;
+        const isLifetimeDeadStop = !effectivePro && lifetimeWallActive && lifetimeOverWall > SECONDARY_SALES_END;
         if (isDailyDeadStop || isLifetimeDeadStop) {
             const reason = isDailyDeadStop
                 ? `daily over_wall=${effectiveOverWall}`
                 : `lifetime over_wall=${lifetimeOverWall}`;
-            log.info('*', `🚫 Dead stop for ${senderId} (${reason}, max=${SALES_WINDOW_MSGS}). No response.`);
+            log.info('*', `🚫 True dead stop for ${senderId} (${reason}, max=${SECONDARY_SALES_END}). No response.`);
             // Still update last_message_at so analytics (DAU/MAU) count this user as active
             supabase.from('riya_instagram_users')
                 .update({ last_message_at: new Date().toISOString() })
@@ -2841,23 +2886,34 @@ async function handleRequest(
         const isAtLimit = !effectivePro && effectiveOverWall === 0;      // First msg at daily wall
         const isInSalesWindow = !effectivePro && effectiveOverWall > 0 && effectiveOverWall <= SALES_WINDOW_MSGS;
         const isFinalSalesMsg = !effectivePro && effectiveOverWall === SALES_WINDOW_MSGS;
+        // Secondary sales window (triggers after DEAD_STOP_BUFFER silent messages)
+        const isInSecondarySales = !effectivePro && dailyWallActive &&
+            effectiveOverWall > SALES_WINDOW_MSGS + DEAD_STOP_BUFFER &&
+            effectiveOverWall <= SECONDARY_SALES_END;
+        const isFinalSecondarySalesMsg = !effectivePro && effectiveOverWall === SECONDARY_SALES_END;
 
         // ── Lifetime wall state flags ─────────────────────────────────────────
         // Mirrors the daily-wall flags but uses lifetimeOverWall as the counter.
         const isAtLifetimeLimit = !effectivePro && lifetimeWallActive && lifetimeOverWall === 0;
         const isInLifetimeSalesWindow = !effectivePro && lifetimeWallActive && lifetimeOverWall > 0 && lifetimeOverWall <= SALES_WINDOW_MSGS;
         const isFinalLifetimeSalesMsg = !effectivePro && lifetimeWallActive && lifetimeOverWall === SALES_WINDOW_MSGS;
+        const isInLifetimeSecondarySales = !effectivePro && lifetimeWallActive &&
+            lifetimeOverWall > SALES_WINDOW_MSGS + DEAD_STOP_BUFFER &&
+            lifetimeOverWall <= SECONDARY_SALES_END;
+        const isFinalLifetimeSecondarySalesMsg = !effectivePro && lifetimeWallActive && lifetimeOverWall === SECONDARY_SALES_END;
 
         if (isAtLimit) log.info('*', `🚧 AT DAILY LIMIT for ${senderId} — wall notification + payment link`);
         if (isInSalesWindow) log.info('*', `💬 Daily sales window for ${senderId} (${effectiveOverWall}/${SALES_WINDOW_MSGS})`);
         if (isFinalSalesMsg) log.info('*', `🏁 Final daily sales message for ${senderId} — closing link after response`);
+        if (isInSecondarySales) log.info('*', `🔁 Secondary sales window for ${senderId} (${effectiveOverWall - SALES_WINDOW_MSGS - DEAD_STOP_BUFFER}/${SECONDARY_SALES_MSGS})`);
+        if (isFinalSecondarySalesMsg) log.info('*', `🏁 Final secondary sales message for ${senderId}`);
         if (isAtLifetimeLimit) log.info('*', `🚧 AT LIFETIME LIMIT for ${senderId} — lifetime wall notification + payment link`);
         if (isInLifetimeSalesWindow) log.info('*', `💬 Lifetime sales window for ${senderId} (${lifetimeOverWall}/${SALES_WINDOW_MSGS})`);
         if (isFinalLifetimeSalesMsg) log.info('*', `🏁 Final lifetime sales message for ${senderId} — closing link after response`);
 
         // Reels are silently ignored in sales mode — they carry no conversation value
         // and would derail the sales Q&A flow. Other media (photos, stickers, voice) is fine.
-        const anySalesMode = isAtLimit || isInSalesWindow || isAtLifetimeLimit || isInLifetimeSalesWindow;
+        const anySalesMode = isAtLimit || isInSalesWindow || isAtLifetimeLimit || isInLifetimeSalesWindow || isInSecondarySales || isInLifetimeSecondarySales;
         if (anySalesMode && /\[User shared a reel/i.test(messageText)) {
             log.info(senderId, '🎬 Reel ignored in sales mode — skipping silently');
             return;
@@ -3564,7 +3620,7 @@ async function handleRequest(
                     // Hard gate: only allow LLM-triggered links when the user has actually hit a wall.
                     // Without this, the LLM can send links during the 200-msg free window just because
                     // the user mentioned a payment-related word.
-                    const atWall = dailyWallActive || lifetimeWallActive || isInSalesWindow || isInLifetimeSalesWindow;
+                    const atWall = dailyWallActive || lifetimeWallActive || isInSalesWindow || isInLifetimeSalesWindow || isInSecondarySales || isInLifetimeSecondarySales;
                     if (!atWall) {
                         log.warn('*', `🛑 LLM suggested payment link for free user ${senderId} (lifetime=${lifetimeCount}). BLOCKED — not at wall.`);
                     } else {
@@ -3653,24 +3709,48 @@ async function handleRequest(
                 await sendInstagramMessage(senderId, 'Jab man ho tab wapas aao! Riya AI credits bio link se le sakte ho 😊', accessToken);
             }
         }
-        // FINAL DAILY SALES MSG: send closing link at end of daily sales window
+        // FINAL DAILY SALES MSG (effectiveOverWall === 1): comprehensive message just sent, send link
         else if (isFinalSalesMsg && !paymentLinkSentInLoop) {
             const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
             if (allowed) {
                 log.info('*', `🏁💰 Sending final daily sales bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'daily_sales_final', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 1500));
-                await sendInstagramMessage(senderId, 'Aaj ke credits khatam! Kal wapas aao ya abhi bio link se Riya AI credits lo 🔗', accessToken);
+                await sendInstagramMessage(senderId, paymentLink, accessToken);
+                user.last_link_sent_at = new Date().toISOString();
             }
         }
-        // FINAL LIFETIME SALES MSG: send closing link at end of lifetime sales window
+        // FINAL LIFETIME SALES MSG: mirrors daily — send link after comprehensive message
         else if (isFinalLifetimeSalesMsg && !paymentLinkSentInLoop) {
             const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
             if (allowed) {
                 log.info('*', `🏁💰 Sending final lifetime sales bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'lifetime_sales_final', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 1500));
-                await sendInstagramMessage(senderId, '100 free messages done! Bio link se Riya AI credits lo — let\'s keep chatting 💙', accessToken);
+                await sendInstagramMessage(senderId, paymentLink, accessToken);
+                user.last_link_sent_at = new Date().toISOString();
+            }
+        }
+        // FINAL SECONDARY SALES MSG: end of secondary window — one last link send
+        else if (isFinalSecondarySalesMsg && !paymentLinkSentInLoop) {
+            const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
+            if (allowed) {
+                log.info('*', `🔁💰 Sending final secondary sales bio-redirect for ${senderId}`);
+                await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'secondary_sales_final', lifetime_msgs: lifetimeCount });
+                await new Promise(resolve => setTimeout(resolve, 1500));
+                await sendInstagramMessage(senderId, paymentLink, accessToken);
+                user.last_link_sent_at = new Date().toISOString();
+            }
+        }
+        // FINAL LIFETIME SECONDARY SALES MSG
+        else if (isFinalLifetimeSecondarySalesMsg && !paymentLinkSentInLoop) {
+            const allowed = await canSendPaymentLink(supabase, senderId, user.last_link_sent_at || null);
+            if (allowed) {
+                log.info('*', `🔁💰 Sending final lifetime secondary bio-redirect for ${senderId}`);
+                await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'lifetime_secondary_sales_final', lifetime_msgs: lifetimeCount });
+                await new Promise(resolve => setTimeout(resolve, 1500));
+                await sendInstagramMessage(senderId, paymentLink, accessToken);
+                user.last_link_sent_at = new Date().toISOString();
             }
         }
 
