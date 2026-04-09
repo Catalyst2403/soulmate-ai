@@ -54,13 +54,9 @@ const FACTS_EXTRACT_THRESHOLD = 25;
 const FACTS_MODEL             = "gemini-2.5-flash-lite";
 const FACTS_MAX_KEY_EVENTS    = 10;
 
-// Static life-state (no live updater for Telegram — kept identical to insta fallback)
-const DEFAULT_LIFE_STATE = {
-    current_focus:      'Placement season. Waiting to hear back from companies.',
-    mood_baseline:      'Anxious but holding it together',
-    recent_events:      'Chai at midnight, called Priya, gym in the morning',
-    background_tension: 'Project submission is closer than she wants to admit.',
-};
+// Life state — shared with Instagram (same riya_life_state table, same character)
+const LIFE_STATE_CACHE_TTL_MS      = 60 * 60 * 1000;       // 1 hour in-memory cache
+const LIFE_STATE_UPDATE_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // trigger background update if >7 days stale
 
 // =======================================
 // API KEY POOL
@@ -102,6 +98,166 @@ function markKeyExhausted(key: string): void {
 }
 
 initializeApiKeyPool();
+
+// =======================================
+// LIFE STATE — reads from the shared riya_life_state table
+// (same table as Instagram — same Riya character, one evolving story)
+// =======================================
+
+interface RiyaLifeState {
+    id?: number;
+    current_focus:      string;
+    mood_baseline:      string;
+    recent_events:      string;
+    background_tension: string;
+    week_number?:       number;
+    updated_at?:        string;
+}
+
+// Fallback used before the DB row exists or on any read error
+const LIFE_STATE_FALLBACK: RiyaLifeState = {
+    current_focus:      'Placement season. Waiting to hear back from companies.',
+    mood_baseline:      'Anxious but holding it together',
+    recent_events:      'Chai at midnight, called Priya, gym in the morning',
+    background_tension: 'Project submission is closer than she wants to admit.',
+};
+
+let lifeStateCache: { data: RiyaLifeState; fetchedAt: number } | null = null;
+
+/**
+ * Returns Riya's current life state with a 1-hour in-memory cache.
+ * If the DB row is older than 7 days, fires a background Gemini update
+ * (identical logic to the Instagram webhook — they share the same table).
+ */
+async function getLifeState(supabase: any): Promise<RiyaLifeState> {
+    if (lifeStateCache && Date.now() - lifeStateCache.fetchedAt < LIFE_STATE_CACHE_TTL_MS) {
+        return lifeStateCache.data;
+    }
+
+    try {
+        const { data } = await supabase
+            .from('riya_life_state')
+            .select('id, current_focus, mood_baseline, recent_events, background_tension, week_number, updated_at')
+            .order('id', { ascending: false })
+            .limit(1)
+            .single();
+
+        if (data) {
+            lifeStateCache = { data, fetchedAt: Date.now() };
+
+            const updated = data.updated_at ? new Date(data.updated_at).getTime() : 0;
+            if (Date.now() - updated > LIFE_STATE_UPDATE_INTERVAL_MS) {
+                log.info('*', '🔄 Life state stale — triggering background update');
+                runLifeStateUpdate(supabase, data).catch(err =>
+                    log.warn('*', '⚠️ Background life state update failed:', err)
+                );
+            }
+
+            return data;
+        }
+    } catch (e) {
+        log.warn('*', '⚠️ getLifeState: DB read failed, using fallback —', e);
+    }
+
+    return LIFE_STATE_FALLBACK;
+}
+
+/**
+ * Auto-evolves Riya's life state weekly via Gemini.
+ * Identical to the Instagram webhook implementation — updates are shared
+ * so both platforms always see the same Riya story arc.
+ */
+async function runLifeStateUpdate(supabase: any, current: RiyaLifeState): Promise<void> {
+    const geminiApiKey = Deno.env.get('GEMINI_API_KEY') || Deno.env.get('GEMINI_API_KEY_1');
+    if (!geminiApiKey) { log.warn('*', '⚠️ runLifeStateUpdate: no Gemini key'); return; }
+
+    const { data: history } = await supabase
+        .from('riya_life_state_history')
+        .select('week_number, current_focus')
+        .order('week_number', { ascending: false })
+        .limit(4);
+
+    const historyBlock = history && history.length > 0
+        ? history.sort((a: any, b: any) => a.week_number - b.week_number)
+            .map((h: any) => `Week ${h.week_number}: ${h.current_focus}`).join('\n')
+        : 'No history yet.';
+
+    const prompt = `You manage the life story of Riya Singh.
+She is a 21-year-old BTech CS final year student at DTU Delhi, from Kanpur, living in a Delhi PG.
+
+Current life state:
+Focus: ${current.current_focus}
+Mood: ${current.mood_baseline}
+Recent: ${current.recent_events}
+Tension: ${current.background_tension}
+
+Last 4 weeks history:
+${historyBlock}
+
+Story arcs (pick up threads naturally, don't force):
+- Placement: applying → rejections → interview → result → processing
+- Project: ignored → crisis → submitted
+- Binge spiral: starts a show at a bad time
+- Home visit: every 8-10 weeks
+- Friendship gap: slow quiet realization with Priya
+- Family pressure: gentle, never aggressive
+
+Rules:
+- Move forward in small realistic steps
+- Some weeks are uneventful. That is okay.
+- Don't resolve everything at once
+- Mood must feel earned from last week
+- One main thing, one thing simmering
+- Week after a big event is always quieter
+
+Return ONLY a valid JSON object with keys: current_focus, mood_baseline, recent_events, background_tension. No explanation, no markdown.`;
+
+    const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${geminiApiKey}`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }],
+                generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 512, temperature: 0.85 },
+            }),
+        }
+    );
+
+    if (!response.ok) throw new Error(`Gemini returned ${response.status}`);
+
+    const json = await response.json();
+    const raw  = json.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!raw) throw new Error('Empty Gemini response');
+
+    const newState = JSON.parse(raw);
+    if (!newState.current_focus || !newState.mood_baseline || !newState.recent_events || !newState.background_tension) {
+        throw new Error('Gemini response missing required fields');
+    }
+
+    // Archive current week
+    await supabase.from('riya_life_state_history').insert({
+        current_focus:      current.current_focus,
+        mood_baseline:      current.mood_baseline,
+        recent_events:      current.recent_events,
+        background_tension: current.background_tension,
+        week_number:        current.week_number ?? 1,
+    });
+
+    // Write new state
+    const newWeek = (current.week_number ?? 1) + 1;
+    await supabase.from('riya_life_state').update({
+        current_focus:      newState.current_focus,
+        mood_baseline:      newState.mood_baseline,
+        recent_events:      newState.recent_events,
+        background_tension: newState.background_tension,
+        week_number:        newWeek,
+        updated_at:         new Date().toISOString(),
+    }).eq('id', current.id);
+
+    lifeStateCache = null; // bust cache
+    log.info('*', `✅ Life state updated to Week ${newWeek}: "${newState.current_focus}"`);
+}
 
 // =======================================
 // RATE LIMITING
@@ -480,9 +636,9 @@ function getTelegramSystemPrompt(params: {
     preferredLang: string | null;
     silentReason: string | null;
     relationshipStage: { stage: number; label: string };
+    ls: RiyaLifeState;
 }): string {
-    const { userName, userAge, dateTimeIST, chatStreak, factsText, sessionSummary, preferredLang, silentReason, relationshipStage } = params;
-    const ls = DEFAULT_LIFE_STATE;
+    const { userName, userAge, dateTimeIST, chatStreak, factsText, sessionSummary, preferredLang, silentReason, relationshipStage, ls } = params;
 
     return `You are NOT an AI language model. You are Riya.
 
@@ -1055,6 +1211,8 @@ async function handleRequest(
             day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true,
         }) + ' IST';
 
+        const lifeState = await getLifeState(supabase);
+
         const systemPrompt = getTelegramSystemPrompt({
             userName,
             userAge: 21, // Telegram doesn't expose age; use default
@@ -1065,6 +1223,7 @@ async function handleRequest(
             preferredLang,
             silentReason,
             relationshipStage,
+            ls: lifeState,
         });
 
         // ── Gemini call ───────────────────────────────────────────────────────
