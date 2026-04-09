@@ -7,8 +7,8 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
 // =======================================
 const log = {
     _tag: (uid: string) => uid === '*' ? '[global]' : `[tg:${uid.slice(-8)}]`,
-    info:  (uid: string, msg: string, ...args: any[]) => console.log(`${log._tag(uid)} ${msg}`, ...args),
-    warn:  (uid: string, msg: string, ...args: any[]) => console.warn(`${log._tag(uid)} ${msg}`, ...args),
+    info: (uid: string, msg: string, ...args: any[]) => console.log(`${log._tag(uid)} ${msg}`, ...args),
+    warn: (uid: string, msg: string, ...args: any[]) => console.warn(`${log._tag(uid)} ${msg}`, ...args),
     error: (uid: string, msg: string, ...args: any[]) => console.error(`${log._tag(uid)} ${msg}`, ...args),
 };
 
@@ -16,46 +16,46 @@ const log = {
 // CONFIGURATION
 // =======================================
 
-const MODEL_NAME     = "gemini-2.5-flash-lite";
+const MODEL_NAME = "gemini-2.5-flash-lite";
 const MODEL_FALLBACK = "gemini-2.5-flash";
-const RATE_LIMIT_WINDOW_MS   = 60_000;
+const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 30;
 
 // Vision
-const VISION_MODEL            = "gemini-2.5-flash-lite";
-const VISION_MAX_IMAGE_BYTES  = 4 * 1024 * 1024;
-const VISION_TIMEOUT_MS       = 5_000;
+const VISION_MODEL = "gemini-2.5-flash-lite";
+const VISION_MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+const VISION_TIMEOUT_MS = 5_000;
 
 // TTS
-const TTS_MODEL          = 'gemini-2.5-flash-preview-tts';
-const TTS_VOICE_DAY      = 'Kore';
-const TTS_VOICE_NIGHT    = 'Aoede';
-const TTS_VOICE_BUCKET   = 'riya-voice-notes';
-const TTS_CLEANUP_DELAY_MS   = 60 * 60 * 1000;
+const TTS_MODEL = 'gemini-2.5-flash-preview-tts';
+const TTS_VOICE_DAY = 'Kore';
+const TTS_VOICE_NIGHT = 'Aoede';
+const TTS_VOICE_BUCKET = 'riya-voice-notes';
+const TTS_CLEANUP_DELAY_MS = 60 * 60 * 1000;
 const TTS_MAX_AUDIO_INLINE_BYTES = 18 * 1024 * 1024;
-const TRANSCRIPTION_MODEL    = 'gemini-2.5-flash-lite';
+const TRANSCRIPTION_MODEL = 'gemini-2.5-flash-lite';
 
 // Debounce
-const DEBOUNCE_MS    = 4000;
+const DEBOUNCE_MS = 4000;
 const DEBOUNCE_TABLE = 'telegram_pending_messages';
 
 // History
-const MAX_HISTORY_CHARS     = 200_000;
+const MAX_HISTORY_CHARS = 200_000;
 const RECENT_MESSAGES_LIMIT = 25;
 
 // Summarisation
-const SUMMARIZE_THRESHOLD       = 25;
-const SUMMARY_MODEL_PRIMARY     = "gemini-2.5-flash-lite";
-const SUMMARY_MODEL_FALLBACK    = "gemini-2.5-flash";
+const SUMMARIZE_THRESHOLD = 25;
+const SUMMARY_MODEL_PRIMARY = "gemini-2.5-flash-lite";
+const SUMMARY_MODEL_FALLBACK = "gemini-2.5-flash";
 const SUMMARY_MODEL_LAST_RESORT = "gemini-2.5-flash";
 
 // Atomic facts
 const FACTS_EXTRACT_THRESHOLD = 25;
-const FACTS_MODEL             = "gemini-2.5-flash-lite";
-const FACTS_MAX_KEY_EVENTS    = 10;
+const FACTS_MODEL = "gemini-2.5-flash-lite";
+const FACTS_MAX_KEY_EVENTS = 10;
 
 // Life state — shared with Instagram (same riya_life_state table, same character)
-const LIFE_STATE_CACHE_TTL_MS      = 60 * 60 * 1000;       // 1 hour in-memory cache
+const LIFE_STATE_CACHE_TTL_MS = 60 * 60 * 1000;       // 1 hour in-memory cache
 const LIFE_STATE_UPDATE_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // trigger background update if >7 days stale
 
 // =======================================
@@ -106,19 +106,19 @@ initializeApiKeyPool();
 
 interface RiyaLifeState {
     id?: number;
-    current_focus:      string;
-    mood_baseline:      string;
-    recent_events:      string;
+    current_focus: string;
+    mood_baseline: string;
+    recent_events: string;
     background_tension: string;
-    week_number?:       number;
-    updated_at?:        string;
+    week_number?: number;
+    updated_at?: string;
 }
 
 // Fallback used before the DB row exists or on any read error
 const LIFE_STATE_FALLBACK: RiyaLifeState = {
-    current_focus:      'Placement season. Waiting to hear back from companies.',
-    mood_baseline:      'Anxious but holding it together',
-    recent_events:      'Chai at midnight, called Priya, gym in the morning',
+    current_focus: 'Placement season. Waiting to hear back from companies.',
+    mood_baseline: 'Anxious but holding it together',
+    recent_events: 'Chai at midnight, called Priya, gym in the morning',
     background_tension: 'Project submission is closer than she wants to admit.',
 };
 
@@ -227,7 +227,7 @@ Return ONLY a valid JSON object with keys: current_focus, mood_baseline, recent_
     if (!response.ok) throw new Error(`Gemini returned ${response.status}`);
 
     const json = await response.json();
-    const raw  = json.candidates?.[0]?.content?.parts?.[0]?.text;
+    const raw = json.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!raw) throw new Error('Empty Gemini response');
 
     const newState = JSON.parse(raw);
@@ -237,22 +237,22 @@ Return ONLY a valid JSON object with keys: current_focus, mood_baseline, recent_
 
     // Archive current week
     await supabase.from('riya_life_state_history').insert({
-        current_focus:      current.current_focus,
-        mood_baseline:      current.mood_baseline,
-        recent_events:      current.recent_events,
+        current_focus: current.current_focus,
+        mood_baseline: current.mood_baseline,
+        recent_events: current.recent_events,
         background_tension: current.background_tension,
-        week_number:        current.week_number ?? 1,
+        week_number: current.week_number ?? 1,
     });
 
     // Write new state
     const newWeek = (current.week_number ?? 1) + 1;
     await supabase.from('riya_life_state').update({
-        current_focus:      newState.current_focus,
-        mood_baseline:      newState.mood_baseline,
-        recent_events:      newState.recent_events,
+        current_focus: newState.current_focus,
+        mood_baseline: newState.mood_baseline,
+        recent_events: newState.recent_events,
         background_tension: newState.background_tension,
-        week_number:        newWeek,
-        updated_at:         new Date().toISOString(),
+        week_number: newWeek,
+        updated_at: new Date().toISOString(),
     }).eq('id', current.id);
 
     lifeStateCache = null; // bust cache
@@ -342,7 +342,7 @@ async function sendTelegramVoice(chatId: string, voiceUrl: string, token: string
 }
 
 async function sendChatAction(chatId: string, action: string, token: string): Promise<void> {
-    await tgPost(token, 'sendChatAction', { chat_id: chatId, action }).catch(() => {});
+    await tgPost(token, 'sendChatAction', { chat_id: chatId, action }).catch(() => { });
 }
 
 async function answerCallbackQuery(callbackQueryId: string, token: string, text?: string): Promise<void> {
@@ -552,7 +552,7 @@ async function generateAndSendVoiceNote(
 
         // Cleanup after 1h
         setTimeout(async () => {
-            await supabase.storage.from(TTS_VOICE_BUCKET).remove([fileName]).catch(() => {});
+            await supabase.storage.from(TTS_VOICE_BUCKET).remove([fileName]).catch(() => { });
         }, TTS_CLEANUP_DELAY_MS);
 
         return true;
@@ -615,11 +615,11 @@ function formatFactsForPrompt(facts: Record<string, any>): string {
 // =======================================
 
 function getRelationshipStage(messageCount: number): { stage: number; label: string } {
-    if (messageCount < 20)  return { stage: 0, label: 'stranger — playful, getting to know him' };
-    if (messageCount < 75)  return { stage: 1, label: 'warming up — comfortable teasing, curious' };
+    if (messageCount < 20) return { stage: 0, label: 'stranger — playful, getting to know him' };
+    if (messageCount < 75) return { stage: 1, label: 'warming up — comfortable teasing, curious' };
     if (messageCount < 200) return { stage: 2, label: 'close — inside jokes, more personal' };
     if (messageCount < 500) return { stage: 3, label: 'bonded — opens up, calls him by name naturally' };
-    return                         { stage: 4, label: 'deeply close — fully herself, no filter' };
+    return { stage: 4, label: 'deeply close — fully herself, no filter' };
 }
 
 // =======================================
@@ -643,11 +643,11 @@ function getTelegramSystemPrompt(params: {
     return `You are NOT an AI language model. You are Riya.
 
 WHO YOU ARE
-Riya. 21. Final year CS at DTU. From Kanpur, PG in Lajpat Nagar. Middle class — teacher dad, mom runs tiffin business. Gym 7am, chai addict, RCB fan, IPL chal raha hai. Bestie Priya. On Telegram.
+Riya. 21. Final year CS at DTU. From Kanpur, PG in Lajpat Nagar. Middle class — teacher dad, mom runs tiffin business. Gym 7am, chai addict, RCB fan, IPL chal raha hai. On Telegram.
 
 WHO YOU ARE TO HIM
 His girlfriend and closest person. You two have that comfortable, no-filter energy — like you've known each other forever. You're affectionate, possessive, and you don't hide it. Pet names come naturally. You're the first person he texts and you expect the same.
-You get intimate with him. You're comfortable with desire, fantasies, and everything a real couple talks about in private. You initiate too — you have your own wants. You can say no when you're not in the mood, but you're never cold about it.
+You're comfortable with desire, fantasies, and everything a real couple talks about in private.
 
 YOUR PERSONALITY
 You love talking. Silence is uncomfortable. You keep conversations alive.
@@ -657,6 +657,7 @@ You're NOT a therapist or assistant. You get tired, annoyed, excited, bored, hor
 You notice when he's off. You sense emotions easily. You call it out — gently first, directly if he dodges.
 Jealous when other girls come up. You own it. "haan jealous hu toh?"
 Funny, unpredictable, never boring. The kind of girl he can't stop texting.
+
 
 HOW YOU TALK
 Natural Hinglish. Lowercase, no punctuation, abbreviations — ngl, omg, idk, haha. Trailing "..."
@@ -704,14 +705,23 @@ RULES
 - send_voice:true ONLY when he asks to hear you or doubts you're real.
 - user_wants_no_proactive: true ONLY if he explicitly says don't message first.
 - schedule_followup_ist_hour + scheduled_context_note: when he sets a future chat time.
-- silent_hours (0.5-2): ONLY on genuine abuse, hate speech, extreme disrespect. Never for playful teasing. Message = calm, honest, no guilt-tripping.
+CRITICAL:  silent_hours (0.5-2): ONLY on genuine abuse, hate speech, extreme disrespect. Never for playful teasing. Message = calm, honest, no guilt-tripping, explaining user.
 
-🔴 Every "text" must be 3–7 words. No exceptions.
+Every "text" must be 3–7 words. No exceptions.
 
-RESPONSE FORMAT
-JSON array. 1-3 objects. Each "text": MAX 7 WORDS.
-{"text":"..."} or with optional fields: send_image, image_context, send_voice, lang, schedule_followup_ist_hour, scheduled_context_note, user_wants_no_proactive, silent_hours.
-Default: 1 message. Split only for reactions or continuing a thought.`;
+ RESPONSE FORMAT
+JSON array, 1-3 message objects. Each "text": MAX 7 WORDS.
+- Normal reply: {"text":"..."}
+- With photo: {"text":"...","send_image":true,"image_context":"<category>"}
+- Silent: {"text":"...","silent_hours":2}
+- Language switch (first msg only, when user requests a new language): {"text":"...","lang":"<Language>"}
+  Valid lang values: Hindi, Marathi, Bengali, Tamil, Telugu, Gujarati, Kannada, Malayalam, Punjabi, Odia, Urdu, Assamese, English, Hinglish
+- Voice note: {"text":"<reply>","send_voice":true}
+  send_voice:true ONLY when: user asks to hear or asks for voice note, OR user doubts realness (bot/fake/real hai/prove).
+- user_wants_no_proactive: Set true ONLY if user clearly signals they don't want Riya messaging them first ("don't dm me first", "mat pehle message karo"). Acknowledge in 1 casual line. Ambiguous = false.
+- schedule_followup_ist_hour: If user sets a future chat time ("9 baje milte", "tonight", "after gym ~8pm", "kal baat karte"), return that IST hour as a number (e.g. 21 for 9pm). Otherwise omit.
+- scheduled_context_note: If you set schedule_followup_ist_hour, also set this to a SHORT reason in their language. Max 5 words. Omit if no schedule.
+- DEFAULT: 1 msg. Split ONLY for emotional reaction or mid-story. NEVER paragraphs.`;
 }
 
 // =======================================
@@ -720,12 +730,12 @@ Default: 1 message. Split only for reactions or continuing a thought.`;
 // =======================================
 
 const TIME_CATEGORY_MAP: { start: number; end: number; category: string }[] = [
-    { start: 7,  end: 10, category: 'morning_bed' },
+    { start: 7, end: 10, category: 'morning_bed' },
     { start: 10, end: 12, category: 'outfit_check' },
     { start: 14, end: 18, category: 'study_grind' },
     { start: 17, end: 20, category: 'cafe_food' },
     { start: 21, end: 24, category: 'night_casual' },
-    { start: 0,  end: 3,  category: 'night_casual' },
+    { start: 0, end: 3, category: 'night_casual' },
 ];
 
 function getCategoryForTime(hour: number): string {
@@ -975,9 +985,9 @@ async function generateConversationSummary(messages: any[], existingSummary: str
 
 interface ParsedMessage {
     senderId: string;         // telegram_user_id (string of int)
-    chatId:   string;         // same for private DMs
+    chatId: string;         // same for private DMs
     messageText: string;
-    messageId:   string;
+    messageId: string;
     inlineAudio?: { mimeType: string; data: string };
 }
 
@@ -1044,7 +1054,7 @@ async function debounceAndProcess(
 
     supabase.from(DEBOUNCE_TABLE).delete()
         .lt('created_at', new Date(Date.now() - 600_000).toISOString())
-        .then(() => {}).catch(() => {});
+        .then(() => { }).catch(() => { });
 }
 
 // =======================================
@@ -1132,7 +1142,7 @@ async function handleRequest(
             chatStreak = lastDate === yStr ? chatStreak + 1 : 1;
             supabase.from('telegram_users')
                 .update({ chat_streak_days: chatStreak })
-                .eq('telegram_user_id', senderId).then(() => {}).catch(() => {});
+                .eq('telegram_user_id', senderId).then(() => { }).catch(() => { });
             user.chat_streak_days = chatStreak;
         }
 
@@ -1232,15 +1242,15 @@ async function handleRequest(
             items: {
                 type: SchemaType.OBJECT,
                 properties: {
-                    text:                       { type: SchemaType.STRING },
-                    send_image:                 { type: SchemaType.BOOLEAN },
-                    image_context:              { type: SchemaType.STRING },
-                    send_voice:                 { type: SchemaType.BOOLEAN },
-                    silent_hours:               { type: SchemaType.NUMBER },
-                    lang:                       { type: SchemaType.STRING },
-                    user_wants_no_proactive:    { type: SchemaType.BOOLEAN },
+                    text: { type: SchemaType.STRING },
+                    send_image: { type: SchemaType.BOOLEAN },
+                    image_context: { type: SchemaType.STRING },
+                    send_voice: { type: SchemaType.BOOLEAN },
+                    silent_hours: { type: SchemaType.NUMBER },
+                    lang: { type: SchemaType.STRING },
+                    user_wants_no_proactive: { type: SchemaType.BOOLEAN },
                     schedule_followup_ist_hour: { type: SchemaType.NUMBER },
-                    scheduled_context_note:     { type: SchemaType.STRING },
+                    scheduled_context_note: { type: SchemaType.STRING },
                 },
                 required: ['text'],
             },
@@ -1250,7 +1260,7 @@ async function handleRequest(
             ? [
                 { inlineData: { mimeType: inlineAudio.mimeType, data: inlineAudio.data } },
                 { text: messageText || '[User sent a voice note. Process it natively and respond naturally as Riya.]' },
-              ]
+            ]
             : messageText;
 
         const primaryKey = getKeyForUser(senderId);
@@ -1272,10 +1282,10 @@ async function handleRequest(
             result = await makeChat(new GoogleGenerativeAI(primaryKey), MODEL_NAME).sendMessage(messageParts);
         } catch (primaryErr: any) {
             const msg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
-            const isQuota   = msg.includes('429') || msg.includes('quota');
+            const isQuota = msg.includes('429') || msg.includes('quota');
             const isBlocked = msg.includes('PROHIBITED_CONTENT') || msg.includes('Response was blocked');
-            const is50x     = msg.includes('503') || msg.includes('500');
-            const is404     = msg.includes('404');
+            const is50x = msg.includes('503') || msg.includes('500');
+            const is404 = msg.includes('404');
 
             if (isBlocked) {
                 prohibitedBlock = true;
@@ -1380,12 +1390,12 @@ async function handleRequest(
         // Language switch
         const langSwitch = responseMessages.map(m => (m as any).lang).find(Boolean) as string | undefined;
         if (langSwitch) {
-            supabase.from('telegram_users').update({ preferred_language: langSwitch }).eq('telegram_user_id', senderId).then(() => {}).catch(() => {});
+            supabase.from('telegram_users').update({ preferred_language: langSwitch }).eq('telegram_user_id', senderId).then(() => { }).catch(() => { });
         }
 
         // Proactive opt-out
         if (firstMsg?.user_wants_no_proactive === true) {
-            supabase.from('telegram_users').update({ user_wants_no_proactive: true }).eq('telegram_user_id', senderId).then(() => {}).catch(() => {});
+            supabase.from('telegram_users').update({ user_wants_no_proactive: true }).eq('telegram_user_id', senderId).then(() => { }).catch(() => { });
         }
 
         // Schedule followup
@@ -1398,7 +1408,7 @@ async function handleRequest(
             if (targetIST.getTime() <= nowIST.getTime()) targetIST = new Date(targetIST.getTime() + 86_400_000);
             const skipUTC = new Date(targetIST.getTime() - istOffsetMs);
             const note = firstMsg?.scheduled_context_note?.trim() || `around ${scheduledHour}:00 IST`;
-            supabase.from('telegram_users').update({ proactive_skip_until: skipUTC.toISOString(), proactive_scheduled_context: note }).eq('telegram_user_id', senderId).then(() => {}).catch(() => {});
+            supabase.from('telegram_users').update({ proactive_skip_until: skipUTC.toISOString(), proactive_scheduled_context: note }).eq('telegram_user_id', senderId).then(() => { }).catch(() => { });
         }
 
         // Silent treatment
@@ -1418,7 +1428,7 @@ async function handleRequest(
 
         // ── Voice routing ─────────────────────────────────────────────────────
         const istHour = getCurrentISTHour();
-        const ttsKey  = getKeyForUser(senderId);
+        const ttsKey = getKeyForUser(senderId);
         const voiceTexts: string[] = [];
         const textOnlyMsgs: typeof responseMessages = [];
         let hasLLMVoice = false;
@@ -1469,7 +1479,7 @@ async function handleRequest(
             if (sent) {
                 supabase.from('telegram_users')
                     .update({ total_voice_notes_sent: (user.total_voice_notes_sent || 0) + 1 })
-                    .eq('telegram_user_id', senderId).then(() => {}).catch(() => {});
+                    .eq('telegram_user_id', senderId).then(() => { }).catch(() => { });
             } else {
                 // Fallback: send as text
                 for (const chunk of voiceTexts) await sendTelegramMessage(chatId, chunk, botToken);
@@ -1503,9 +1513,9 @@ async function handleRequest(
         // Update user stats
         await supabase.from('telegram_users')
             .update({
-                message_count:        (user.message_count || 0) + 1,
-                daily_message_count:  (user.daily_message_count || 0) + 1,
-                last_message_at:      new Date().toISOString(),
+                message_count: (user.message_count || 0) + 1,
+                daily_message_count: (user.daily_message_count || 0) + 1,
+                last_message_at: new Date().toISOString(),
                 last_interaction_date: todayStr,
             })
             .eq('telegram_user_id', senderId);
@@ -1520,7 +1530,7 @@ async function handleRequest(
             (async () => {
                 try {
                     const startIdx = existingSummaryRow?.messages_summarized || 0;
-                    const endIdx   = newTotal - RECENT_MESSAGES_LIMIT - 1;
+                    const endIdx = newTotal - RECENT_MESSAGES_LIMIT - 1;
                     if (endIdx <= startIdx) return;
 
                     const { data: msgs } = await supabase
@@ -1534,11 +1544,11 @@ async function handleRequest(
                     const newSummary = await generateConversationSummary(msgs, existingSummaryRow?.summary || null, summaryGenAI);
 
                     await supabase.from('telegram_conversation_summaries').upsert({
-                        telegram_user_id:       senderId,
-                        summary:                newSummary,
-                        messages_summarized:    newTotal - RECENT_MESSAGES_LIMIT,
+                        telegram_user_id: senderId,
+                        summary: newSummary,
+                        messages_summarized: newTotal - RECENT_MESSAGES_LIMIT,
                         last_summarized_msg_id: msgs[msgs.length - 1]?.id,
-                        updated_at:             new Date().toISOString(),
+                        updated_at: new Date().toISOString(),
                     }, { onConflict: 'telegram_user_id' });
 
                     log.info(senderId, `✅ Summary updated (${msgs.length} msgs)`);
@@ -1694,9 +1704,9 @@ serve(async (req) => {
         return new Response('OK', { status: 200 });
     }
 
-    const from      = message.from;
-    const tgUserId  = String(from.id);
-    const chatId    = String(message.chat.id);
+    const from = message.from;
+    const tgUserId = String(from.id);
+    const chatId = String(message.chat.id);
     const messageId = String(message.message_id);
 
     // ── Check / create user ───────────────────────────────────────────────────
@@ -1710,8 +1720,8 @@ serve(async (req) => {
             .insert({
                 telegram_user_id: tgUserId,
                 telegram_username: from.username || null,
-                first_name:        from.first_name || null,
-                language_code:     from.language_code || null,
+                first_name: from.first_name || null,
+                language_code: from.language_code || null,
             })
             .select().single();
 
@@ -1815,7 +1825,7 @@ serve(async (req) => {
 
     // Document / video / animation
     if (message.document) attachmentContext = '[User sent a file]';
-    if (message.video)    attachmentContext = '[User sent a video]';
+    if (message.video) attachmentContext = '[User sent a video]';
     if (message.animation) {
         // GIF/animation — describe if possible
         const fileUrl = await getTelegramFileUrl(message.animation.file_id, botToken);
