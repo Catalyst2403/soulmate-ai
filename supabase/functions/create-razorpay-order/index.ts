@@ -72,6 +72,7 @@ type PlanType = keyof typeof PLANS;
 interface CreateOrderRequest {
     userId?: string;
     instagramUserId?: string;
+    telegramUserId?: string;
     planType: PlanType;
     packName?: string; // Optional: 'basic' | 'romantic' | 'soulmate'
 }
@@ -97,8 +98,8 @@ Deno.serve(async (req) => {
             throw new Error("Invalid JSON body");
         }
 
-        const { userId, instagramUserId, planType, packName } = body;
-        console.log(`👤 Request for: User=${userId}, IG=${instagramUserId}, Plan=${planType}, Pack=${packName || 'N/A'}`);
+        const { userId, instagramUserId, telegramUserId, planType, packName } = body;
+        console.log(`👤 Request for: User=${userId}, IG=${instagramUserId}, TG=${telegramUserId}, Plan=${planType}, Pack=${packName || 'N/A'}`);
 
         // Validate plan type
         if (!PLANS[planType]) {
@@ -109,7 +110,7 @@ Deno.serve(async (req) => {
             );
         }
 
-        if (!userId && !instagramUserId) {
+        if (!userId && !instagramUserId && !telegramUserId) {
             console.error("❌ Missing User ID");
             return new Response(
                 JSON.stringify({ error: "User ID is required" }),
@@ -176,7 +177,23 @@ Deno.serve(async (req) => {
                 );
             }
             userName = igUser.instagram_username || 'Instagram User';
-            // Instagram users don't strictly technically have email, we can leave empty or placeholder
+        } else if (telegramUserId) {
+            // Verify TELEGRAM user exists
+            const { data: tgUser, error: tgError } = await supabase
+                .from('telegram_users')
+                .select('telegram_user_id, first_name, telegram_username')
+                .eq('telegram_user_id', telegramUserId)
+                .single();
+
+            if (tgError || !tgUser) {
+                return new Response(
+                    JSON.stringify({ error: "Telegram user not found" }),
+                    { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+                );
+            }
+            userName = tgUser.telegram_username
+                ? `@${tgUser.telegram_username}`
+                : (tgUser.first_name || 'Telegram User');
         }
 
         const plan = PLANS[planType];
@@ -196,18 +213,21 @@ Deno.serve(async (req) => {
 
         const receiptId = userId
             ? `riya_${userId.slice(0, 8)}_${Date.now()}`
-            : `riya_ig_${instagramUserId?.slice(0, 8)}_${Date.now()}`;
+            : instagramUserId
+                ? `riya_ig_${instagramUserId.slice(0, 8)}_${Date.now()}`
+                : `riya_tg_${telegramUserId!.slice(0, 8)}_${Date.now()}`;
 
         const orderPayload = {
             amount: plan.amount,
             currency: "INR",
             receipt: receiptId,
             notes: {
-                user_id: userId || 'instagram_user',
-                instagram_user_id: instagramUserId,
+                user_id: userId || undefined,
+                instagram_user_id: instagramUserId || undefined,
+                telegram_user_id: telegramUserId || undefined,
                 plan_type: planType,
                 ...(resolvedPackName ? { pack_name: resolvedPackName } : {}),
-                user_email: userEmail,
+                user_email: userEmail || undefined,
                 username: userName
             }
         };
@@ -239,6 +259,7 @@ Deno.serve(async (req) => {
         const insertPayload: Record<string, any> = {
             user_id: userId || null,
             instagram_user_id: instagramUserId || null,
+            telegram_user_id: telegramUserId || null,
             razorpay_order_id: order.id,
             plan_type: planType,
             amount: plan.amount / 100,

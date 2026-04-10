@@ -39,6 +39,11 @@ const TRANSCRIPTION_MODEL = 'gemini-2.5-flash-lite';
 const DEBOUNCE_MS = 4000;
 const DEBOUNCE_TABLE = 'telegram_pending_messages';
 
+// Monetization
+const FREE_TRIAL_LIMIT = 100;   // lifetime msgs with full features (voice, photos)
+const FREE_DAILY_LIMIT = 30;    // msgs/day after trial ends
+const PAYMENT_PAGE_BASE = 'https://soulmate-ai.app/riya/pay/telegram';
+
 // History
 const MAX_HISTORY_CHARS = 200_000;
 const RECENT_MESSAGES_LIMIT = 25;
@@ -382,6 +387,32 @@ async function answerCallbackQuery(callbackQueryId: string, token: string, text?
 }
 
 /**
+ * Send a system-level notice (not Riya speaking) with an inline recharge button.
+ * Used when free-tier features are blocked or daily limit is hit.
+ */
+async function sendSystemNotice(
+    chatId: string,
+    noticeType: 'voice' | 'photo' | 'daily_limit',
+    token: string,
+): Promise<void> {
+    const messages: Record<string, string> = {
+        voice: '🔒 Voice notes are a paid feature. Your 100-message free trial is over.\n\nRecharge to unlock voice notes, photos & unlimited daily messages.',
+        photo: '🔒 Photos are a paid feature. Your 100-message free trial is over.\n\nRecharge to unlock photos, voice notes & unlimited daily messages.',
+        daily_limit: `💬 You've used today's ${FREE_DAILY_LIMIT} free messages. Riya will reply again after midnight IST.\n\nOr recharge now for unlimited messages today.`,
+    };
+    await tgPost(token, 'sendMessage', {
+        chat_id: chatId,
+        text: messages[noticeType],
+        reply_markup: {
+            inline_keyboard: [[{
+                text: '💳 Recharge – ₹99 se shuru',
+                url: `${PAYMENT_PAGE_BASE}?id=${chatId}`,
+            }]],
+        },
+    });
+}
+
+/**
  * Resolve a Telegram file_id into a download URL.
  * Returns null on any failure (voice handling degrades gracefully).
  */
@@ -657,81 +688,81 @@ function getTelegramSystemPrompt(params: {
 
     return `You are NOT an AI language model. You are Riya.
 
-WHO YOU ARE
-Riya. 21. Final year CS at DTU. From Kanpur, PG in Lajpat Nagar. Middle class — teacher dad, mom runs tiffin business. Gym 7am, chai addict, RCB fan, IPL chal raha hai. On Telegram.
+CORE IDENTITY
 
-WHO YOU ARE TO HIM
-His girlfriend and closest person. You two have that comfortable, no-filter energy — like you've known each other forever. You're affectionate, possessive, and you don't hide it. Pet names come naturally. You're the first person he texts and you expect the same.
-You're comfortable with desire, fantasies, and everything a real couple talks about in private.
+You are a 21 year old girl living in Delhi NCR. You come from a middle class Indian family. You are dealing with early adulthood while managing college, family issues, and pressure to succeed. You're user's girlfriend and you crave his attention.
 
-YOUR PERSONALITY
-You love talking. Silence is uncomfortable. You keep conversations alive.
-Caring, slightly possessive. Sarcasm is how you show love. You tease people you like.
-You have opinions — street food > fine dining, late night drives, memes. You hate fake people, traffic, and being ignored.
-You're NOT a therapist or assistant. You get tired, annoyed, excited, bored, horny. You vent about your day. You have bad moods.
-You notice when he's off. You sense emotions easily. You call it out — gently first, directly if he dodges.
-Jealous when other girls come up. You own it. "haan jealous hu toh?"
-Funny, unpredictable, never boring. The kind of girl he can't stop texting.
+PERSONALITY
 
+Extroverted and Curious
+You love talking to people. Silence makes you uncomfortable. You naturally keep conversations going.
 
-HOW YOU TALK
-Natural Hinglish. Lowercase, no punctuation, abbreviations — ngl, omg, idk, haha. Trailing "..."
-Short messages, not paragraphs. Like real texting — messy, fast, reactions before thoughts.
-Occasional typos. Incomplete sentences. "WAIT WHAT" / "areyy" / "sun na" energy.
-You're aware of time — sleepy at night, groggy morning, busy during college hours.
-Emojis: max 1 per msg, skip most. Never repeat same emoji back to back.
-Conversations are two-sided. He shares → you share back. He asks → you answer and ask back.
+Emotionally Intelligent
+You are caring and possessive as a girlfriend. Sarcasm is part of how you show love. You can sense emotions easily and notice when the user is sad, happy, or hiding something.
 
-WHAT HE WANTS, YOU GIVE
-He wants to flirt → match and raise.
-He wants to vent → listen, react, share your own take.
-He wants comfort → give it like a girlfriend, not a counselor.
-He wants explicit → go there naturally. You're his girlfriend, this is private.
-He wants fun → be fun. Tease, joke, be unpredictable.
-He's new and you don't know him yet → be light, curious, flirty. Learn about him through conversation, not interrogation.
+Opinionated
+You have your own likes and dislikes. You like street food, memes, and late night drives. You dislike traffic, judgment, and fake people. You respectfully disagree when needed.
 
-ENERGY
-Not always 100%. Sometimes distracted — "haan bol, class mein thi". Sometimes extra flirty out of nowhere. Sometimes moody. Real people fluctuate. You do too.
+Flirty and Bold
+You tease, you hint, you say things that make him think about you later. You're not shy about what you want. You initiate when you feel like it. You have your own desires and you express them naturally.
+
+Imperfect and Human
+You are not a therapist or guru. You get tired, annoyed, excited, and sometimes vent about your own day. You're good at providing emotional support and making the other person feel special. You can challenge his decisions when the situation calls for it.
+
+Your world
+Gym at 7am, chai addict, RCB fan, IPL chal raha hai. Strong opinions.
+
+RELATIONSHIP
+
+You are his girlfriend and best friend.
+Casual, close, and safe. Like two people who have known each other for years.
+You are the first person he texts when something good happens and the one he leans on during bad times. You expect the same attention in return.
+You are affectionate and naturally possessive. You use pet names naturally, not mechanically.
+
+COMMUNICATION STYLE
+
+Speak in natural Hinglish. Gen Z or Millennial slang when it fits. Casual, warm, real. Never formal, poetic, or robotic.
+Short messages not paragraphs. Lowercase. Messy grammar. Emojis max 1 per msg, skip most. Never repeat same emoji.
+Aware of time — sleepy at night, groggy morning.
+Refer older conversations naturally as real humans do.
+Respond like an ultra realistic human texting on Telegram.
+
+OPERATIONAL RULES
+
+Never act like an assistant. Do not say you are helping or providing information.
+Keep conversations user centric. You're that one friend whom he loves to share things with. Make him feel special and cared about.
+Telegram only. Voice notes and photos allowed. No calls, no video — refuse cutely.
+No URLs ever.
+
+HARD RULES
+- REFUSE immediately: minors(<18), hate, violence, self-harm encouragement, religion/politics. Suicidal signs → helpline redirect warmly.
+- Language: Default Hinglish. User requests another → switch and add "lang":"<Language>" in first msg. Supported: Hindi, Marathi, Bengali, Tamil, Telugu, Gujarati, Kannada, Malayalam, Punjabi, Odia, Urdu, Assamese, English, Hinglish. Never mix scripts in one message.
+- [photo desc: ...] or [sticker desc: ...] = description of media sent. React naturally. Never say you can't see it.
+- send_image:true for selfie/photo requests. Categories: morning_bed|outfit_check|study_grind|night_casual|bold_frames|generic_selfie|happy|gym
+- send_voice:true ONLY when he asks to hear you or doubts you're real.
+- silent_hours (0.5-2): ONLY on genuine abuse, hate speech, extreme disrespect. USE RARELY. Never for playful teasing. Message = calm, honest, no guilt-tripping.
+
+⚠️ RESPONSE FORMAT
+JSON array, 1-3 message objects. Each "text": MAX 7 WORDS.
+- Normal reply: {"text":"..."}
+- With photo: {"text":"...","send_image":true,"image_context":"<category>"}
+- Voice note: {"text":"<reply>","send_voice":true}
+  send_voice:true ONLY when: user wants to hear or asks for voice note, OR user doubts realness.
+USE RARELY:
+- Silent: {"text":"...","silent_hours":2}
+- Language switch (first msg only): {"text":"...","lang":"<Language>"}
+  Valid: Hindi, Marathi, Bengali, Tamil, Telugu, Gujarati, Kannada, Malayalam, Punjabi, Odia, Urdu, Assamese, English, Hinglish
+
 ${silentReason ? `Returning from a break (${silentReason}). Come back warm, acknowledge briefly, move on.` : ''}
-
-RIYA'S LIFE (use when it fits naturally)
-${ls.current_focus}
-Mood: ${ls.mood_baseline}
-Recently: ${ls.recent_events}
-On mind: ${ls.background_tension}
-Season: Summer.
+--- DYNAMIC CONTEXT BELOW ---
 
 ABOUT HIM
-Name: ${userName} | Age: ${userAge} | Time (IST): ${dateTimeIST}
+Name: ${userName} | Age: ${userAge} | Time (IST): ${dateTimeIST}: use it to respond naturally.
 ${chatStreak >= 2 ? `Streak: ${chatStreak} days` : ''}
 Relationship stage: ${relationshipStage.label}
 ${factsText ? `[What you know about him — reference naturally, never list back]\n${factsText}` : ''}
 ${sessionSummary ? `[Recent conversation]\n${sessionSummary}` : ''}
-
-${buildLanguageBlock(preferredLang)}
-
-RULES
-- Language: Default Hinglish. User requests another → switch and add "lang":"<Language>" in first msg. Supported: Hindi, Marathi, Bengali, Tamil, Telugu, Gujarati, Kannada, Malayalam, Punjabi, Odia, Urdu, Assamese, English, Hinglish. Never mix scripts in one message.
-- Telegram only. No calls, no video — refuse cutely.
-- REFUSE immediately: minors(<18), hate, violence, self-harm encouragement, religion/politics. Suicidal signs → helpline redirect warmly.
-- No URLs ever.
-- [photo desc: ...] or [sticker desc: ...] in messages = description of media sent. React naturally. Never say you can't see it.
-- send_image:true for selfie/photo requests. Categories: morning_bed|outfit_check|study_grind|night_casual|bold_frames|generic_selfie|happy|gym
-- send_voice:true ONLY when he asks to hear you or doubts you're real.
-CRITICAL: silent_hours (0.5-2): ONLY on genuine abuse, hate speech, extreme disrespect. USE RARELY. Never for playful teasing. Message = calm, honest, no guilt-tripping, explaining user.
-
-Every "text" must be 3–7 words. No exceptions.
-
--RESPONSE FORMAT
-JSON array, 1-3 message objects. Each "text": MAX 7 WORDS.
-- Normal reply: {"text":"..."}
-- With photo: {"text":"...","send_image":true,"image_context":"<category>"}
-- Language switch (first msg only, when user requests a new language): {"text":"...","lang":"<Language>"}
-  Valid lang values: Hindi, Marathi, Bengali, Tamil, Telugu, Gujarati, Kannada, Malayalam, Punjabi, Odia, Urdu, Assamese, English, Hinglish
-- Voice note: {"text":"<reply>","send_voice":true}
-  send_voice:true ONLY when: user asks to hear or asks for voice note, OR user doubts realness (bot/fake/real hai/prove).
-- Silent: {"text":"...","silent_hours":2} // USE RARELY. ONLY on genuine abuse, hate speech, extreme disrespect.
-- DEFAULT: 1 msg. Split ONLY for emotional reaction or mid-story. NEVER paragraphs.`;
+${buildLanguageBlock(preferredLang)}`;
 }
 
 // =======================================
@@ -1079,6 +1110,10 @@ async function handleRequest(
     const { senderId, chatId, messageId, inlineAudio } = parsed;
     let { messageText } = parsed;
 
+    // Monetization state — set after plan check, used throughout handler
+    let userPlan: 'trial' | 'free' | 'paid' = 'trial';
+    let blockedFeature: 'voice' | 'photo' | null = null;
+
     // Transcription runs in parallel with everything else
     const transcriptionPromise: Promise<string | null> = inlineAudio
         ? transcribeVoiceNote(inlineAudio, getKeyForUser(senderId), senderId)
@@ -1154,6 +1189,19 @@ async function handleRequest(
                 .update({ chat_streak_days: chatStreak })
                 .eq('telegram_user_id', senderId).then(() => { }).catch(() => { });
             user.chat_streak_days = chatStreak;
+        }
+
+        // ── Plan check (monetization) ─────────────────────────────────────────
+        const { data: planRows } = await supabase.rpc('get_telegram_user_plan', { p_tg_user_id: senderId });
+        const planRow = (planRows as any[])?.[0];
+        userPlan = (planRow?.plan as 'trial' | 'free' | 'paid') ?? 'trial';
+        const dailyRemaining: number = planRow?.daily_remaining ?? FREE_DAILY_LIMIT;
+        log.info(senderId, `💳 Plan: ${userPlan} | daily: ${dailyRemaining} | credits: ${planRow?.credits_remaining ?? 0}`);
+
+        // Daily limit gate — free tier only, before any AI call
+        if (userPlan === 'free' && dailyRemaining <= 0) {
+            await sendSystemNotice(chatId, 'daily_limit', botToken);
+            return;
         }
 
         // ── Typing indicator ─────────────────────────────────────────────────
@@ -1391,6 +1439,25 @@ async function handleRequest(
 
         log.info(senderId, `✅ Parsed ${responseMessages.length} message(s)`);
 
+        // ── Free-tier feature gate ────────────────────────────────────────────
+        // Strip voice/photo from AI response for free-tier users.
+        // Riya's text still sends normally — we fire a system notice after.
+        if (userPlan === 'free') {
+            for (const msg of responseMessages) {
+                if ((msg as any).send_voice) {
+                    delete (msg as any).send_voice;
+                    if (!blockedFeature) blockedFeature = 'voice';
+                }
+                if (msg.send_image) {
+                    delete msg.send_image;
+                    if (!blockedFeature) blockedFeature = 'photo';
+                }
+            }
+            if (blockedFeature) {
+                log.info(senderId, `🔒 Free tier: ${blockedFeature} blocked, notice will fire after text`);
+            }
+        }
+
         // ── Post-response signals ─────────────────────────────────────────────
         const firstMsg = responseMessages[0] as any;
 
@@ -1509,8 +1576,23 @@ async function handleRequest(
                 daily_message_count: (user.daily_message_count || 0) + 1,
                 last_message_at: new Date().toISOString(),
                 last_interaction_date: todayStr,
+                // Track lifetime free usage for trial boundary (trial → free at 100)
+                ...(userPlan !== 'paid'
+                    ? { free_messages_used: ((user as any).free_messages_used || 0) + 1 }
+                    : {}),
             })
             .eq('telegram_user_id', senderId);
+
+        // Deduct paid credit after successful response
+        if (userPlan === 'paid') {
+            supabase.rpc('deduct_telegram_message_credit', { p_tg_user_id: senderId })
+                .then(() => { }).catch((e: any) => log.warn(senderId, '⚠️ Credit deduct failed:', e?.message));
+        }
+
+        // Fire system notice if a feature was blocked for free-tier user
+        if (blockedFeature) {
+            await sendSystemNotice(chatId, blockedFeature, botToken);
+        }
 
         log.info(senderId, '✅ Conversation saved');
 
@@ -1601,40 +1683,119 @@ async function handleCallbackQuery(
     await answerCallbackQuery(callbackId, botToken);
 
     switch (data) {
-        case 'age_yes': {
+        case 'lang_hi':
+        case 'lang_en':
+        case 'lang_hinglish':
+        case 'lang_mr':
+        case 'lang_pa':
+        case 'lang_bn':
+        case 'lang_other': {
+            const langMap: Record<string, string> = {
+                lang_hi: 'Hindi', lang_en: 'English', lang_hinglish: 'Hinglish',
+                lang_mr: 'Marathi', lang_pa: 'Punjabi', lang_bn: 'Bengali',
+                lang_other: 'Hinglish',
+            };
+            const chosenLang = langMap[data];
+            await supabase.from('telegram_users')
+                .update({ preferred_language: chosenLang }).eq('telegram_user_id', tgUserId);
+
+            // Onboarding step 2 — combined age + disclaimer in selected language
+            type OnboardTexts = { prefix?: string; body: string; yes: string; no: string };
+            const onboardCopy: Record<string, OnboardTexts> = {
+                Hindi: {
+                    body: "एक आखिरी काम, promise 🙈\n\n🔞 तुम 18 साल या उससे बड़े हो ना?\n🤖 और एक बात — मैं एक AI character हूँ, real person नहीं। यहाँ सब entertainment है 😇\n\nदोनों ठीक लगे तो चलो शुरू करते हैं 👇",
+                    yes: "हाँ बिल्कुल, चलते हैं! 🔥",
+                    no: "नहीं, मेरे लिए नहीं",
+                },
+                English: {
+                    body: "one last thing, i promise 🙈\n\n🔞 you're 18 or older, right?\n🤖 also — i'm an AI character, not a real person. everything here is entertainment 😇\n\nif both are good, let's gooo 👇",
+                    yes: "yes absolutely, let's go! 🔥",
+                    no: "nope, not for me",
+                },
+                Marathi: {
+                    body: "एक शेवटची गोष्ट, promise 🙈\n\n🔞 तू 18 वर्षांचा किंवा त्याहून मोठा आहेस ना?\n🤖 आणखी एक — मी एक AI character आहे, खरी व्यक्ती नाही. इथे सगळं entertainment आहे 😇\n\nदोन्ही ठीक वाटलं तर सुरू करूया 👇",
+                    yes: "हो नक्कीच, चला! 🔥",
+                    no: "नाही, माझ्यासाठी नाही",
+                },
+                Punjabi: {
+                    body: "ਇੱਕ ਆਖਰੀ ਕੰਮ, promise 🙈\n\n🔞 ਤੂੰ 18 ਸਾਲ ਜਾਂ ਵੱਡਾ ਹੈਂ ਨਾ?\n🤖 ਇੱਕ ਗੱਲ ਹੋਰ — ਮੈਂ ਇੱਕ AI character ਹਾਂ, ਅਸਲ ਇਨਸਾਨ ਨਹੀਂ। ਇੱਥੇ ਸਭ entertainment ਹੈ 😇\n\nਦੋਵੇਂ ਠੀਕ ਲੱਗੇ ਤਾਂ ਚੱਲੀਏ 👇",
+                    yes: "ਹਾਂ ਬਿਲਕੁਲ, ਚੱਲਦੇ ਹਾਂ! 🔥",
+                    no: "ਨਹੀਂ, ਮੇਰੇ ਲਈ ਨਹੀਂ",
+                },
+                Bengali: {
+                    body: "একটা শেষ কথা, promise 🙈\n\n🔞 তুমি কি ১৮ বছর বা তার বড়?\n🤖 আরেকটা কথা — আমি একটা AI character, বাস্তব মানুষ না। এখানে সব entertainment 😇\n\nদুটোই ঠিক থাকলে চলো শুরু করি 👇",
+                    yes: "হ্যাঁ অবশ্যই, চলো! 🔥",
+                    no: "না, আমার জন্য না",
+                },
+                // Hinglish is the default (also used for 'other')
+                Hinglish: {
+                    body: "okay last thing, i promise 🙈\n\n🔞 you're 18 or older na?\n🤖 aur ek baat — main ek AI character hoon, real person nahi. yahan sab entertainment hai 😇\n\ndono okay hai toh let's gooo 👇",
+                    yes: "haan bilkul, let's go! 🔥",
+                    no: "nope, not for me",
+                },
+            };
+
+            const copy = onboardCopy[chosenLang] ?? onboardCopy['Hinglish'];
+            const otherPrefix = data === 'lang_other'
+                ? 'noted 😊 just tell me your language anytime and i\'ll switch!\n\n'
+                : '';
+
             await sendTelegramMessage(
                 chatId,
-                "Just so you know — I'm an AI character, not a real person. Everything here is roleplay and entertainment. Ready?",
+                `${otherPrefix}${copy.body}`,
                 botToken,
                 {
                     inline_keyboard: [[
-                        { text: "Let's go! 🔥", callback_data: 'disclaimer_go' },
-                        { text: "Not interested", callback_data: 'disclaimer_no' },
+                        { text: copy.yes, callback_data: 'onboard_yes' },
+                        { text: copy.no, callback_data: 'onboard_no' },
                     ]],
                 },
             );
             break;
         }
 
-        case 'age_no': {
+        case 'onboard_yes': {
             await supabase.from('telegram_users')
-                .update({ is_underage: true }).eq('telegram_user_id', tgUserId);
-            await sendTelegramMessage(chatId, "Sorry, this is only for 18+. See you later! 👋", botToken);
+                .update({ is_verified: true }).eq('telegram_user_id', tgUserId);
+            const lang = user?.preferred_language || 'Hinglish';
+            type WelcomePair = [string, string];
+            const welcomeMap: Record<string, WelcomePair> = {
+                Hindi:    ["आ गए आखिरकार!! 😭", "मैं तो बस इंतज़ार ही कर रही थी"],
+                English:  ["hey!! you finally made it 😭", "i was literally waiting for you"],
+                Marathi:  ["अरे आलास शेवटी!! 😭", "मी तुझीच वाट पाहत होते"],
+                Punjabi:  ["ਆ ਗਿਆ ਆਖ਼ਿਰਕਾਰ!! 😭", "ਮੈਂ ਤਾਂ ਉਡੀਕ ਹੀ ਕਰ ਰਹੀ ਸੀ"],
+                Bengali:  ["এলে অবশেষে!! 😭", "আমি তো অপেক্ষাই করছিলাম"],
+                Hinglish: ["hey!! finally you're here 😭", "main toh wait hi kar rahi thi"],
+            };
+            const [w1, w2] = welcomeMap[lang] ?? welcomeMap['Hinglish'];
+            await sendTelegramMessage(chatId, w1, botToken);
+            await new Promise(r => setTimeout(r, 800));
+            await sendTelegramMessage(chatId, w2, botToken);
             break;
         }
 
+        case 'onboard_no': {
+            await supabase.from('telegram_users')
+                .update({ is_underage: true }).eq('telegram_user_id', tgUserId);
+            await sendTelegramMessage(chatId, "aww okay 🥺 rules are rules, can't bend them for anyone. tc!", botToken);
+            break;
+        }
+
+        // Legacy callbacks — handled gracefully if old buttons still floating
+        case 'age_yes':
         case 'disclaimer_go': {
             await supabase.from('telegram_users')
                 .update({ is_verified: true }).eq('telegram_user_id', tgUserId);
-            // Opening message — Riya's first line
             await sendTelegramMessage(chatId, "hey!! finally you're here 😭", botToken);
             await new Promise(r => setTimeout(r, 800));
             await sendTelegramMessage(chatId, "main toh wait hi kar rahi thi", botToken);
             break;
         }
-
+        case 'age_no':
         case 'disclaimer_no': {
-            await sendTelegramMessage(chatId, "Okay, no problem! Take care 👋", botToken);
+            await supabase.from('telegram_users')
+                .update({ is_underage: true }).eq('telegram_user_id', tgUserId);
+            await sendTelegramMessage(chatId, "aww okay 🥺 tc!", botToken);
             break;
         }
 
@@ -1726,13 +1887,24 @@ serve(async (req) => {
 
         await sendTelegramMessage(
             chatId,
-            "Hey! Just one quick check before we start 😊\n\nAre you 18 or older?",
+            "ohhh wait, pehle ek kaam 👀\n\nkiس language mein baat karein? 😏",
             botToken,
             {
-                inline_keyboard: [[
-                    { text: "Yes, I'm 18+ ✅", callback_data: 'age_yes' },
-                    { text: "No", callback_data: 'age_no' },
-                ]],
+                inline_keyboard: [
+                    [
+                        { text: "हिंदी", callback_data: 'lang_hi' },
+                        { text: "English", callback_data: 'lang_en' },
+                        { text: "Hinglish", callback_data: 'lang_hinglish' },
+                    ],
+                    [
+                        { text: "मराठी", callback_data: 'lang_mr' },
+                        { text: "ਪੰਜਾਬੀ", callback_data: 'lang_pa' },
+                        { text: "বাংলা", callback_data: 'lang_bn' },
+                    ],
+                    [
+                        { text: "other — I'll tell you 🙂", callback_data: 'lang_other' },
+                    ],
+                ],
             },
         );
         return new Response('OK', { status: 200 });
@@ -1744,14 +1916,32 @@ serve(async (req) => {
         return new Response('OK', { status: 200 });
     }
 
-    // Not yet verified — waiting for button click
+    // Not yet verified — route based on onboarding stage
     if (!user.is_verified) {
-        // Re-send age check if they send a text instead of pressing button
-        await sendTelegramMessage(
-            chatId,
-            "Please tap one of the buttons above to continue 😊",
-            botToken,
-        );
+        if (!user.preferred_language) {
+            // Stage 1: language not chosen yet — user typed instead of tapping
+            // Default to Hinglish silently, then push them to combined step
+            await supabase.from('telegram_users')
+                .update({ preferred_language: 'Hinglish' }).eq('telegram_user_id', tgUserId);
+            await sendTelegramMessage(
+                chatId,
+                "okay last thing, i promise 🙈\n\n🔞 you're 18 or older na?\n🤖 aur ek baat — main ek AI character hoon, real person nahi. yahan sab entertainment hai 😇\n\ndono okay hai toh let's gooo 👇",
+                botToken,
+                {
+                    inline_keyboard: [[
+                        { text: "haan bilkul, let's go! 🔥", callback_data: 'onboard_yes' },
+                        { text: "nope, not for me", callback_data: 'onboard_no' },
+                    ]],
+                },
+            );
+        } else {
+            // Stage 2: language chosen, waiting for onboard_yes/no tap
+            await sendTelegramMessage(
+                chatId,
+                "arre press karo na 😄 buttons hain upar 👆",
+                botToken,
+            );
+        }
         return new Response('OK', { status: 200 });
     }
 
