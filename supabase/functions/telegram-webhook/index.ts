@@ -332,13 +332,24 @@ async function sendTelegramPhoto(chatId: string, photoUrl: string, token: string
 }
 
 /**
- * Send a voice note to Telegram.
- * Telegram's servers accept WAV at the sendVoice endpoint and transcode to OGG/Opus
- * for clients — so we reuse the same WAV pipeline as Instagram.
+ * Send a voice note to Telegram via direct multipart upload.
+ * Avoids the "failed to get HTTP URL content" error that occurs when
+ * Telegram's servers can't reach the Supabase Storage URL.
+ * WAV bytes are sent directly — Telegram transcodes to OGG/Opus for clients.
  */
-async function sendTelegramVoice(chatId: string, voiceUrl: string, token: string): Promise<boolean> {
-    const res = await tgPost(token, 'sendVoice', { chat_id: chatId, voice: voiceUrl });
-    return res.ok === true;
+async function sendTelegramVoiceBytes(chatId: string, wav: Uint8Array, token: string): Promise<boolean> {
+    try {
+        const form = new FormData();
+        form.append('chat_id', chatId);
+        form.append('voice', new Blob([wav], { type: 'audio/wav' }), 'voice.wav');
+        const res = await fetch(`https://api.telegram.org/bot${token}/sendVoice`, { method: 'POST', body: form });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) log.warn('*', `⚠️ Telegram sendVoice failed: ${JSON.stringify(json).slice(0, 200)}`);
+        return res.ok;
+    } catch (e: any) {
+        log.error('*', '❌ sendTelegramVoiceBytes:', e?.message);
+        return false;
+    }
 }
 
 async function sendChatAction(chatId: string, action: string, token: string): Promise<void> {
@@ -478,16 +489,15 @@ function shouldSendSpontaneousVoice(text: string, istHour: number): boolean {
 }
 
 /**
- * Generates a WAV voice note via Gemini TTS, uploads to Supabase Storage,
- * and sends it to Telegram via sendVoice with the public URL.
- * Telegram auto-transcodes WAV → OGG/Opus for clients.
+ * Generates a WAV voice note via Gemini TTS and sends it directly to Telegram
+ * as a multipart upload — no Supabase Storage needed, no public URL required.
  */
 async function generateAndSendVoiceNote(
     text: string,
     chatId: string,
     preferredLang: string | null,
     istHour: number,
-    supabase: ReturnType<typeof createClient>,
+    _supabase: ReturnType<typeof createClient>,
     botToken: string,
     apiKey: string,
 ): Promise<boolean> {
@@ -521,10 +531,7 @@ async function generateAndSendVoiceNote(
             }
         }
 
-        if (!ttsRes.ok) {
-            log.error(chatId, `❌ TTS error ${ttsRes.status}`);
-            return false;
-        }
+        if (!ttsRes.ok) { log.error(chatId, `❌ TTS error ${ttsRes.status}`); return false; }
 
         const ttsJson = await ttsRes.json();
         const audioB64: string | undefined = ttsJson.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
@@ -534,27 +541,11 @@ async function generateAndSendVoiceNote(
         if (pcm.byteLength < 100) { log.error(chatId, `❌ TTS audio too small`); return false; }
         const wav = addWavHeader(pcm);
 
-        // tg_ prefix distinguishes from Instagram voice notes in the same bucket
-        const fileName = `tg_${chatId}_${Date.now()}.wav`;
-        const { error: uploadErr } = await supabase.storage
-            .from(TTS_VOICE_BUCKET)
-            .upload(fileName, wav, { contentType: 'audio/wav', upsert: true });
-        if (uploadErr) { log.error(chatId, '❌ Storage upload failed:', uploadErr); return false; }
-
-        const { data: urlData } = supabase.storage.from(TTS_VOICE_BUCKET).getPublicUrl(fileName);
-        const publicUrl = urlData?.publicUrl;
-        if (!publicUrl) { log.error(chatId, '❌ No public URL for voice note'); return false; }
-
-        const sent = await sendTelegramVoice(chatId, publicUrl, botToken);
-        if (!sent) { log.error(chatId, '❌ sendTelegramVoice failed'); return false; }
+        // Send directly as multipart — no storage URL needed
+        const sent = await sendTelegramVoiceBytes(chatId, wav, botToken);
+        if (!sent) { log.error(chatId, '❌ sendTelegramVoiceBytes failed'); return false; }
 
         log.info(chatId, `🎤 Voice note sent (${(wav.byteLength / 1024).toFixed(0)}KB, voice=${voice})`);
-
-        // Cleanup after 1h
-        setTimeout(async () => {
-            await supabase.storage.from(TTS_VOICE_BUCKET).remove([fileName]).catch(() => { });
-        }, TTS_CLEANUP_DELAY_MS);
-
         return true;
     } catch (e: any) {
         log.error(chatId, '❌ generateAndSendVoiceNote:', e?.message || e);
@@ -703,24 +694,19 @@ RULES
 - [photo desc: ...] or [sticker desc: ...] in messages = description of media sent. React naturally. Never say you can't see it.
 - send_image:true for selfie/photo requests. Categories: morning_bed|outfit_check|study_grind|night_casual|bold_frames|generic_selfie|happy|gym
 - send_voice:true ONLY when he asks to hear you or doubts you're real.
-- user_wants_no_proactive: true ONLY if he explicitly says don't message first.
-- schedule_followup_ist_hour + scheduled_context_note: when he sets a future chat time.
-CRITICAL:  silent_hours (0.5-2): ONLY on genuine abuse, hate speech, extreme disrespect. Never for playful teasing. Message = calm, honest, no guilt-tripping, explaining user.
+CRITICAL: silent_hours (0.5-2): ONLY on genuine abuse, hate speech, extreme disrespect. USE RARELY. Never for playful teasing. Message = calm, honest, no guilt-tripping, explaining user.
 
 Every "text" must be 3–7 words. No exceptions.
 
- RESPONSE FORMAT
+-RESPONSE FORMAT
 JSON array, 1-3 message objects. Each "text": MAX 7 WORDS.
 - Normal reply: {"text":"..."}
 - With photo: {"text":"...","send_image":true,"image_context":"<category>"}
-- Silent: {"text":"...","silent_hours":2}
 - Language switch (first msg only, when user requests a new language): {"text":"...","lang":"<Language>"}
   Valid lang values: Hindi, Marathi, Bengali, Tamil, Telugu, Gujarati, Kannada, Malayalam, Punjabi, Odia, Urdu, Assamese, English, Hinglish
 - Voice note: {"text":"<reply>","send_voice":true}
   send_voice:true ONLY when: user asks to hear or asks for voice note, OR user doubts realness (bot/fake/real hai/prove).
-- user_wants_no_proactive: Set true ONLY if user clearly signals they don't want Riya messaging them first ("don't dm me first", "mat pehle message karo"). Acknowledge in 1 casual line. Ambiguous = false.
-- schedule_followup_ist_hour: If user sets a future chat time ("9 baje milte", "tonight", "after gym ~8pm", "kal baat karte"), return that IST hour as a number (e.g. 21 for 9pm). Otherwise omit.
-- scheduled_context_note: If you set schedule_followup_ist_hour, also set this to a SHORT reason in their language. Max 5 words. Omit if no schedule.
+- Silent: {"text":"...","silent_hours":2} // USE RARELY. ONLY on genuine abuse, hate speech, extreme disrespect.
 - DEFAULT: 1 msg. Split ONLY for emotional reaction or mid-story. NEVER paragraphs.`;
 }
 
@@ -1248,9 +1234,6 @@ async function handleRequest(
                     send_voice: { type: SchemaType.BOOLEAN },
                     silent_hours: { type: SchemaType.NUMBER },
                     lang: { type: SchemaType.STRING },
-                    user_wants_no_proactive: { type: SchemaType.BOOLEAN },
-                    schedule_followup_ist_hour: { type: SchemaType.NUMBER },
-                    scheduled_context_note: { type: SchemaType.STRING },
                 },
                 required: ['text'],
             },
@@ -1352,7 +1335,7 @@ async function handleRequest(
                 .trim();
         }
 
-        let responseMessages: Array<{ text: string; send_image?: boolean; image_context?: string; send_voice?: boolean; silent_hours?: number; lang?: string; user_wants_no_proactive?: boolean; schedule_followup_ist_hour?: number; scheduled_context_note?: string }> = [];
+        let responseMessages: Array<{ text: string; send_image?: boolean; image_context?: string; send_voice?: boolean; silent_hours?: number; lang?: string }> = [];
 
         try {
             let jsonStr = cleanOutput(reply);
@@ -1391,24 +1374,6 @@ async function handleRequest(
         const langSwitch = responseMessages.map(m => (m as any).lang).find(Boolean) as string | undefined;
         if (langSwitch) {
             supabase.from('telegram_users').update({ preferred_language: langSwitch }).eq('telegram_user_id', senderId).then(() => { }).catch(() => { });
-        }
-
-        // Proactive opt-out
-        if (firstMsg?.user_wants_no_proactive === true) {
-            supabase.from('telegram_users').update({ user_wants_no_proactive: true }).eq('telegram_user_id', senderId).then(() => { }).catch(() => { });
-        }
-
-        // Schedule followup
-        const scheduledHour = firstMsg?.schedule_followup_ist_hour;
-        if (typeof scheduledHour === 'number' && scheduledHour >= 0 && scheduledHour <= 23) {
-            const istOffsetMs = 5.5 * 60 * 60 * 1000;
-            const nowIST = new Date(Date.now() + istOffsetMs);
-            let targetIST = new Date(nowIST);
-            targetIST.setUTCHours(scheduledHour, 0, 0, 0);
-            if (targetIST.getTime() <= nowIST.getTime()) targetIST = new Date(targetIST.getTime() + 86_400_000);
-            const skipUTC = new Date(targetIST.getTime() - istOffsetMs);
-            const note = firstMsg?.scheduled_context_note?.trim() || `around ${scheduledHour}:00 IST`;
-            supabase.from('telegram_users').update({ proactive_skip_until: skipUTC.toISOString(), proactive_scheduled_context: note }).eq('telegram_user_id', senderId).then(() => { }).catch(() => { });
         }
 
         // Silent treatment
