@@ -1486,15 +1486,19 @@ async function handleRequest(
                 model_used: activeModel,
                 created_at: new Date(baseTime).toISOString(),
             },
-            ...responseMessages.map((msg, idx) => ({
-                user_id: null, guest_session_id: null,
-                telegram_user_id: senderId,
-                source: 'telegram', role: 'assistant',
-                content: ((msg as any).send_voice || voiceTexts.includes(msg.text))
-                    ? `[🎤 voice note] ${msg.text}` : msg.text,
-                model_used: activeModel,
-                created_at: new Date(baseTime + idx + 100).toISOString(),
-            })),
+            ...responseMessages.map((msg, idx) => {
+                let content = msg.text;
+                if ((msg as any).send_voice || voiceTexts.includes(msg.text)) content = `[🎤 voice note] ${msg.text}`;
+                if (msg.send_image) content += ` [sent photo: ${msg.image_context || 'selfie'}]`;
+                return {
+                    user_id: null, guest_session_id: null,
+                    telegram_user_id: senderId,
+                    source: 'telegram', role: 'assistant',
+                    content,
+                    model_used: activeModel,
+                    created_at: new Date(baseTime + idx + 100).toISOString(),
+                };
+            }),
         ];
         await supabase.from('riya_conversations').insert(convInserts);
 
