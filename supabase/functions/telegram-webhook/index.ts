@@ -63,10 +63,12 @@ const LIFE_STATE_UPDATE_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // trigger backgr
 // =======================================
 
 let apiKeyPool: string[] = [];
+let ttsKeyPool: string[] = [];         // separate pool for TTS — keys from different GCP projects
 const quotaExhaustedKeys = new Map<string, number>();
-const QUOTA_COOLDOWN_MS = 5 * 60 * 1000;
+const QUOTA_COOLDOWN_MS = 60 * 60 * 1000; // 1h for TTS (daily quota, 5min cooldown is pointless)
 
 function initializeApiKeyPool(): void {
+    // Main chat keys: GEMINI_API_KEY_1, GEMINI_API_KEY_2, ... (or GEMINI_API_KEY)
     const keys: string[] = [];
     let i = 1;
     while (true) {
@@ -78,7 +80,18 @@ function initializeApiKeyPool(): void {
         if (k) keys.push(k);
     }
     apiKeyPool = keys;
-    log.info('*', `✅ API key pool: ${apiKeyPool.length} key(s)`);
+
+    // TTS keys: GEMINI_TTS_KEY_1, GEMINI_TTS_KEY_2, ... (keys from different GCP projects)
+    // Falls back to main keys if none configured
+    const ttsKeys: string[] = [];
+    let j = 1;
+    while (true) {
+        const k = Deno.env.get(`GEMINI_TTS_KEY_${j}`);
+        if (k) { ttsKeys.push(k); j++; } else break;
+    }
+    ttsKeyPool = ttsKeys.length > 0 ? ttsKeys : [...apiKeyPool];
+
+    log.info('*', `✅ API key pool: ${apiKeyPool.length} chat key(s), ${ttsKeyPool.length} TTS key(s)`);
 }
 
 function getKeyForUser(userId: string): string {
@@ -90,6 +103,14 @@ function getKeyForUser(userId: string): string {
     let hash = 0;
     for (let i = 0; i < userId.length; i++) hash = Math.imul(hash * 31 + userId.charCodeAt(i), 1) >>> 0;
     return pool[hash % pool.length];
+}
+
+function getTTSKey(): string {
+    const now = Date.now();
+    const available = ttsKeyPool.filter(k => !quotaExhaustedKeys.has(k) || (quotaExhaustedKeys.get(k) ?? 0) <= now);
+    if (available.length === 0) return ''; // all exhausted — caller should skip TTS
+    // Round-robin across available TTS keys
+    return available[Math.floor(now / 1000) % available.length];
 }
 
 function markKeyExhausted(key: string): void {
@@ -499,7 +520,7 @@ async function generateAndSendVoiceNote(
     istHour: number,
     _supabase: ReturnType<typeof createClient>,
     botToken: string,
-    apiKey: string,
+    _apiKey: string,
 ): Promise<boolean> {
     try {
         const voice = (istHour >= 22 || istHour <= 4) ? TTS_VOICE_NIGHT : TTS_VOICE_DAY;
@@ -514,7 +535,9 @@ async function generateAndSendVoiceNote(
             },
         });
 
-        let ttsKey = apiKey;
+        // Use dedicated TTS key pool (keys from separate GCP projects for independent quotas)
+        let ttsKey = getTTSKey();
+        if (!ttsKey) { log.warn(chatId, '⚠️ TTS quota exhausted on all keys — skipping voice note'); return false; }
         const makeTtsUrl = () => `https://generativelanguage.googleapis.com/v1beta/models/${TTS_MODEL}:generateContent?key=${ttsKey}`;
 
         let ttsRes = await fetch(makeTtsUrl(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: makeTtsBody() });
@@ -526,7 +549,8 @@ async function generateAndSendVoiceNote(
                 ttsRes = await fetch(makeTtsUrl(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: makeTtsBody() });
             } else if (ttsRes.status === 429) {
                 markKeyExhausted(ttsKey);
-                ttsKey = getKeyForUser(chatId);
+                ttsKey = getTTSKey();
+                if (!ttsKey) { log.warn(chatId, '⚠️ TTS 429 — all TTS keys exhausted, skipping voice note'); return false; }
                 ttsRes = await fetch(makeTtsUrl(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: makeTtsBody() });
             }
         }
@@ -1393,7 +1417,6 @@ async function handleRequest(
 
         // ── Voice routing ─────────────────────────────────────────────────────
         const istHour = getCurrentISTHour();
-        const ttsKey = getKeyForUser(senderId);
         const voiceTexts: string[] = [];
         const textOnlyMsgs: typeof responseMessages = [];
         let hasLLMVoice = false;
@@ -1440,7 +1463,7 @@ async function handleRequest(
         if (voiceTexts.length > 0) {
             const combined = voiceTexts.join('\n\n');
             log.info(senderId, `🎤 Generating voice note: "${combined.slice(0, 60)}..."`);
-            const sent = await generateAndSendVoiceNote(combined, chatId, preferredLang, istHour, supabase, botToken, ttsKey);
+            const sent = await generateAndSendVoiceNote(combined, chatId, preferredLang, istHour, supabase, botToken, '');
             if (sent) {
                 supabase.from('telegram_users')
                     .update({ total_voice_notes_sent: (user.total_voice_notes_sent || 0) + 1 })

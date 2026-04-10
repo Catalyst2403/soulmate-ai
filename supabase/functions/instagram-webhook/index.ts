@@ -144,10 +144,11 @@ const rateLimitStore: Map<string, { count: number; windowStart: number }> = new 
 
 // API key pool
 let apiKeyPool: string[] = [];
+let ttsKeyPool: string[] = [];         // separate pool — keys from different GCP projects for independent TTS quota
 
 // Keys temporarily burned by quota errors: key → expiry timestamp
 const quotaExhaustedKeys = new Map<string, number>();
-const QUOTA_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes cool-down per key
+const QUOTA_COOLDOWN_MS = 60 * 60 * 1000; // 1h cool-down (TTS is daily quota, 5min pointless)
 
 function initializeApiKeyPool(): void {
     const keys: string[] = [];
@@ -166,7 +167,24 @@ function initializeApiKeyPool(): void {
         if (singleKey) keys.push(singleKey);
     }
     apiKeyPool = keys;
-    log.info('*', `✅ Initialized API key pool with ${apiKeyPool.length} key(s)`);
+
+    // TTS keys: GEMINI_TTS_KEY_1, GEMINI_TTS_KEY_2, ... (from different GCP projects)
+    const ttsKeys: string[] = [];
+    let j = 1;
+    while (true) {
+        const k = Deno.env.get(`GEMINI_TTS_KEY_${j}`);
+        if (k) { ttsKeys.push(k); j++; } else break;
+    }
+    ttsKeyPool = ttsKeys.length > 0 ? ttsKeys : [...apiKeyPool];
+
+    log.info('*', `✅ API key pool: ${apiKeyPool.length} chat key(s), ${ttsKeyPool.length} TTS key(s)`);
+}
+
+function getTTSKey(): string {
+    const now = Date.now();
+    const available = ttsKeyPool.filter(k => !quotaExhaustedKeys.has(k) || (quotaExhaustedKeys.get(k) ?? 0) <= now);
+    if (available.length === 0) return ''; // all exhausted
+    return available[Math.floor(now / 1000) % available.length];
 }
 
 /**
@@ -1615,7 +1633,7 @@ async function generateAndSendVoiceNote(
     istHour: number,
     supabase: ReturnType<typeof createClient>,
     accessToken: string,
-    apiKey: string,
+    _apiKey: string,
 ): Promise<boolean> {
     try {
         const voice = (istHour >= 22 || istHour <= 4) ? TTS_VOICE_NIGHT : TTS_VOICE_DAY;
@@ -1631,13 +1649,14 @@ async function generateAndSendVoiceNote(
             },
         });
 
-        // Key may rotate on quota — keep it mutable
-        let ttsKey = apiKey;
+        // Use dedicated TTS key pool (separate GCP projects = independent daily quotas)
+        let ttsKey = getTTSKey();
+        if (!ttsKey) { log.warn(senderId, '⚠️ TTS quota exhausted on all keys — skipping voice note'); return false; }
         const makeTtsUrl = () => `https://generativelanguage.googleapis.com/v1beta/models/${TTS_MODEL}:generateContent?key=${ttsKey}`;
 
         const ttsRes1 = await fetch(makeTtsUrl(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: makeTtsBody() });
 
-        // Retry once: 500/503 = preview model flakiness (same key, wait); 429 = quota (rotate key, immediate)
+        // Retry once: 500/503 = preview flakiness (same key, wait); 429 = quota (rotate key)
         let ttsRes2 = ttsRes1;
         if (!ttsRes1.ok) {
             if (ttsRes1.status === 500 || ttsRes1.status === 503) {
@@ -1646,8 +1665,9 @@ async function generateAndSendVoiceNote(
                 ttsRes2 = await fetch(makeTtsUrl(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: makeTtsBody() });
             } else if (ttsRes1.status === 429) {
                 markKeyExhausted(ttsKey);
-                ttsKey = getKeyForUser(senderId);
-                log.warn(senderId, `⚠️ TTS quota hit — rotating key and retrying...`);
+                ttsKey = getTTSKey();
+                if (!ttsKey) { log.warn(senderId, '⚠️ TTS 429 — all TTS keys exhausted'); return false; }
+                log.warn(senderId, '⚠️ TTS quota hit — rotating to next TTS key...');
                 ttsRes2 = await fetch(makeTtsUrl(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: makeTtsBody() });
             }
         }
@@ -3518,7 +3538,6 @@ async function handleRequest(
         // Max 1 voice note per response, always delivered last.
         const nowIST = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
         const currentISTHour = nowIST.getUTCHours();
-        const ttsApiKey = getKeyForUser(senderId);
 
         const voiceTexts: string[] = [];
         const textOnlyMsgs: typeof responseMessages = [];
@@ -3652,7 +3671,7 @@ async function handleRequest(
                 currentISTHour,
                 supabase,
                 accessToken,
-                ttsApiKey,
+                '',
             );
             // Increment voice note counter on success (fire-and-forget)
             if (voiceSent) {
@@ -3716,7 +3735,7 @@ async function handleRequest(
                 log.info('*', `🏁💰 Sending final daily sales bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'daily_sales_final', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 1500));
-                await sendInstagramMessage(senderId, paymentLink, accessToken);
+                await sendInstagramMessage(senderId, 'Credits lo aur Riya se baat jaari rakho — bio link check karo 🔗', accessToken);
                 user.last_link_sent_at = new Date().toISOString();
             }
         }
@@ -3727,7 +3746,7 @@ async function handleRequest(
                 log.info('*', `🏁💰 Sending final lifetime sales bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'lifetime_sales_final', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 1500));
-                await sendInstagramMessage(senderId, paymentLink, accessToken);
+                await sendInstagramMessage(senderId, 'Riya AI credits ke liye bio link dekho — wapas aao 💙', accessToken);
                 user.last_link_sent_at = new Date().toISOString();
             }
         }
@@ -3738,7 +3757,7 @@ async function handleRequest(
                 log.info('*', `🔁💰 Sending final secondary sales bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'secondary_sales_final', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 1500));
-                await sendInstagramMessage(senderId, paymentLink, accessToken);
+                await sendInstagramMessage(senderId, 'Agar Riya se milna hai toh bio link se credits le lena 😊', accessToken);
                 user.last_link_sent_at = new Date().toISOString();
             }
         }
@@ -3749,7 +3768,7 @@ async function handleRequest(
                 log.info('*', `🔁💰 Sending final lifetime secondary bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'lifetime_secondary_sales_final', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 1500));
-                await sendInstagramMessage(senderId, paymentLink, accessToken);
+                await sendInstagramMessage(senderId, 'Bio link se credits lo aur hum milte hain phir 💙', accessToken);
                 user.last_link_sent_at = new Date().toISOString();
             }
         }
