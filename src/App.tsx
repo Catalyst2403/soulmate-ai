@@ -20,6 +20,7 @@ import RiyaChat from "./pages/riya/RiyaChat";
 import RiyaPricing from "./pages/riya/RiyaPricing";
 import InstagramPayment from "./pages/riya/InstagramPayment";
 import TelegramPayment from "./pages/riya/TelegramPayment";
+import TelegramRedirect from "./pages/riya/TelegramRedirect";
 import RiyaEmailLogin from "./pages/riya/RiyaEmailLogin";
 import RiyaAnalytics from "./pages/riya/RiyaAnalytics";
 
@@ -64,6 +65,7 @@ const App = () => {
                 <Route path="/riya/pricing" element={<RiyaPricing />} />
                 <Route path="/riya/pay/instagram" element={<InstagramPayment />} />
                 <Route path="/riya/pay/telegram" element={<TelegramPayment />} />
+                <Route path="/riya/tg" element={<TelegramRedirect />} />
                 <Route path="/riya/email-login" element={<RiyaEmailLogin />} />
                 <Route path="/riya/analytics" element={<RiyaAnalytics />} />
 

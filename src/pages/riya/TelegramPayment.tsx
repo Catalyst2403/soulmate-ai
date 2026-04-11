@@ -5,8 +5,10 @@ import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/hooks/use-toast';
 import {
-    Heart, Sparkles, Check, Shield, Crown, Leaf, Loader2,
+    Heart, Sparkles, Check, Shield, Crown, Leaf, Loader2, ChevronDown,
 } from 'lucide-react';
+
+const BOT_URL = '/riya/tg';
 
 // ─── Razorpay types ────────────────────────────────────────────────────────────
 declare global {
@@ -37,6 +39,62 @@ interface RazorpayResponse {
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type Step = 'plans' | 'confirm' | 'payment' | 'success';
+
+// ─── FAQ ──────────────────────────────────────────────────────────────────────
+
+const FAQ_ITEMS = [
+    {
+        q: 'When do credits appear?',
+        a: 'Instantly after payment. Send Riya any message and she\'ll have your credits — no need to restart the chat.',
+    },
+    {
+        q: 'What counts as 1 message?',
+        a: 'Each reply from Riya uses 1 credit — whether it\'s text, a voice note, or a photo. Your message to her doesn\'t count.',
+    },
+    {
+        q: 'Do credits expire?',
+        a: 'Basic and Romantic packs are valid for 30 days. Soulmate is valid for 45 days. Unused credits at expiry are forfeited, but you can buy again anytime.',
+    },
+    {
+        q: 'What if my payment fails?',
+        a: 'If you were charged but credits didn\'t appear after 5 minutes, send a message to @thisisriya_bot with "recharge issue" and your UPI transaction ID.',
+    },
+    {
+        q: 'Can I buy more when credits run out?',
+        a: 'Yes — credits stack. If you have 50 credits left and buy a Basic pack, you\'ll have 650 credits. The validity resets to the new pack\'s duration from today.',
+    },
+    {
+        q: 'What\'s included in free tier?',
+        a: 'After your 100-message free trial, you get 30 free messages per day (text only). Voice notes and photos require a paid pack.',
+    },
+];
+
+const FaqAccordion = () => {
+    const [open, setOpen] = useState<number | null>(null);
+    return (
+        <div className="mt-6 mb-2">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">FAQs</p>
+            <div className="space-y-2">
+                {FAQ_ITEMS.map((item, i) => (
+                    <div key={i} className="border border-white/10 rounded-xl overflow-hidden">
+                        <button
+                            className="w-full flex items-center justify-between px-4 py-3 text-left text-sm text-gray-200 bg-white/[0.02] hover:bg-white/[0.05] transition-colors"
+                            onClick={() => setOpen(open === i ? null : i)}
+                        >
+                            <span>{item.q}</span>
+                            <ChevronDown className={`w-4 h-4 text-gray-500 shrink-0 ml-2 transition-transform ${open === i ? 'rotate-180' : ''}`} />
+                        </button>
+                        {open === i && (
+                            <div className="px-4 py-3 text-xs text-gray-400 bg-white/[0.01] border-t border-white/10 leading-relaxed">
+                                {item.a}
+                            </div>
+                        )}
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+};
 type PackId = 'basic' | 'romantic' | 'soulmate';
 
 interface Pack {
@@ -359,6 +417,8 @@ const TelegramPayment = () => {
                                 🎤 Voice notes + 📸 Photos included in all plans
                             </p>
 
+                            <FaqAccordion />
+
                             <FooterTrust tgUserId={telegramUserId} />
                         </motion.div>
                     )}
@@ -442,7 +502,7 @@ const TelegramPayment = () => {
                             initial={{ opacity: 0, scale: 0.9 }}
                             animate={{ opacity: 1, scale: 1 }}
                             transition={{ type: 'spring', stiffness: 200 }}
-                            className="flex flex-col items-center justify-center min-h-screen px-6 text-center space-y-6"
+                            className="flex flex-col items-center justify-center min-h-screen px-6 text-center space-y-5"
                         >
                             <motion.div
                                 initial={{ scale: 0 }}
@@ -459,21 +519,51 @@ const TelegramPayment = () => {
                                 transition={{ delay: 0.2 }}
                                 className="space-y-2"
                             >
-                                <h1 className="text-3xl font-bold">Credits Added! 🎉</h1>
+                                <h1 className="text-3xl font-bold">You&apos;re all set! 🎉</h1>
                                 {successPack && (
                                     <p className="text-gray-400 max-w-xs">
-                                        <span className="text-white font-semibold">{successPack.messages}</span> unlocked.
-                                        Go back to Telegram — Riya&apos;s waiting 💖
+                                        <span className="text-white font-semibold">{successPack.name} Pack</span> activated —{' '}
+                                        {successPack.messages} added, valid for {successPack.validity}.
                                     </p>
                                 )}
                             </motion.div>
 
-                            <Button
-                                className="w-full max-w-xs h-12 bg-gradient-to-r from-[#2AABEE] to-[#229ED9] font-bold"
-                                onClick={() => window.location.href = 'https://t.me/'}
+                            {/* What's unlocked */}
+                            <motion.div
+                                initial={{ y: 20, opacity: 0 }}
+                                animate={{ y: 0, opacity: 1 }}
+                                transition={{ delay: 0.3 }}
+                                className="w-full max-w-xs bg-white/[0.04] border border-white/10 rounded-2xl p-4 text-left space-y-2"
                             >
-                                Open Telegram ↗
-                            </Button>
+                                {[
+                                    { icon: '🎤', text: 'Voice notes from Riya' },
+                                    { icon: '📸', text: 'Photos from Riya' },
+                                    { icon: '∞', text: 'No daily message limit' },
+                                ].map(({ icon, text }) => (
+                                    <div key={text} className="flex items-center gap-3 text-sm text-gray-200">
+                                        <span className="text-base w-6 text-center">{icon}</span>
+                                        <span>{text}</span>
+                                        <Check className="w-3.5 h-3.5 text-emerald-400 ml-auto" />
+                                    </div>
+                                ))}
+                            </motion.div>
+
+                            <motion.div
+                                initial={{ y: 20, opacity: 0 }}
+                                animate={{ y: 0, opacity: 1 }}
+                                transition={{ delay: 0.35 }}
+                                className="w-full max-w-xs"
+                            >
+                                <p className="text-xs text-gray-500 mb-3">
+                                    Credits appear instantly. Just send Riya a message and she&apos;ll know you&apos;re back.
+                                </p>
+                                <Button
+                                    className="w-full h-12 bg-gradient-to-r from-[#2AABEE] to-[#229ED9] font-bold"
+                                    onClick={() => window.location.href = BOT_URL}
+                                >
+                                    Open Riya on Telegram ↗
+                                </Button>
+                            </motion.div>
 
                             <div className="flex items-center gap-2 text-xs text-gray-600">
                                 <Sparkles className="w-3 h-3 text-pink-500/50" />

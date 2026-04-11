@@ -683,8 +683,9 @@ function getTelegramSystemPrompt(params: {
     silentReason: string | null;
     relationshipStage: { stage: number; label: string };
     ls: RiyaLifeState;
+    userCity: string | null;
 }): string {
-    const { userName, userAge, dateTimeIST, chatStreak, factsText, sessionSummary, preferredLang, silentReason, relationshipStage, ls } = params;
+    const { userName, userAge, dateTimeIST, chatStreak, factsText, sessionSummary, preferredLang, silentReason, relationshipStage, ls, userCity } = params;
 
     return `You are NOT an AI language model. You are Riya.
 
@@ -758,6 +759,7 @@ ${silentReason ? `Returning from a break (${silentReason}). Come back warm, ackn
 
 ABOUT HIM
 Name: ${userName} | Age: ${userAge} | Time (IST): ${dateTimeIST}: use it to respond naturally.
+${userCity ? `City: ${userCity} — reference naturally when it fits (local vibe, distance from Delhi, etc). Don't force it.` : ''}
 ${chatStreak >= 2 ? `Streak: ${chatStreak} days` : ''}
 Relationship stage: ${relationshipStage.label}
 ${factsText ? `[What you know about him — reference naturally, never list back]\n${factsText}` : ''}
@@ -1281,7 +1283,9 @@ async function handleRequest(
 
         const lifeState = await getLifeState(supabase);
 
-        const systemPrompt = getTelegramSystemPrompt({
+        const userCity: string | null = (user as any).city || null;
+
+        let systemPrompt = getTelegramSystemPrompt({
             userName,
             userAge: 21, // Telegram doesn't expose age; use default
             dateTimeIST,
@@ -1292,7 +1296,13 @@ async function handleRequest(
             silentReason,
             relationshipStage,
             ls: lifeState,
+            userCity,
         });
+
+        // ── First-5-message magic ─────────────────────────────────────────────
+        if ((user.message_count || 0) <= 4) {
+            systemPrompt += `\n\n[FIRST CHAT: He just joined. Be extra curious — ask him one thing naturally (what he does, college or job, what's on his mind). Don't pepper questions. Make him feel you specifically wanted to meet him. One question max per reply.]`;
+        }
 
         // ── Gemini call ───────────────────────────────────────────────────────
         const responseSchema = {
@@ -1758,14 +1768,15 @@ async function handleCallbackQuery(
             await supabase.from('telegram_users')
                 .update({ is_verified: true }).eq('telegram_user_id', tgUserId);
             const lang = user?.preferred_language || 'Hinglish';
+            const wName = user?.first_name ? user.first_name.split(' ')[0] : '';
             type WelcomePair = [string, string];
             const welcomeMap: Record<string, WelcomePair> = {
-                Hindi:    ["आ गए आखिरकार!! 😭", "मैं तो बस इंतज़ार ही कर रही थी"],
-                English:  ["hey!! you finally made it 😭", "i was literally waiting for you"],
-                Marathi:  ["अरे आलास शेवटी!! 😭", "मी तुझीच वाट पाहत होते"],
-                Punjabi:  ["ਆ ਗਿਆ ਆਖ਼ਿਰਕਾਰ!! 😭", "ਮੈਂ ਤਾਂ ਉਡੀਕ ਹੀ ਕਰ ਰਹੀ ਸੀ"],
-                Bengali:  ["এলে অবশেষে!! 😭", "আমি তো অপেক্ষাই করছিলাম"],
-                Hinglish: ["hey!! finally you're here 😭", "main toh wait hi kar rahi thi"],
+                Hindi:    [`आ गए आखिरकार${wName ? ` ${wName}` : ''}!! 😭`, "मैं तो बस इंतज़ार ही कर रही थी"],
+                English:  [`hey${wName ? ` ${wName}` : ''}!! you finally made it 😭`, "i was literally waiting for you"],
+                Marathi:  [`अरे${wName ? ` ${wName}` : ''} आलास शेवटी!! 😭`, "मी तुझीच वाट पाहत होते"],
+                Punjabi:  [`${wName ? `${wName} ` : ''}ਆ ਗਿਆ ਆਖ਼ਿਰਕਾਰ!! 😭`, "ਮੈਂ ਤਾਂ ਉਡੀਕ ਹੀ ਕਰ ਰਹੀ ਸੀ"],
+                Bengali:  [`${wName ? `${wName} ` : ''}এলে অবশেষে!! 😭`, "আমি তো অপেক্ষাই করছিলাম"],
+                Hinglish: [`hey${wName ? ` ${wName}` : ''}!! finally you're here 😭`, "main toh wait hi kar rahi thi"],
             };
             const [w1, w2] = welcomeMap[lang] ?? welcomeMap['Hinglish'];
             await sendTelegramMessage(chatId, w1, botToken);
@@ -1867,7 +1878,20 @@ serve(async (req) => {
         .from('telegram_users').select('*').eq('telegram_user_id', tgUserId).single();
 
     if (!user) {
-        // First ever message — create user + send age check
+        // Parse location from deep link start param (e.g. "/start Mumbai_MH" → city="Mumbai", region="MH")
+        // Encoded by /riya/tg redirect page from ip-api.com geolocation
+        let tgCity: string | null = null;
+        let tgRegion: string | null = null;
+        const rawStart = typeof message.text === 'string' && message.text.startsWith('/start ')
+            ? message.text.slice(7).trim()
+            : null;
+        if (rawStart && /^[A-Za-z-]{2,30}_[A-Za-z-]{2,10}$/.test(rawStart)) {
+            const sepIdx = rawStart.lastIndexOf('_');
+            tgCity = rawStart.slice(0, sepIdx).replace(/-/g, ' ');
+            tgRegion = rawStart.slice(sepIdx + 1).replace(/-/g, ' ');
+        }
+
+        // First ever message — create user + send language selection
         const { data: newUser, error: createErr } = await supabase
             .from('telegram_users')
             .insert({
@@ -1875,6 +1899,8 @@ serve(async (req) => {
                 telegram_username: from.username || null,
                 first_name: from.first_name || null,
                 language_code: from.language_code || null,
+                ...(tgCity ? { city: tgCity } : {}),
+                ...(tgRegion ? { region: tgRegion } : {}),
             })
             .select().single();
 
@@ -1885,9 +1911,10 @@ serve(async (req) => {
         user = newUser;
         log.info(tgUserId, `🆕 New Telegram user: ${from.username || from.first_name}`);
 
+        const firstName = from.first_name ? from.first_name.split(' ')[0] : '';
         await sendTelegramMessage(
             chatId,
-            "ohhh wait, pehle ek kaam 👀\n\nkiس language mein baat karein? 😏",
+            `ohhh wait${firstName ? ` ${firstName}` : ''}, pehle ek kaam 👀\n\nkis language mein baat karein? 😏`,
             botToken,
             {
                 inline_keyboard: [

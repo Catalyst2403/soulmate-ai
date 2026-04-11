@@ -27,7 +27,8 @@
       "WebFetch(domain:www.aifreeapi.com)",
       "WebFetch(domain:core.telegram.org)",
       "WebFetch(domain:fragment.com)",
-      "WebFetch(domain:telegram.org)"
+      "WebFetch(domain:telegram.org)",
+      "Bash(npx tsc:*)"
     ]
   }
 }
