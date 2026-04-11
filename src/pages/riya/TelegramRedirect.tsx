@@ -26,10 +26,9 @@ export default function TelegramRedirect() {
             let startParam = '';
 
             try {
-                const geoPromise = fetch('https://ip-api.com/json/?fields=status,city,regionName', {
-                    // No credentials, no cookies — just a plain public lookup
-                    cache: 'no-store',
-                })
+                // ipapi.co supports HTTPS on free tier (unlike ip-api.com which is HTTP-only free)
+                // Returns: { city, region, country_code, ... }
+                const geoPromise = fetch('https://ipapi.co/json/', { cache: 'no-store' })
                     .then(r => r.json())
                     .catch(() => null);
 
@@ -40,11 +39,11 @@ export default function TelegramRedirect() {
 
                 if (
                     geo &&
-                    geo.status === 'success' &&
+                    !geo.error &&
                     typeof geo.city === 'string' &&
-                    typeof geo.regionName === 'string'
+                    typeof geo.region === 'string'
                 ) {
-                    startParam = buildStartParam(geo.city, geo.regionName);
+                    startParam = buildStartParam(geo.city, geo.region);
                 }
             } catch {
                 // Geo failed — proceed without location, bot handles null city gracefully
@@ -112,6 +111,7 @@ export default function TelegramRedirect() {
             {/* Fallback manual link in case auto-redirect is blocked (e.g. some mobile browsers) */}
             <a
                 href={`https://t.me/${BOT_USERNAME}`}
+                rel="noopener noreferrer"
                 style={{
                     marginTop: 8,
                     fontSize: 12,

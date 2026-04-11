@@ -1885,10 +1885,12 @@ serve(async (req) => {
         const rawStart = typeof message.text === 'string' && message.text.startsWith('/start ')
             ? message.text.slice(7).trim()
             : null;
+        log.info(tgUserId, `📍 start param: ${rawStart ?? '(none — direct Telegram open, not via /riya/tg)'}`);
         if (rawStart && /^[A-Za-z-]{2,30}_[A-Za-z-]{2,10}$/.test(rawStart)) {
             const sepIdx = rawStart.lastIndexOf('_');
             tgCity = rawStart.slice(0, sepIdx).replace(/-/g, ' ');
             tgRegion = rawStart.slice(sepIdx + 1).replace(/-/g, ' ');
+            log.info(tgUserId, `📍 Parsed location: ${tgCity}, ${tgRegion}`);
         }
 
         // First ever message — create user + send language selection
