@@ -24,7 +24,11 @@
       "WebFetch(domain:blog.laozhang.ai)",
       "WebFetch(domain:composio.dev)",
       "WebFetch(domain:discuss.ai.google.dev)",
-      "WebFetch(domain:www.aifreeapi.com)"
+      "WebFetch(domain:www.aifreeapi.com)",
+      "WebFetch(domain:core.telegram.org)",
+      "WebFetch(domain:fragment.com)",
+      "WebFetch(domain:telegram.org)",
+      "Bash(npx tsc:*)"
     ]
   }
 }
