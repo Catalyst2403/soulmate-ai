@@ -1,71 +1,16 @@
 import { useEffect, useState } from 'react';
 
-const BOT_USERNAME = 'thisisriya_bot';
-
-function sanitizeParam(value: string): string {
-    // Keep only letters, spaces, hyphens — then trim and replace spaces with hyphens
-    return value.replace(/[^A-Za-z\s-]/g, '').trim().replace(/\s+/g, '-').slice(0, 30);
-}
-
-function buildStartParam(city: string, regionCode: string): string {
-    const c = sanitizeParam(city);
-    const r = sanitizeParam(regionCode).toUpperCase().slice(0, 5);
-    if (!c) return '';
-    const param = r ? `${c}_${r}` : c;
-    // Telegram start param max 64 chars
-    return param.slice(0, 64);
-}
+// Server-side edge function: reads real client IP, does geo lookup, redirects to Telegram
+// Deployed at: supabase/functions/tg-redirect/index.ts
+const REDIRECT_FUNCTION_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/tg-redirect`;
 
 export default function TelegramRedirect() {
     const [status, setStatus] = useState<'loading' | 'redirecting'>('loading');
 
     useEffect(() => {
-        let cancelled = false;
-
-        async function detectAndRedirect() {
-            let startParam = '';
-
-            try {
-                const geoPromise = fetch('https://ip-api.com/json/?fields=status,city,regionName', {
-                    // No credentials, no cookies — just a plain public lookup
-                    cache: 'no-store',
-                })
-                    .then(r => r.json())
-                    .catch(() => null);
-
-                // Race against a 1.5s timeout so redirect is never blocked
-                const timeoutPromise = new Promise<null>(resolve => setTimeout(() => resolve(null), 1500));
-
-                const geo = await Promise.race([geoPromise, timeoutPromise]);
-
-                if (
-                    geo &&
-                    geo.status === 'success' &&
-                    typeof geo.city === 'string' &&
-                    typeof geo.regionName === 'string'
-                ) {
-                    startParam = buildStartParam(geo.city, geo.regionName);
-                }
-            } catch {
-                // Geo failed — proceed without location, bot handles null city gracefully
-            }
-
-            if (cancelled) return;
-
-            setStatus('redirecting');
-
-            const url = startParam
-                ? `https://t.me/${BOT_USERNAME}?start=${encodeURIComponent(startParam)}`
-                : `https://t.me/${BOT_USERNAME}`;
-
-            // Small visual pause so the redirect feels intentional, not like a broken page
-            setTimeout(() => {
-                if (!cancelled) window.location.href = url;
-            }, 300);
-        }
-
-        detectAndRedirect();
-        return () => { cancelled = true; };
+        setStatus('redirecting');
+        // Hand off to edge function — it does geo server-side and 302s to Telegram
+        window.location.href = REDIRECT_FUNCTION_URL;
     }, []);
 
     return (
@@ -112,6 +57,7 @@ export default function TelegramRedirect() {
             {/* Fallback manual link in case auto-redirect is blocked (e.g. some mobile browsers) */}
             <a
                 href={`https://t.me/${BOT_USERNAME}`}
+                rel="noopener noreferrer"
                 style={{
                     marginTop: 8,
                     fontSize: 12,
