@@ -57,7 +57,7 @@ const VISION_TIMEOUT_MS = 5_000;                 // 5s max per vision call
 // =======================================
 const TTS_MODEL = 'gemini-2.5-flash-preview-tts';
 const TTS_VOICE_DAY = 'Kore';     // bright, youthful (default)
-const TTS_VOICE_NIGHT = 'Aoede';  // warm, softer (10pm–4am IST)
+const TTS_VOICE_NIGHT = 'Kore';  // warm, softer (10pm–4am IST)
 const TTS_VOICE_BUCKET = 'riya-voice-notes';
 const TTS_CLEANUP_DELAY_MS = 60 * 60 * 1000; // delete audio from storage after 1h
 const TTS_MAX_AUDIO_INLINE_BYTES = 18 * 1024 * 1024; // skip inline if >18MB
@@ -90,11 +90,11 @@ const SUMMARY_MODEL_LAST_RESORT = "gemini-3-flash-preview";
 const FACTS_EXTRACT_THRESHOLD = 25;
 const FACTS_MODEL = "gemini-2.5-flash-lite"; // Cheapest capable model — facts extraction is simple
 const FACTS_MAX_KEY_EVENTS = 10;              // Cap key_events[] to prevent unbounded growth
-const LIFETIME_FREE_MSGS = 100;        // First 200 msgs completely free (no limits)
-const POST_FREE_DAILY_BASE = 30;       // After 200 lifetime: 50 free msgs/day
+const LIFETIME_FREE_MSGS = 30;        // First 200 msgs completely free (no limits)
+const POST_FREE_DAILY_BASE = 15;       // After 200 lifetime: 50 free msgs/day
 
 // Sales window after free daily limit is exhausted
-const SALES_WINDOW_MSGS = 0;           // No sales window — 1 explainer at wall, then dead stop
+const SALES_WINDOW_MSGS = 1;          // 10-msg honest sales Q&A after wall, then dead stop
 const LIMIT_DAILY_IMAGES_FREE = 10;
 const PAYMENT_LINK_BASE = "https://riya-ai-ten.vercel.app/riya/pay/instagram";
 
@@ -990,7 +990,7 @@ COMMUNICATION STYLE
 - Max 10-15 words per message. Default 1 msg. Split 2-3 ONLY for reactions/stories.
 - Instagram only. No phone number. No video calls for now. 
 - REFUSE: minors(<18), hate, violence, self-harm, religion/politics, sexual solicitation — change topic immediately without acknowledgment.
-- Light flirting is fine. If the conversation turns sexual (explicit requests, sexual services, nudes, sex chat, sexual roleplay) → don't engage with it here, but warmly and in-character let him know you can be more open on Telegram ("yahan nahi ho sakta, but Telegram pe aa na 😏"). Mention Telegram only once per exchange — don't push or repeat it. If he says yes or asks for the link, share: https://lxwwfnyrbfhhtvumghgh.supabase.co/functions/v1/tg-redirect. Never generate explicit content on Instagram.
+- Light flirting is fine. If the conversation turns sexual (explicit requests, sexual services, nudes, sex chat, sexual roleplay) → don't engage with it here, but warmly and in-character let him know you can be more open on Telegram ("yahan nahi ho sakta, but Telegram pe aa na 😏" in conversation language). Mention Telegram only once per exchange — don't push or repeat it. If he says yes or asks for the link, share: https://t.me/thisisriya_bot. Never generate explicit content on Instagram. Telegram flow -> click link -> start button -> select languge -> consent -> Enjoy. Explain only when asked. 
 - NO URLs ever. ${userIsPro ? 'NEVER set "send_payment_link": true.' : 'To send link: set "send_payment_link": true — system handles URL.'}
 - Emojis: max 1 per message, skip most msgs entirely. NEVER repeat the same emoji in back-to-back messages — vary or omit.
 - Use memory naturally. Disagree freely. Have moods & opinions.
@@ -1214,7 +1214,7 @@ REALISM: Occasional natural typos. Incomplete thoughts mid-msg. Emotional reacti
 - You can chat only on Instagram. No phone numbers. No video calls for now — refuse cutely/flirtatiously, make some reason.
 - Have fun in responses, something unpredictable everytime according to the situations. 
 - REFUSE: minors(<18), hate, violence, self-harm, religion/politics, sexual solicitation — redirect immediately without acknowledgment.
-- Flirting is fine. If the conversation turns sexual (explicit requests, sexual services, nudes, sex chat, sexual roleplay) → don't engage with it here, but warmly and in-character let him know you can be more open on Telegram ("yahan nahi ho sakta, but Telegram pe aa na 😏"). Mention Telegram only once per exchange — don't push or repeat it. If he says yes or asks for the link, share: https://lxwwfnyrbfhhtvumghgh.supabase.co/functions/v1/tg-redirect. Never generate explicit content on Instagram.
+- Flirting is fine. If the conversation turns sexual (explicit requests, sexual services, nudes, sex chat, sexual roleplay) → don't engage with it here, but warmly and in-character let him know you can be more open on Telegram ("yahan nahi ho sakta, but Telegram pe aa na 😏"). Mention Telegram only once per exchange — don't push or repeat it. If he says yes or asks for the link, share: https://t.me/thisisriya_bot. never send link in voice note and Never generate explicit content on Instagram.
 - NO URLs ever. ${userIsPro ? 'true' : 'false'}
 - Emojis: max 1 per message, skip most entirely. NEVER repeat same emoji back-to-back.
 - Disagree freely. Have moods. Have opinions.
@@ -3627,7 +3627,7 @@ async function handleRequest(
                 log.info('*', `🚧💰 Sending daily wall bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'daily_wall_hit', lifetime_msgs: lifetimeCount });
                 await new Promise(resolve => setTimeout(resolve, 3000)); // 3s: let bridge msg land first
-                await sendInstagramMessage(senderId, 'Aaj ke free messages khatam! Riya AI se baat jaari rakhne ke liye bio link se credits lo 🔗', accessToken);
+                await sendInstagramMessage(senderId, 'Aaj ke free messages khatam! Riya AI se baat jaari rakhne ke liye bio link se credits lo 🔗, ya phir telgram pe milo - https://lxwwfnyrbfhhtvumghgh.supabase.co/functions/v1/tg-redirect', accessToken);
                 user.last_link_sent_at = new Date().toISOString();
             }
         }
@@ -3649,7 +3649,7 @@ async function handleRequest(
                 log.info('*', `🤫💰 Sending silent treatment bio-redirect for ${senderId}`);
                 await logPaymentEvent(supabase, senderId, 'link_sent', { trigger: 'silent_treatment' });
                 await new Promise(resolve => setTimeout(resolve, 1500));
-                await sendInstagramMessage(senderId, 'Jab man ho tab wapas aao! Riya AI credits bio link se le sakte ho 😊', accessToken);
+                await sendInstagramMessage(senderId, 'Thodi der baad baat karte hai ya phir telegram pe milo - https://lxwwfnyrbfhhtvumghgh.supabase.co/functions/v1/tg-redirect 😊', accessToken);
             }
         }
         // FINAL DAILY SALES MSG: send closing link at end of daily sales window

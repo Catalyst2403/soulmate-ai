@@ -40,11 +40,9 @@ Deno.serve(async (req) => {
             const geo = await geoRes.json();
 
             if (geo.status === 'success' && geo.city) {
-                const city = sanitize(geo.city);
-                const region = sanitize(geo.regionName || '').toUpperCase().slice(0, 5);
-                const param = region ? `${city}_${region}` : city;
-                startParam = param.slice(0, 64);
-                console.log(`📍 Geo: ${geo.city}, ${geo.regionName} (IP: ${ip}) → param: ${startParam}`);
+                // City only — region names like "National Capital Territory of Delhi" can't be abbreviated cleanly
+                startParam = sanitize(geo.city).slice(0, 40);
+                console.log(`📍 Geo: ${geo.city} (IP: ${ip}) → param: ${startParam}`);
             } else {
                 console.log(`📍 Geo failed for IP ${ip}: ${JSON.stringify(geo)}`);
             }

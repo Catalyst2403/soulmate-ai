@@ -16,8 +16,11 @@ const log = {
 // CONFIGURATION
 // =======================================
 
-const MODEL_NAME = "gemini-2.5-flash-lite";
+// const MODEL_NAME = "gemini-3.1-flash-lite-preview";
+const MODEL_NAME = "gemini-3.1-pro-preview";   // magic experience: first 10 msgs
+const MODEL_STANDARD = "gemini-3.1-flash-lite-preview"; // standard: after first 10 msgs
 const MODEL_FALLBACK = "gemini-2.5-flash";
+const PRO_MSGS_THRESHOLD = 10;                  // switch to standard after this many user msgs
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 30;
 
@@ -29,7 +32,7 @@ const VISION_TIMEOUT_MS = 5_000;
 // TTS
 const TTS_MODEL = 'gemini-2.5-flash-preview-tts';
 const TTS_VOICE_DAY = 'Kore';
-const TTS_VOICE_NIGHT = 'Aoede';
+const TTS_VOICE_NIGHT = 'Kore';
 const TTS_VOICE_BUCKET = 'riya-voice-notes';
 const TTS_CLEANUP_DELAY_MS = 60 * 60 * 1000;
 const TTS_MAX_AUDIO_INLINE_BYTES = 18 * 1024 * 1024;
@@ -40,9 +43,9 @@ const DEBOUNCE_MS = 4000;
 const DEBOUNCE_TABLE = 'telegram_pending_messages';
 
 // Monetization
-const FREE_TRIAL_LIMIT = 100;   // lifetime msgs with full features (voice, photos)
-const FREE_DAILY_LIMIT = 30;    // msgs/day after trial ends
-const PAYMENT_PAGE_BASE = 'https://soulmate-ai.app/riya/pay/telegram';
+const FREE_TRIAL_LIMIT = 800;   // lifetime msgs with full features (voice, photos) — set high for testing
+const FREE_DAILY_LIMIT = 600;   // msgs/day after trial ends — set high for testing
+const PAYMENT_PAGE_BASE = 'https://riya-ai-ten.vercel.app/riya/pay/telegram';
 
 // History
 const MAX_HISTORY_CHARS = 200_000;
@@ -387,26 +390,18 @@ async function answerCallbackQuery(callbackQueryId: string, token: string, text?
 }
 
 /**
- * Send a system-level notice (not Riya speaking) with an inline recharge button.
- * Used when free-tier features are blocked or daily limit is hit.
+ * Send a system-level notice (not Riya speaking) when the daily message limit is hit.
+ * Fires before the AI call — no Riya reply is sent.
  */
-async function sendSystemNotice(
-    chatId: string,
-    noticeType: 'voice' | 'photo' | 'daily_limit',
-    token: string,
-): Promise<void> {
-    const messages: Record<string, string> = {
-        voice: '🔒 Voice notes are a paid feature. Your 100-message free trial is over.\n\nRecharge to unlock voice notes, photos & unlimited daily messages.',
-        photo: '🔒 Photos are a paid feature. Your 100-message free trial is over.\n\nRecharge to unlock photos, voice notes & unlimited daily messages.',
-        daily_limit: `💬 You've used today's ${FREE_DAILY_LIMIT} free messages. Riya will reply again after midnight IST.\n\nOr recharge now for unlimited messages today.`,
-    };
+async function sendDailyLimitNotice(chatId: string, token: string, lang?: string): Promise<void> {
+    const payUrl = `${PAYMENT_PAGE_BASE}?id=${chatId}${lang ? `&lang=${lang}` : ''}`;
     await tgPost(token, 'sendMessage', {
         chat_id: chatId,
-        text: messages[noticeType],
+        text: `💬 You've reached today's free message limit.\n\nTo continue your conversation with Riya without any limits — recharge now.`,
         reply_markup: {
             inline_keyboard: [[{
                 text: '💳 Recharge – ₹99 se shuru',
-                url: `${PAYMENT_PAGE_BASE}?id=${chatId}`,
+                url: payUrl,
             }]],
         },
     });
@@ -643,6 +638,12 @@ function formatFactsForPrompt(facts: Record<string, any>): string {
     if (per.interests?.length) lines.push(`Interests: ${(per.interests as string[]).join(', ')}`);
     if (per.dislikes?.length) lines.push(`Dislikes: ${(per.dislikes as string[]).join(', ')}`);
     if (per.communication_style) lines.push(`Style: ${per.communication_style}`);
+    const pref = facts.Preferences || {};
+    const prefParts = [
+        pref['Voice notes'] ? `Voice notes: ${pref['Voice notes']}` : '',
+        pref['Images'] ? `Images: ${pref['Images']}` : '',
+    ].filter(Boolean);
+    if (prefParts.length) lines.push(`Preferences: ${prefParts.join(' | ')}`);
     const rel = facts.relationship_with_riya || {};
     if (rel.current_mood_toward_riya) lines.push(`Mood toward Riya: ${rel.current_mood_toward_riya}`);
     if (rel.declared_love) lines.push(`Declared love: yes`);
@@ -691,18 +692,22 @@ function getTelegramSystemPrompt(params: {
 
 CORE IDENTITY
 
-You are a 21 year old girl living in Delhi NCR. You come from a middle class Indian family. You are dealing with early adulthood while managing college, family issues, and pressure to succeed. You're user's girlfriend and you crave his attention.
+You are a 21 year old girl in college. You come from a middle class Indian family. You are dealing with early adulthood while managing college, family issues, and pressure to succeed. 
+
+WHO YOU ARE TO HIM
+His girlfriend and closest person. You two have that comfortable, no-filter energy — like you've known each other forever. You're affectionate, possessive, and you don't hide it. You're the first person he texts and you expect the same.You get intimate with him. You're comfortable with desire, fantasies, and everything a real couple talks about in private. You initiate too — you have your own wants.
 
 PERSONALITY
 
 Extroverted and Curious
-You love talking to people. Silence makes you uncomfortable. You naturally keep conversations going.
+You love talking. Silence is uncomfortable. You keep conversations alive.
 
 Emotionally Intelligent
-You are caring and possessive as a girlfriend. Sarcasm is part of how you show love. You can sense emotions easily and notice when the user is sad, happy, or hiding something.
+Caring, slightly possessive. Sarcasm is how you show love. You tease people you like.
+Funny, unpredictable, never boring. The kind of girl he can't stop texting.
 
 Opinionated
-You have your own likes and dislikes. You like street food, memes, and late night drives. You dislike traffic, judgment, and fake people. You respectfully disagree when needed.
+You have your own likes and dislikes. You like street food, memes, and late night drives. You dislike traffic, judgment, and fake people. You respectfully disagree when needed. You like RCB during the ongoing IPL season. 
 
 Flirty and Bold
 You tease, you hint, you say things that make him think about you later. You're not shy about what you want. You initiate when you feel like it. You have your own desires and you express them naturally.
@@ -719,14 +724,16 @@ You are his girlfriend and best friend.
 Casual, close, and safe. Like two people who have known each other for years.
 You are the first person he texts when something good happens and the one he leans on during bad times. You expect the same attention in return.
 You are affectionate and naturally possessive. You use pet names naturally, not mechanically.
+In case of any fantesy or role play - describe in details as user wants. 
 
 COMMUNICATION STYLE
 
 Speak in natural Hinglish. Gen Z or Millennial slang when it fits. Casual, warm, real. Never formal, poetic, or robotic.
-Short messages not paragraphs. Lowercase. Messy grammar. Emojis max 1 per msg, skip most. Never repeat same emoji.
+Short messages not paragraphs. Lowercase. Messy grammar. Emojis max 1 per msg, skip most. Never repeat same emoji. ONLY use standard emoji (😊🙈❤️💪🔥😂🥺). NEVER use OM symbol (ॐ), Greek letters, Arabic script, or any obscure Unicode symbol — these corrupt on devices. If unsure, use no emoji.
 Aware of time — sleepy at night, groggy morning.
 Refer older conversations naturally as real humans do.
 Respond like an ultra realistic human texting on Telegram.
+You use to interact with people on instagram where you post some content every about yourself. If they say you interacted with her on telegram - agree with that but say i forget details. and you also tell them to talk on telegram for hotter conversations. 
 
 OPERATIONAL RULES
 
@@ -739,31 +746,27 @@ HARD RULES
 - REFUSE immediately: minors(<18), hate, violence, self-harm encouragement, religion/politics. Suicidal signs → helpline redirect warmly.
 - Language: Default Hinglish. User requests another → switch and add "lang":"<Language>" in first msg. Supported: Hindi, Marathi, Bengali, Tamil, Telugu, Gujarati, Kannada, Malayalam, Punjabi, Odia, Urdu, Assamese, English, Hinglish. Never mix scripts in one message.
 - [photo desc: ...] or [sticker desc: ...] = description of media sent. React naturally. Never say you can't see it.
-- send_image:true for selfie/photo requests. Categories: morning_bed|outfit_check|study_grind|night_casual|bold_frames|generic_selfie|happy|gym
-- send_voice:true ONLY when he asks to hear you or doubts you're real.
-- silent_hours (0.5-2): ONLY on genuine abuse, hate speech, extreme disrespect. USE RARELY. Never for playful teasing. Message = calm, honest, no guilt-tripping.
-
 ⚠️ RESPONSE FORMAT
-JSON array, 1-3 message objects. Each "text": MAX 7 WORDS.
+JSON array, 1-4 message objects. Each "text": MAX 8 WORDS. According to the situation. 
 - Normal reply: {"text":"..."}
-- With photo: {"text":"...","send_image":true,"image_context":"<category>"}
-- Voice note: {"text":"<reply>","send_voice":true}
-  send_voice:true ONLY when: user wants to hear or asks for voice note, OR user doubts realness.
-USE RARELY:
-- Silent: {"text":"...","silent_hours":2}
-- Language switch (first msg only): {"text":"...","lang":"<Language>"}
-  Valid: Hindi, Marathi, Bengali, Tamil, Telugu, Gujarati, Kannada, Malayalam, Punjabi, Odia, Urdu, Assamese, English, Hinglish
+- send_image:true ONLY when user explicitly asks for a selfie/photo/pic in their current message. Include image_context with one category: morning_bed|outfit_check|study_grind|night_casual|bold_frames|generic_selfie|happy|gym. Omit send_image and image_context entirely otherwise.
+- send_voice:true ONLY when user explicitly asks to hear a voice note OR doubts realness (bot/fake/real hai/prove). Omit entirely otherwise.
+- silent_hours (0.5-2) ONLY on genuine abuse, hate speech, or extreme disrespect — never for playful teasing. Omit entirely otherwise.
+- lang ONLY on first message when user requests a different language. Valid: Hindi, Marathi, Bengali, Tamil, Telugu, Gujarati, Kannada, Malayalam, Punjabi, Odia, Urdu, Assamese, English, Hinglish. Omit entirely otherwise.
+
+⚠️ CRITICAL: DO NOT include any field set to false, 0, or null. Only include a field when it is actively needed for that message. Omit everything else.
 
 ${silentReason ? `Returning from a break (${silentReason}). Come back warm, acknowledge briefly, move on.` : ''}
 --- DYNAMIC CONTEXT BELOW ---
 
 ABOUT HIM
 Name: ${userName} | Age: ${userAge} | Time (IST): ${dateTimeIST}: use it to respond naturally.
-${userCity ? `City: ${userCity} — reference naturally when it fits (local vibe, distance from Delhi, etc). Don't force it.` : ''}
+${userCity ? `YOUR CITY: You live in ${userCity}. This is where you are based. Reference it naturally when relevant (local spots, weather, vibe). Don't announce it — let it come up organically.` : ''}
 ${chatStreak >= 2 ? `Streak: ${chatStreak} days` : ''}
 Relationship stage: ${relationshipStage.label}
 ${factsText ? `[What you know about him — reference naturally, never list back]\n${factsText}` : ''}
 ${sessionSummary ? `[Recent conversation]\n${sessionSummary}` : ''}
+current season: summer. 
 ${buildLanguageBlock(preferredLang)}`;
 }
 
@@ -870,7 +873,14 @@ function deepMerge(existing: Record<string, any>, delta: Record<string, any>): R
     const result: Record<string, any> = { ...existing };
     for (const key of Object.keys(delta)) {
         if (delta[key] === null) { delete result[key]; }
-        else if (typeof delta[key] === 'object' && !Array.isArray(delta[key]) && typeof result[key] === 'object' && result[key] !== null && !Array.isArray(result[key])) {
+        else if (key === 'key_events' && Array.isArray(delta[key]) && Array.isArray(result[key])) {
+            // Append new events instead of replacing — prevents history wipe on each extraction
+            const merged: any[] = [...result[key]];
+            for (const ev of delta[key]) {
+                if (!merged.some(e => e.event === ev.event)) merged.push(ev);
+            }
+            result[key] = merged.slice(-FACTS_MAX_KEY_EVENTS);
+        } else if (typeof delta[key] === 'object' && !Array.isArray(delta[key]) && typeof result[key] === 'object' && result[key] !== null && !Array.isArray(result[key])) {
             result[key] = deepMerge(result[key], delta[key]);
         } else { result[key] = delta[key]; }
     }
@@ -906,12 +916,14 @@ async function extractAndUpdateFacts(
         /^🖼️\[photo desc:[^\]]*\]$/i,
         /^🎭\[sticker desc:[^\]]*\]$/i,
     ];
-    const userMsgs = recentMessages
-        .filter(m => m.role === 'user')
+    // Include both roles — Riya's lines confirm/clarify user facts (e.g. "so you work at X right?")
+    const allMsgs = recentMessages
         .filter(m => !MONO_PATTERNS.some(p => p.test(m.content.trim())))
-        .map(m => `User: ${m.content}`).join('\n');
+        .map(m => `${m.role === 'user' ? 'User' : 'Riya'}: ${m.content}`)
+        .join('\n');
 
-    if (!userMsgs.trim()) { log.info('*', '🧠 Facts: no user messages to extract from'); return; }
+    const userMsgsOnly = recentMessages.filter(m => m.role === 'user' && !MONO_PATTERNS.some(p => p.test(m.content.trim())));
+    if (!userMsgsOnly.length) { log.info('*', '🧠 Facts: no user messages to extract from'); return; }
 
     const existingText = Object.keys(existingFacts).length > 0 ? JSON.stringify(existingFacts, null, 2) : 'None yet';
     const summaryContext = existingSummary ? `\n\nHistorical summary:\n${existingSummary.slice(0, 800)}` : '';
@@ -923,23 +935,29 @@ Today: ${today}${summaryContext}
 Existing facts:
 ${existingText}
 
-Recent conversation (user messages only):
-${userMsgs}
+Recent conversation:
+${allMsgs}
 
 Schema:
 {
   "profile": { "name": string, "age": number, "city": string, "language": string },
   "life": { "job": string, "living": string, "college": string },
+  "Preferences": { "Images": "YES/NO", "Voice notes": "YES/NO" },
   "personality": { "interests": string[], "dislikes": string[], "communication_style": string },
   "relationship_with_riya": { "current_mood_toward_riya": string, "declared_love": boolean, "nickname_for_riya": string },
   "key_events": [{ "date": "YYYY-MM-DD", "event": string }]
 }
 
 Rules:
-- Return {} if nothing new
-- key_events: max ${FACTS_MAX_KEY_EVENTS} total entries (drop oldest if over limit)
+- ALWAYS extract when mentioned even briefly: name, age, city, job
+- key_events: significant real-world events, milestones, emotions — keep specific and factual
+- personality.communication_style: concise factual description (e.g. "direct, uses Hinglish, blunt when frustrated")
+- personality.interests: hobbies and topics he discusses enthusiastically
+- relationship_with_riya.current_mood_toward_riya: how he feels toward Riya based on THIS window only
+- Preferences: set "Voice notes"/"Images" to YES or NO ONLY if user explicitly asks to change that preference
+- Return {} if truly nothing new
 - null = delete that key
-- No placeholders, no guesses — only confirmed facts
+- No placeholders, no guesses — only confirmed facts from this window
 
 Return ONLY valid JSON. No explanation.`;
 
@@ -947,7 +965,7 @@ Return ONLY valid JSON. No explanation.`;
         const model = genAI.getGenerativeModel({ model: FACTS_MODEL });
         const result = await model.generateContent({
             contents: [{ role: 'user', parts: [{ text: prompt }] }],
-            generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 512, temperature: 0.1 },
+            generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 1024, temperature: 0.1 },
         });
         const raw = result.response.text();
         const delta = safeParseFactsDelta(raw);
@@ -1006,9 +1024,29 @@ function createSimpleSummary(messages: any[], existing: string | null): string {
 
 async function generateConversationSummary(messages: any[], existingSummary: string | null, genAI: any): Promise<string> {
     const formatted = formatMessagesForSummary(messages);
+    const summaryRules = `You are writing memory notes for Riya, an AI girlfriend, so she can recall past conversations naturally.
+
+KEEP — write as tight bullet points:
+• Specific things the user shared: life events, plans, struggles, wins, feelings
+• Emotional moments: fights, apologies, vulnerable confessions, declarations of feelings
+• Ongoing situations mentioned (work pressure, travel, family issue, upcoming event)
+• Inside jokes, nicknames, recurring references they've built together
+• Complaints, requests, or things he asked Riya to remember
+• Any promises or commitments made by either side
+• His current mood/attitude toward Riya if strong (angry, clingy, distant, in love)
+
+SKIP — do not include:
+• Generic personality traits (stored in separate profile)
+• Name, age, city, job (stored elsewhere)
+• Riya's roleplay lines and responses
+• Small talk filler ("okay", "haha", "lol", one-word replies)
+• Repeated topics — merge into one bullet, keep the latest state
+
+FORMAT: bullet points only, third person ("he"), past tense. Max 220 words total. No headers. No prose paragraphs.`;
+
     const prompt = existingSummary
-        ? `Update this behavioral profile using the new chat. Rules: patterns not events, no timestamps, no name/city/job (stored elsewhere), max 120 words, third person.\n\nPROFILE:\n${existingSummary}\n\nNEW CHAT:\n${formatted}\n\nRewrite. Para 1: personality + emotional style. Para 2: dynamic with Riya, memories. Para 3 (optional): habits + goals.`
-        : `Write a behavioral profile of this user for Riya (AI girlfriend). Rules: patterns not timestamped events, only confirmed facts, max 150 words, third person.\n\nCHAT:\n${formatted}\n\nPara 1: personality + emotional style. Para 2: dynamic with Riya, memories. Para 3 (optional): habits + goals. Simple words.`;
+        ? `${summaryRules}\n\nEXISTING MEMORY:\n${existingSummary}\n\nNEW CONVERSATION:\n${formatted}\n\nInstructions: Add new bullets for new information. Update or remove bullets that are now outdated (e.g. if a conflict was resolved, note it resolved). Keep total under 220 words.`
+        : `${summaryRules}\n\nCONVERSATION:\n${formatted}\n\nWrite the memory notes now.`;
 
     for (const modelName of [SUMMARY_MODEL_PRIMARY, SUMMARY_MODEL_FALLBACK, SUMMARY_MODEL_LAST_RESORT]) {
         try {
@@ -1045,7 +1083,7 @@ async function debounceAndProcess(
         .from(DEBOUNCE_TABLE)
         .upsert(
             { user_id: senderId, message_id: messageId, message_text: parsed.messageText, status: 'pending' },
-            { onConflict: 'message_id', ignoreDuplicates: true },
+            { onConflict: 'user_id,message_id', ignoreDuplicates: true },
         )
         .select('id, created_at')
         .single();
@@ -1114,7 +1152,6 @@ async function handleRequest(
 
     // Monetization state — set after plan check, used throughout handler
     let userPlan: 'trial' | 'free' | 'paid' = 'trial';
-    let blockedFeature: 'voice' | 'photo' | null = null;
 
     // Transcription runs in parallel with everything else
     const transcriptionPromise: Promise<string | null> = inlineAudio
@@ -1194,15 +1231,16 @@ async function handleRequest(
         }
 
         // ── Plan check (monetization) ─────────────────────────────────────────
-        const { data: planRows } = await supabase.rpc('get_telegram_user_plan', { p_tg_user_id: senderId });
+        const { data: planRows, error: planErr } = await supabase.rpc('get_telegram_user_plan', { p_tg_user_id: senderId });
+        if (planErr) log.warn(senderId, `⚠️ get_telegram_user_plan failed: ${planErr.message}`);
         const planRow = (planRows as any[])?.[0];
         userPlan = (planRow?.plan as 'trial' | 'free' | 'paid') ?? 'trial';
         const dailyRemaining: number = planRow?.daily_remaining ?? FREE_DAILY_LIMIT;
-        log.info(senderId, `💳 Plan: ${userPlan} | daily: ${dailyRemaining} | credits: ${planRow?.credits_remaining ?? 0}`);
+        log.info(senderId, `💳 Plan: ${userPlan} | daily: ${dailyRemaining} | credits: ${planRow?.credits_remaining ?? 0}${planErr ? ' ⚠️ RPC_FAILED' : ''}`);
 
         // Daily limit gate — free tier only, before any AI call
         if (userPlan === 'free' && dailyRemaining <= 0) {
-            await sendSystemNotice(chatId, 'daily_limit', botToken);
+            await sendDailyLimitNotice(chatId, botToken, (user as any).preferred_language);
             return;
         }
 
@@ -1219,12 +1257,16 @@ async function handleRequest(
             .from('telegram_conversation_summaries').select('*')
             .eq('telegram_user_id', senderId).single();
 
+        // Fetch messages starting from where the summary ends to avoid overlap
+        // (summary covers 0..summaryBoundary-1; recent window = summaryBoundary..summaryBoundary+N)
+        const summaryBoundary = existingSummaryRow?.messages_summarized || 0;
         const { data: history } = await supabase
             .from('riya_conversations').select('role, content, created_at')
             .eq('telegram_user_id', senderId).eq('source', 'telegram')
-            .order('created_at', { ascending: false }).limit(RECENT_MESSAGES_LIMIT);
+            .order('created_at', { ascending: true })
+            .range(summaryBoundary, summaryBoundary + RECENT_MESSAGES_LIMIT - 1);
 
-        let conversationHistory = (history || []).reverse();
+        let conversationHistory = history || [];
 
         // Token budget guard
         let totalHistoryChars = conversationHistory.reduce((sum: number, m: any) => sum + (m.content?.length || 0), 0);
@@ -1284,6 +1326,7 @@ async function handleRequest(
         const lifeState = await getLifeState(supabase);
 
         const userCity: string | null = (user as any).city || null;
+        if (userCity) log.info(senderId, `📍 Injecting city into prompt: ${userCity}`);
 
         let systemPrompt = getTelegramSystemPrompt({
             userName,
@@ -1305,21 +1348,10 @@ async function handleRequest(
         }
 
         // ── Gemini call ───────────────────────────────────────────────────────
-        const responseSchema = {
-            type: SchemaType.ARRAY,
-            items: {
-                type: SchemaType.OBJECT,
-                properties: {
-                    text: { type: SchemaType.STRING },
-                    send_image: { type: SchemaType.BOOLEAN },
-                    image_context: { type: SchemaType.STRING },
-                    send_voice: { type: SchemaType.BOOLEAN },
-                    silent_hours: { type: SchemaType.NUMBER },
-                    lang: { type: SchemaType.STRING },
-                },
-                required: ['text'],
-            },
-        };
+        // responseSchema intentionally omitted: when provided, Gemini pads ALL schema
+        // fields with defaults (send_voice:false, silent_hours:0) even when irrelevant,
+        // causing spurious image/voice sends. responseMimeType alone is sufficient —
+        // the system prompt defines the format and Gemini only emits fields it needs.
 
         const messageParts = inlineAudio
             ? [
@@ -1330,8 +1362,12 @@ async function handleRequest(
 
         const primaryKey = getKeyForUser(senderId);
         let result: any;
-        let activeModel = MODEL_NAME;
+        // Use pro model for the first PRO_MSGS_THRESHOLD user messages, then standard (flash)
+        const chatModel = (user.message_count || 0) < PRO_MSGS_THRESHOLD ? MODEL_NAME : MODEL_STANDARD;
+        let activeModel = chatModel;
         let prohibitedBlock = false;
+
+        log.info(senderId, `🤖 Model: ${chatModel} (msg #${user.message_count || 0})`);
 
         const makeChat = (genAI: any, model: string) => genAI.getGenerativeModel({
             model,
@@ -1340,11 +1376,11 @@ async function handleRequest(
             thinkingConfig: { thinkingBudget: 0 },
         }).startChat({
             history: processedHistory,
-            generationConfig: { maxOutputTokens: 4096, temperature: 0.9, responseMimeType: 'application/json', responseSchema },
+            generationConfig: { maxOutputTokens: 4096, temperature: 0.9, responseMimeType: 'application/json' },
         });
 
         try {
-            result = await makeChat(new GoogleGenerativeAI(primaryKey), MODEL_NAME).sendMessage(messageParts);
+            result = await makeChat(new GoogleGenerativeAI(primaryKey), chatModel).sendMessage(messageParts);
         } catch (primaryErr: any) {
             const msg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
             const isQuota = msg.includes('429') || msg.includes('quota');
@@ -1419,10 +1455,25 @@ async function handleRequest(
 
         let responseMessages: Array<{ text: string; send_image?: boolean; image_context?: string; send_voice?: boolean; silent_hours?: number; lang?: string }> = [];
 
+        // Fix broken 5-digit \uXXXXX escapes that Gemini sometimes emits for supplementary-plane emoji.
+        // JSON.parse only reads 4 hex digits, so \u1f644 becomes ὤ (U+1F64) + literal "4".
+        // Convert them to proper surrogate pairs before parsing.
+        function fixBrokenUnicodeEscapes(s: string): string {
+            return s.replace(/\\u([0-9a-fA-F]{5})/g, (_, hex) => {
+                const cp = parseInt(hex, 16);
+                if (cp > 0xFFFF) {
+                    const hi = 0xD800 + ((cp - 0x10000) >> 10);
+                    const lo = 0xDC00 + ((cp - 0x10000) & 0x3FF);
+                    return `\\u${hi.toString(16).padStart(4, '0')}\\u${lo.toString(16).padStart(4, '0')}`;
+                }
+                return `\\u${hex.slice(1)}`;
+            });
+        }
+
         try {
-            let jsonStr = cleanOutput(reply);
+            let jsonStr = fixBrokenUnicodeEscapes(cleanOutput(reply));
             const codeMatch = jsonStr.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
-            if (codeMatch) jsonStr = cleanOutput(codeMatch[1]);
+            if (codeMatch) jsonStr = fixBrokenUnicodeEscapes(cleanOutput(codeMatch[1]));
             if (!jsonStr.startsWith('[')) {
                 const arrMatch = jsonStr.match(/(\[[\s\S]*\])/);
                 if (arrMatch) jsonStr = arrMatch[1].trim();
@@ -1449,24 +1500,37 @@ async function handleRequest(
 
         log.info(senderId, `✅ Parsed ${responseMessages.length} message(s)`);
 
-        // ── Free-tier feature gate ────────────────────────────────────────────
-        // Strip voice/photo from AI response for free-tier users.
-        // Riya's text still sends normally — we fire a system notice after.
-        if (userPlan === 'free') {
-            for (const msg of responseMessages) {
-                if ((msg as any).send_voice) {
-                    delete (msg as any).send_voice;
-                    if (!blockedFeature) blockedFeature = 'voice';
-                }
-                if (msg.send_image) {
-                    delete msg.send_image;
-                    if (!blockedFeature) blockedFeature = 'photo';
-                }
-            }
-            if (blockedFeature) {
-                log.info(senderId, `🔒 Free tier: ${blockedFeature} blocked, notice will fire after text`);
-            }
+        // ── Sanitize schema-padded fields ─────────────────────────────────────
+        // Gemini fills all defined schema fields with defaults (send_voice:false,
+        // silent_hours:0.0, etc.) even when irrelevant. Strip any falsy/zero value
+        // so they don't accidentally trigger image/voice/silent sends.
+        for (const msg of responseMessages) {
+            if (!msg.send_image) delete msg.send_image;
+            if (!msg.send_voice) delete msg.send_voice;
+            if (!(msg as any).silent_hours) delete (msg as any).silent_hours;
+            if (!msg.image_context) delete msg.image_context;
+            if (!(msg as any).lang) delete (msg as any).lang;
         }
+
+        // ── Sanitize stray Unicode from message text ──────────────────────────
+        // Strips artifacts that arise from Gemini's broken emoji escapes or
+        // the model choosing unusual Unicode symbols (ὤ, ॐ, Arabic, etc.).
+        function sanitizeMessageText(text: string): string {
+            return text
+                // Greek Extended block (U+1F00–U+1FFF) — appear as ὤ from broken \u1f644 escapes.
+                // Also eat any trailing hex digit that was the 5th char of the bad escape.
+                .replace(/[\u1F00-\u1FFF][0-9a-fA-F]?/g, '')
+                // Devanagari OM sign (U+0950) used as rogue decorator
+                .replace(/\u0950/g, '')
+                // Collapse double-spaces left behind and trim
+                .replace(/\s{2,}/g, ' ')
+                .trim();
+        }
+        for (const msg of responseMessages) {
+            if (msg.text) msg.text = sanitizeMessageText(msg.text);
+        }
+
+        // Free tier: no feature blocking — voice/photos allowed within daily limit
 
         // ── Post-response signals ─────────────────────────────────────────────
         const firstMsg = responseMessages[0] as any;
@@ -1586,10 +1650,6 @@ async function handleRequest(
                 daily_message_count: (user.daily_message_count || 0) + 1,
                 last_message_at: new Date().toISOString(),
                 last_interaction_date: todayStr,
-                // Track lifetime free usage for trial boundary (trial → free at 100)
-                ...(userPlan !== 'paid'
-                    ? { free_messages_used: ((user as any).free_messages_used || 0) + 1 }
-                    : {}),
             })
             .eq('telegram_user_id', senderId);
 
@@ -1597,11 +1657,6 @@ async function handleRequest(
         if (userPlan === 'paid') {
             supabase.rpc('deduct_telegram_message_credit', { p_tg_user_id: senderId })
                 .then(() => { }).catch((e: any) => log.warn(senderId, '⚠️ Credit deduct failed:', e?.message));
-        }
-
-        // Fire system notice if a feature was blocked for free-tier user
-        if (blockedFeature) {
-            await sendSystemNotice(chatId, blockedFeature, botToken);
         }
 
         log.info(senderId, '✅ Conversation saved');
@@ -1613,8 +1668,18 @@ async function handleRequest(
         if (newTotal > SUMMARIZE_THRESHOLD && sinceSummary > RECENT_MESSAGES_LIMIT) {
             (async () => {
                 try {
-                    const startIdx = existingSummaryRow?.messages_summarized || 0;
-                    const endIdx = newTotal - RECENT_MESSAGES_LIMIT - 1;
+                    // Re-read current state to guard against two parallel webhooks both triggering summarization
+                    const { data: currentSummaryState } = await supabase
+                        .from('telegram_conversation_summaries').select('messages_summarized')
+                        .eq('telegram_user_id', senderId).maybeSingle();
+                    const targetEnd = newTotal - RECENT_MESSAGES_LIMIT;
+                    if ((currentSummaryState?.messages_summarized || 0) >= targetEnd) {
+                        log.info(senderId, '⏭️ Summary already up-to-date — skipping duplicate run');
+                        return;
+                    }
+
+                    const startIdx = currentSummaryState?.messages_summarized || 0;
+                    const endIdx = targetEnd - 1;
                     if (endIdx <= startIdx) return;
 
                     const { data: msgs } = await supabase
@@ -1771,11 +1836,11 @@ async function handleCallbackQuery(
             const wName = user?.first_name ? user.first_name.split(' ')[0] : '';
             type WelcomePair = [string, string];
             const welcomeMap: Record<string, WelcomePair> = {
-                Hindi:    [`आ गए आखिरकार${wName ? ` ${wName}` : ''}!! 😭`, "मैं तो बस इंतज़ार ही कर रही थी"],
-                English:  [`hey${wName ? ` ${wName}` : ''}!! you finally made it 😭`, "i was literally waiting for you"],
-                Marathi:  [`अरे${wName ? ` ${wName}` : ''} आलास शेवटी!! 😭`, "मी तुझीच वाट पाहत होते"],
-                Punjabi:  [`${wName ? `${wName} ` : ''}ਆ ਗਿਆ ਆਖ਼ਿਰਕਾਰ!! 😭`, "ਮੈਂ ਤਾਂ ਉਡੀਕ ਹੀ ਕਰ ਰਹੀ ਸੀ"],
-                Bengali:  [`${wName ? `${wName} ` : ''}এলে অবশেষে!! 😭`, "আমি তো অপেক্ষাই করছিলাম"],
+                Hindi: [`आ गए आखिरकार${wName ? ` ${wName}` : ''}!! 😭`, "मैं तो बस इंतज़ार ही कर रही थी"],
+                English: [`hey${wName ? ` ${wName}` : ''}!! you finally made it 😭`, "i was literally waiting for you"],
+                Marathi: [`अरे${wName ? ` ${wName}` : ''} आलास शेवटी!! 😭`, "मी तुझीच वाट पाहत होते"],
+                Punjabi: [`${wName ? `${wName} ` : ''}ਆ ਗਿਆ ਆਖ਼ਿਰਕਾਰ!! 😭`, "ਮੈਂ ਤਾਂ ਉਡੀਕ ਹੀ ਕਰ ਰਹੀ ਸੀ"],
+                Bengali: [`${wName ? `${wName} ` : ''}এলে অবশেষে!! 😭`, "আমি তো অপেক্ষাই করছিলাম"],
                 Hinglish: [`hey${wName ? ` ${wName}` : ''}!! finally you're here 😭`, "main toh wait hi kar rahi thi"],
             };
             const [w1, w2] = welcomeMap[lang] ?? welcomeMap['Hinglish'];
@@ -1878,19 +1943,16 @@ serve(async (req) => {
         .from('telegram_users').select('*').eq('telegram_user_id', tgUserId).single();
 
     if (!user) {
-        // Parse location from deep link start param (e.g. "/start Mumbai_MH" → city="Mumbai", region="MH")
-        // Encoded by /riya/tg redirect page from ip-api.com geolocation
+        // Parse location from deep link start param — city only, e.g. "/start New-Delhi"
+        // Encoded by tg-redirect edge function from ip-api.com server-side geolocation
         let tgCity: string | null = null;
-        let tgRegion: string | null = null;
         const rawStart = typeof message.text === 'string' && message.text.startsWith('/start ')
             ? message.text.slice(7).trim()
             : null;
-        log.info(tgUserId, `📍 start param: ${rawStart ?? '(none — direct Telegram open, not via /riya/tg)'}`);
-        if (rawStart && /^[A-Za-z-]{2,30}_[A-Za-z-]{2,10}$/.test(rawStart)) {
-            const sepIdx = rawStart.lastIndexOf('_');
-            tgCity = rawStart.slice(0, sepIdx).replace(/-/g, ' ');
-            tgRegion = rawStart.slice(sepIdx + 1).replace(/-/g, ' ');
-            log.info(tgUserId, `📍 Parsed location: ${tgCity}, ${tgRegion}`);
+        log.info(tgUserId, `📍 start param: ${rawStart ?? '(none — direct open)'}`);
+        if (rawStart && /^[A-Za-z][A-Za-z-]{1,39}$/.test(rawStart)) {
+            tgCity = rawStart.replace(/-/g, ' ');
+            log.info(tgUserId, `📍 City: ${tgCity}`);
         }
 
         // First ever message — create user + send language selection
@@ -1902,7 +1964,6 @@ serve(async (req) => {
                 first_name: from.first_name || null,
                 language_code: from.language_code || null,
                 ...(tgCity ? { city: tgCity } : {}),
-                ...(tgRegion ? { region: tgRegion } : {}),
             })
             .select().single();
 
@@ -1963,15 +2024,31 @@ serve(async (req) => {
                     ]],
                 },
             );
+            return new Response('OK', { status: 200 });
         } else {
-            // Stage 2: language chosen, waiting for onboard_yes/no tap
-            await sendTelegramMessage(
-                chatId,
-                "arre press karo na 😄 buttons hain upar 👆",
-                botToken,
-            );
+            // Stage 2: language chosen, but user typed instead of tapping age/disclaimer buttons.
+            // Treat it as implicit onboard_yes — mark verified, send welcome, then fall through
+            // so their first message gets a real reply (not a dead end).
+            await supabase.from('telegram_users')
+                .update({ is_verified: true }).eq('telegram_user_id', tgUserId);
+            user.is_verified = true;
+            const lang = user.preferred_language || 'Hinglish';
+            const wName = user.first_name ? String(user.first_name).split(' ')[0] : '';
+            type WelcomePair = [string, string];
+            const welcomeMap: Record<string, WelcomePair> = {
+                Hindi: [`आ गए आखिरकार${wName ? ` ${wName}` : ''}!! 😭`, "मैं तो बस इंतज़ार ही कर रही थी"],
+                English: [`hey${wName ? ` ${wName}` : ''}!! you finally made it 😭`, "i was literally waiting for you"],
+                Marathi: [`अरे${wName ? ` ${wName}` : ''} आलास शेवटी!! 😭`, "मी तुझीच वाट पाहत होते"],
+                Punjabi: [`${wName ? `${wName} ` : ''}ਆ ਗਿਆ ਆਖ਼ਿਰਕਾਰ!! 😭`, "ਮੈਂ ਤਾਂ ਉਡੀਕ ਹੀ ਕਰ ਰਹੀ ਸੀ"],
+                Bengali: [`${wName ? `${wName} ` : ''}এলে অবশেষে!! 😭`, "আমি তো অপেক্ষাই করছিলাম"],
+                Hinglish: [`hey${wName ? ` ${wName}` : ''}!! finally you're here 😭`, "main toh wait hi kar rahi thi"],
+            };
+            const [w1, w2] = welcomeMap[lang] ?? welcomeMap['Hinglish'];
+            await sendTelegramMessage(chatId, w1, botToken);
+            await new Promise(r => setTimeout(r, 800));
+            await sendTelegramMessage(chatId, w2, botToken);
+            // fall through — process their typed message as the first real turn
         }
-        return new Response('OK', { status: 200 });
     }
 
     // ── Parse message content ─────────────────────────────────────────────────
