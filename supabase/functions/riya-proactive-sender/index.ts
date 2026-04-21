@@ -5,6 +5,31 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
 // CONFIG
 // =======================================
 const PROACTIVE_MODEL        = "gemini-2.5-flash-lite";   // cheap + fast for proactive decisions
+const VERTEX_PROJECT = Deno.env.get('VERTEX_DEFAULT_PROJECT') ?? 'project-daba100c-c6fe-4fef-b20';
+const VERTEX_BASE = `https://aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT}/locations/global/publishers/google/models`;
+
+// API key pool — loaded once at cold start
+let apiKeyPool: string[] = [];
+function initApiKeyPool(): void {
+    const keys: string[] = [];
+    let i = 1;
+    while (true) {
+        const k = Deno.env.get(`GEMINI_API_KEY_${i}`);
+        if (k) { keys.push(k); i++; } else break;
+    }
+    if (keys.length === 0) {
+        const k = Deno.env.get('GEMINI_API_KEY');
+        if (k) keys.push(k);
+    }
+    apiKeyPool = keys;
+    log.info('*', `✅ Proactive sender: ${apiKeyPool.length} key(s) loaded`);
+}
+function getPoolKey(): string {
+    if (apiKeyPool.length === 0) throw new Error('No API keys configured');
+    // Round-robin by second to spread load
+    return apiKeyPool[Math.floor(Date.now() / 1000) % apiKeyPool.length];
+}
+initApiKeyPool();
 const MAX_USERS_PER_RUN      = 25;                         // Instagram: 200 DMs/hr limit; 25×2 runs = 50/hr
 const MIN_MESSAGES_REQUIRED  = 5;                          // don't proactive on brand-new users
 const SCORE_THRESHOLD        = 30;                         // skip Gemini call below this score
@@ -152,7 +177,7 @@ function formatRecentMessages(msgs: Array<{ role: string; content: string; creat
 // =======================================
 async function callGeminiJSON(prompt: string, apiKey: string, maxTokens = 400): Promise<any> {
     const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${PROACTIVE_MODEL}:generateContent?key=${apiKey}`,
+        `${VERTEX_BASE}/${PROACTIVE_MODEL}:generateContent?key=${apiKey}`,
         {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -367,7 +392,7 @@ serve(async (req) => {
     const supabaseUrl  = Deno.env.get('SUPABASE_URL')!;
     const supabase     = createClient(supabaseUrl, serviceKey);
     const accessToken  = Deno.env.get('INSTAGRAM_ACCESS_TOKEN')!;
-    const geminiApiKey = Deno.env.get('GEMINI_API_KEY_1') || Deno.env.get('GEMINI_API_KEY') || '';
+    const geminiApiKey = getPoolKey();
 
     if (!geminiApiKey) {
         log.error('*', '❌ No Gemini API key configured');

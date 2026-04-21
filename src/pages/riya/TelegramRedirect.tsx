@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 
 // Server-side edge function: reads real client IP, does geo lookup, redirects to Telegram
 // Deployed at: supabase/functions/tg-redirect/index.ts
+const BOT_USERNAME = 'thisisriya_bot';
 const REDIRECT_FUNCTION_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/tg-redirect`;
 
 export default function TelegramRedirect() {

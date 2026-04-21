@@ -1,6 +1,25 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { GoogleGenerativeAI } from "npm:@google/generative-ai@0.21.0";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
+
+const VERTEX_PROJECT = Deno.env.get('VERTEX_DEFAULT_PROJECT') ?? 'project-daba100c-c6fe-4fef-b20';
+const VERTEX_BASE = `https://aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT}/locations/global/publishers/google/models`;
+
+async function vertexFetch(model: string, apiKey: string, body: object): Promise<any> {
+    const res = await fetch(`${VERTEX_BASE}/${model}:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+        const errText = await res.text();
+        throw Object.assign(new Error(`Vertex AI ${res.status}: ${errText.slice(0, 300)}`), { status: res.status });
+    }
+    const json = await res.json();
+    if (json.promptFeedback?.blockReason) {
+        throw new Error(`Response was blocked: ${json.promptFeedback.blockReason} (PROHIBITED_CONTENT)`);
+    }
+    return json;
+}
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -490,7 +509,7 @@ function createSimpleSummary(messages: any[], existingSummary: string | null): s
 async function generateConversationSummary(
     messages: any[],
     existingSummary: string | null,
-    genAI: any
+    apiKey: string
 ): Promise<string> {
     const formattedMessages = formatMessagesForSummary(messages);
 
@@ -515,28 +534,29 @@ Keep it simple like texting. Third person about user.`
 ${formattedMessages}
 
 Write a short memory (MAX 200 words). Include:
-- User's name, job, family, location  
+- User's name, job, family, location
 - What they like/dislike
 - Important moments with approximate time (e.g., "started chatting 3 days ago")
 - How they usually feel
 
 Keep it simple like texting. Third person about user.`;
 
-    // Try models in order: Flash Lite → Flash → Pro
+    // Try models in order: Flash Lite → Flash → Last resort
     const models = [SUMMARY_MODEL_PRIMARY, SUMMARY_MODEL_FALLBACK, SUMMARY_MODEL_LAST_RESORT];
 
     for (const modelName of models) {
         try {
             console.log(`📝 Attempting summary generation with ${modelName}...`);
-            const model = genAI.getGenerativeModel({ model: modelName });
-            const result = await model.generateContent(summaryPrompt);
-            const summary = result.response.text();
+            const json = await vertexFetch(modelName, apiKey, {
+                contents: [{ role: 'user', parts: [{ text: summaryPrompt }] }],
+                generationConfig: { maxOutputTokens: 400, temperature: 0.3 },
+            });
+            const summary = json.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
             console.log(`✅ Summary generated successfully using ${modelName}`);
             return summary;
         } catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
             console.warn(`⚠️ ${modelName} failed: ${errorMsg}`);
-            // Continue to next model
         }
     }
 
@@ -675,39 +695,21 @@ If they ask for pics, tease them and say something like:
 "Pics toh login ke baad milegi baby 😉 Pehle account bana(free hai), fir dekhte hai..."
 DO NOT set send_image: true for guests. Just playfully redirect to login.`;
 
-            // 7. Call Gemini with GUEST_MODEL (best experience for user acquisition)
+            // 7. Call Vertex AI with GUEST_MODEL (best experience for user acquisition)
             const GEMINI_API_KEY = getNextApiKey();
-            const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-            const modelName = GUEST_MODEL;  // Use 3 Flash Preview for best first impression
+            const modelName = GUEST_MODEL;
 
             console.log(`🎭 Guest using model: ${modelName}`);
 
-            const model = genAI.getGenerativeModel({
-                model: modelName,
-                systemInstruction: systemPrompt,
+            // Batch: combine all messages into one user turn (intermediate replies are discarded anyway)
+            const combinedMessage = userMessages.join('\n\n');
+            const guestJson = await vertexFetch(modelName, GEMINI_API_KEY, {
+                system_instruction: { parts: [{ text: systemPrompt }] },
+                contents: [...processedHistory, { role: 'user', parts: [{ text: combinedMessage }] }],
+                generationConfig: { maxOutputTokens: 4096, temperature: 0.9 },
             });
-
-            const chat = model.startChat({
-                history: processedHistory,
-                generationConfig: {
-                    maxOutputTokens: 4096,  // Lower token limit for guests
-                    temperature: 0.9,
-                },
-            });
-
-            // Send user messages to Gemini (handles batch for guests too)
-            let reply = '';
-            if (userMessages.length === 1) {
-                const result = await chat.sendMessage(userMessages[0]);
-                reply = result.response.text();
-            } else {
-                // Batch mode for guests - send each message sequentially
-                for (let i = 0; i < userMessages.length - 1; i++) {
-                    await chat.sendMessage(userMessages[i]);
-                }
-                const result = await chat.sendMessage(userMessages[userMessages.length - 1]);
-                reply = result.response.text();
-            }
+            let reply = (guestJson.candidates?.[0]?.content?.parts ?? [])
+                .map((p: any) => p.text ?? '').join('');
 
             console.log("🤖 Guest response:", reply.substring(0, 100) + "...");
 
@@ -1079,20 +1081,17 @@ This user is LOGGED IN. You CAN send photos when appropriate.`;
             });
         }
 
-        // 6. Call Gemini with tiered model selection
+        // 6. Call Vertex AI with tiered model selection
         const GEMINI_API_KEY = getNextApiKey();
-        const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 
         // Choose model based on subscription and daily usage
         let modelName = PRO_MODEL;  // Default for Pro users
 
         if (!isPro) {
             if (usingFreeModel) {
-                // After 15 total messages: use flash-lite model
                 modelName = FREE_MODEL;
                 console.log(`📉 Free user (${currentCount} msgs today) - using ${FREE_MODEL}`);
             } else {
-                // First 15 total messages: use hook model (gemini-3.1-pro)
                 modelName = FREE_MODEL_HOOK;
                 console.log(`🪝 Free user hook period (${remainingProMessages} hook msgs left) - using ${FREE_MODEL_HOOK}`);
             }
@@ -1100,39 +1099,24 @@ This user is LOGGED IN. You CAN send photos when appropriate.`;
             console.log(`👑 Pro user - using ${PRO_MODEL}`);
         }
 
-        const model = genAI.getGenerativeModel({
-            model: modelName,
-            systemInstruction: systemPrompt,
-        });
+        // Batch: combine all messages into one user turn (intermediate replies are discarded anyway)
+        const combinedMessage = userMessages.length === 1
+            ? userMessages[0]
+            : userMessages.map((m: string, i: number) => i < userMessages.length - 1 ? m : m).join('\n\n');
 
-        const chat = model.startChat({
-            history: processedHistory,
-            generationConfig: {
-                maxOutputTokens: 8192,
-                temperature: 0.9,
-            },
-        });
-
-        // Send all user messages to Gemini (handles batch properly)
-        // For batch mode, send each message as a separate turn for cohesive context
-        let reply = '';
-        let finalResult: any = null;
-
-        if (userMessages.length === 1) {
-            // Single message - simple send
-            finalResult = await chat.sendMessage(userMessages[0]);
-            reply = finalResult.response.text();
-        } else {
-            // Batch mode - send each message sequentially, get response for last
-            // This gives Gemini full context of the rapid-fire messages
-            for (let i = 0; i < userMessages.length - 1; i++) {
-                console.log(`📤 Sending batched message ${i + 1}/${userMessages.length}: "${userMessages[i].substring(0, 30)}..."`);
-                await chat.sendMessage(userMessages[i]);
-            }
-            // Send last message and capture response
-            finalResult = await chat.sendMessage(userMessages[userMessages.length - 1]);
-            reply = finalResult.response.text();
+        if (userMessages.length > 1) {
+            console.log(`📤 Sending ${userMessages.length} batched messages as combined turn`);
         }
+
+        const authJson = await vertexFetch(modelName, GEMINI_API_KEY, {
+            system_instruction: { parts: [{ text: systemPrompt }] },
+            contents: [...processedHistory, { role: 'user', parts: [{ text: combinedMessage }] }],
+            generationConfig: { maxOutputTokens: 8192, temperature: 0.9 },
+        });
+
+        const finalResult = authJson; // keep for usageMetadata below
+        let reply = (authJson.candidates?.[0]?.content?.parts ?? [])
+            .map((p: any) => p.text ?? '').join('');
 
         console.log("\n🤖 RAW GEMINI RESPONSE:");
         console.log("=====================================");
@@ -1142,7 +1126,7 @@ This user is LOGGED IN. You CAN send photos when appropriate.`;
         // =======================================
         // TOKEN USAGE & COST CALCULATION
         // =======================================
-        const usageMetadata = finalResult?.response?.usageMetadata;
+        const usageMetadata = finalResult?.usageMetadata;
 
         let inputTokens = 0;
         let outputTokens = 0;
@@ -1499,7 +1483,7 @@ This user is LOGGED IN. You CAN send photos when appropriate.`;
                     const newSummary = await generateConversationSummary(
                         msgsToSummarize,
                         existingSummary?.summary || null,
-                        genAI
+                        GEMINI_API_KEY
                     );
 
                     // Save the summary

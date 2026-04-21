@@ -28,7 +28,12 @@
       "WebFetch(domain:core.telegram.org)",
       "WebFetch(domain:fragment.com)",
       "WebFetch(domain:telegram.org)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(find \"C:\\\\Users\\\\vrsol\\\\OneDrive\\\\Desktop\\\\AI Companion\\\\soulmate-ai\\\\supabase\\\\functions\" -name \"*.ts\" -type f -exec wc -l {} \\\\;)",
+      "Bash(npx supabase:*)",
+      "WebFetch(domain:docs.cloud.google.com)",
+      "Bash(python3 *)",
+      "Bash(curl *)"
     ]
   }
 }
