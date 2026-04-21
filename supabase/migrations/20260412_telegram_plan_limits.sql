@@ -6,7 +6,15 @@
 -- - Values set high (800/600) for testing; revert to 100/30 for production
 -- ============================================================
 
-CREATE OR REPLACE FUNCTION public.get_telegram_user_plan(p_tg_user_id TEXT)
+-- Must drop first — return type changed (removed free_messages_used column)
+DROP FUNCTION IF EXISTS public.get_telegram_user_plan(TEXT);
+DROP FUNCTION IF EXISTS public.get_telegram_user_plan(TEXT, INTEGER, INTEGER);
+
+CREATE OR REPLACE FUNCTION public.get_telegram_user_plan(
+  p_tg_user_id  TEXT,
+  p_trial_limit INTEGER DEFAULT 50,
+  p_daily_limit INTEGER DEFAULT 30
+)
 RETURNS TABLE (
   plan              TEXT,
   credits_remaining INTEGER,
@@ -16,11 +24,10 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 AS $$
 DECLARE
-  -- ⚠️ Keep in sync with FREE_TRIAL_LIMIT / FREE_DAILY_LIMIT in telegram-webhook/index.ts
-  v_trial_limit   CONSTANT INTEGER := 800;  -- set to 100 for production
-  v_daily_limit   CONSTANT INTEGER := 600;  -- set to 30 for production
+  v_trial_limit   INTEGER := p_trial_limit;
+  v_daily_limit   INTEGER := p_daily_limit;
 
-  v_today         DATE := (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE;
+  v_today         DATE := CURRENT_DATE;  -- UTC, matches webhook todayStr and reset_telegram_daily_counts
   v_credits       INTEGER;
   v_msg_count     INTEGER;
   v_daily_count   INTEGER;

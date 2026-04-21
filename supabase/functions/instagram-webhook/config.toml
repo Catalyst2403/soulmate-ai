@@ -1,0 +1,2 @@
+[functions.instagram-webhook]
+verify_jwt = false

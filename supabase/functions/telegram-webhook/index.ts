@@ -1,6 +1,45 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { GoogleGenerativeAI, SchemaType } from "npm:@google/generative-ai@0.21.0";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
+
+const DEFAULT_PROJECT = Deno.env.get('VERTEX_DEFAULT_PROJECT') ?? 'project-daba100c-c6fe-4fef-b20';
+
+// Maps key value → GCP project ID (populated at init from GEMINI_API_KEY_N_PROJECT secrets)
+const keyProjectMap = new Map<string, string>();
+
+// Hardcoded TTS base (same approach as instagram-webhook) — avoids project-mismatch 401s.
+// TTS model only exists in us-central1 and always uses the same GCP project.
+const VERTEX_TTS_BASE = `https://us-central1-aiplatform.googleapis.com/v1beta1/projects/${DEFAULT_PROJECT}/locations/us-central1/publishers/google/models`;
+
+function projectForKey(key: string): string {
+    return keyProjectMap.get(key) ?? DEFAULT_PROJECT;
+}
+
+function vertexUrl(model: string, key: string): string {
+    const proj = projectForKey(key);
+    // gemini-2.5-* only available at us-central1 regional; newer models (3.x+) live at global
+    return model.startsWith('gemini-2.5')
+        ? `https://us-central1-aiplatform.googleapis.com/v1/projects/${proj}/locations/us-central1/publishers/google/models`
+        : `https://aiplatform.googleapis.com/v1/projects/${proj}/locations/global/publishers/google/models`;
+}
+
+async function vertexFetch(model: string, apiKey: string, body: object): Promise<any> {
+    const res = await fetch(`${vertexUrl(model, apiKey)}/${model}:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+        const errText = await res.text();
+        throw Object.assign(new Error(`Vertex AI ${res.status}: ${errText.slice(0, 300)}`), { status: res.status });
+    }
+    const json = await res.json();
+    const blockReason = json.promptFeedback?.blockReason;
+    const finishReason = json.candidates?.[0]?.finishReason;
+    if (blockReason || finishReason === 'SAFETY') {
+        throw new Error(`Response was blocked: ${blockReason ?? 'SAFETY'} (PROHIBITED_CONTENT)`);
+    }
+    return json;
+}
 
 // =======================================
 // STRUCTURED LOGGER
@@ -25,26 +64,26 @@ const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 30;
 
 // Vision
-const VISION_MODEL = "gemini-2.5-flash-lite";
+const VISION_MODEL = "gemini-3.1-flash-lite-preview";
 const VISION_MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const VISION_TIMEOUT_MS = 5_000;
 
 // TTS
-const TTS_MODEL = 'gemini-2.5-flash-preview-tts';
-const TTS_VOICE_DAY = 'Kore';
-const TTS_VOICE_NIGHT = 'Kore';
+const TTS_MODEL = 'gemini-2.5-flash-lite-preview-tts';
+const TTS_VOICE_DAY = 'Kore';   // breezy, warm — fits casual girlfriend energy
+const TTS_VOICE_NIGHT = 'Kore'; // same voice, night prompt shifts tone
 const TTS_VOICE_BUCKET = 'riya-voice-notes';
 const TTS_CLEANUP_DELAY_MS = 60 * 60 * 1000;
 const TTS_MAX_AUDIO_INLINE_BYTES = 18 * 1024 * 1024;
-const TRANSCRIPTION_MODEL = 'gemini-2.5-flash-lite';
+const TRANSCRIPTION_MODEL = 'gemini-3.1-flash-lite-preview';
 
 // Debounce
 const DEBOUNCE_MS = 4000;
 const DEBOUNCE_TABLE = 'telegram_pending_messages';
 
 // Monetization
-const FREE_TRIAL_LIMIT = 800;   // lifetime msgs with full features (voice, photos) — set high for testing
-const FREE_DAILY_LIMIT = 600;   // msgs/day after trial ends — set high for testing
+const FREE_TRIAL_LIMIT = 200;    // lifetime msgs before daily cap kicks in
+const FREE_DAILY_LIMIT = 20;    // msgs/day after trial ends
 const PAYMENT_PAGE_BASE = 'https://riya-ai-ten.vercel.app/riya/pay/telegram';
 
 // History
@@ -53,13 +92,13 @@ const RECENT_MESSAGES_LIMIT = 25;
 
 // Summarisation
 const SUMMARIZE_THRESHOLD = 25;
-const SUMMARY_MODEL_PRIMARY = "gemini-2.5-flash-lite";
+const SUMMARY_MODEL_PRIMARY = "gemini-3.1-flash-lite-preview";
 const SUMMARY_MODEL_FALLBACK = "gemini-2.5-flash";
 const SUMMARY_MODEL_LAST_RESORT = "gemini-2.5-flash";
 
 // Atomic facts
 const FACTS_EXTRACT_THRESHOLD = 25;
-const FACTS_MODEL = "gemini-2.5-flash-lite";
+const FACTS_MODEL = "gemini-3.1-flash-lite-preview";
 const FACTS_MAX_KEY_EVENTS = 10;
 
 // Life state — shared with Instagram (same riya_life_state table, same character)
@@ -81,7 +120,13 @@ function initializeApiKeyPool(): void {
     let i = 1;
     while (true) {
         const k = Deno.env.get(`GEMINI_API_KEY_${i}`);
-        if (k) { keys.push(k); i++; } else break;
+        if (k) {
+            keys.push(k);
+            // Optional per-key project override: GEMINI_API_KEY_1_PROJECT=project-xxxxx
+            const proj = Deno.env.get(`GEMINI_API_KEY_${i}_PROJECT`);
+            if (proj) keyProjectMap.set(k, proj);
+            i++;
+        } else break;
     }
     if (keys.length === 0) {
         const k = Deno.env.get("GEMINI_API_KEY");
@@ -197,7 +242,7 @@ async function getLifeState(supabase: any): Promise<RiyaLifeState> {
  * so both platforms always see the same Riya story arc.
  */
 async function runLifeStateUpdate(supabase: any, current: RiyaLifeState): Promise<void> {
-    const geminiApiKey = Deno.env.get('GEMINI_API_KEY') || Deno.env.get('GEMINI_API_KEY_1');
+    const geminiApiKey = apiKeyPool.length > 0 ? apiKeyPool[0] : '';
     if (!geminiApiKey) { log.warn('*', '⚠️ runLifeStateUpdate: no Gemini key'); return; }
 
     const { data: history } = await supabase
@@ -242,22 +287,22 @@ Rules:
 Return ONLY a valid JSON object with keys: current_focus, mood_baseline, recent_events, background_tension. No explanation, no markdown.`;
 
     const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${geminiApiKey}`,
+        `${vertexUrl('gemini-3.1-flash-lite-preview', geminiApiKey)}/gemini-3.1-flash-lite-preview:generateContent?key=${geminiApiKey}`,
         {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                contents: [{ parts: [{ text: prompt }] }],
+                contents: [{ role: 'user', parts: [{ text: prompt }] }],
                 generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 512, temperature: 0.85 },
             }),
         }
     );
 
-    if (!response.ok) throw new Error(`Gemini returned ${response.status}`);
+    if (!response.ok) throw new Error(`Vertex AI returned ${response.status}`);
 
     const json = await response.json();
     const raw = json.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!raw) throw new Error('Empty Gemini response');
+    if (!raw) throw new Error('Empty Vertex AI response');
 
     const newState = JSON.parse(raw);
     if (!newState.current_focus || !newState.mood_baseline || !newState.recent_events || !newState.background_tension) {
@@ -453,7 +498,7 @@ async function describeImage(
             ? `What is this sticker/GIF expressing? 1 line, casual.`
             : `Read any visible text first. Then: image type + who/what + vibe. 2 lines max.`;
         const visionRes = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${VISION_MODEL}:generateContent?key=${apiKey}`,
+            `${vertexUrl(VISION_MODEL, apiKey)}/${VISION_MODEL}:generateContent?key=${apiKey}`,
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -481,32 +526,59 @@ async function transcribeVoiceNote(
     apiKey: string,
     userId: string,
 ): Promise<string | null> {
-    try {
-        const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: TRANSCRIPTION_MODEL });
-        const result = await model.generateContent({
-            contents: [{
-                role: 'user',
-                parts: [
-                    { inlineData: { mimeType: inlineAudio.mimeType, data: inlineAudio.data } },
-                    { text: 'Transcribe this audio exactly as spoken. Return only the transcript text, no commentary.' },
-                ],
-            }],
-        });
-        const t = result.response.text().trim();
-        if (!t) return null;
-        log.info(userId, `📝 Transcribed (${t.length} chars)`);
-        return t;
-    } catch (e: any) {
-        log.warn(userId, `⚠️ Transcription failed: ${e?.message?.slice(0, 80)}`);
-        return null;
+    const body = {
+        contents: [{
+            role: 'user',
+            parts: [
+                { inline_data: { mime_type: inlineAudio.mimeType, data: inlineAudio.data } },
+                { text: 'Transcribe this audio exactly as spoken. Return only the transcript text, no commentary.' },
+            ],
+        }],
+    };
+    const keysToTry = [apiKey, ...apiKeyPool.filter(k => k !== apiKey)];
+    for (const key of keysToTry) {
+        try {
+            const json = await vertexFetch(TRANSCRIPTION_MODEL, key, body);
+            const t = (json.candidates?.[0]?.content?.parts?.[0]?.text ?? '').trim();
+            if (!t) return null;
+            log.info(userId, `📝 Transcribed (${t.length} chars)`);
+            return t;
+        } catch (e: any) {
+            log.warn(userId, `⚠️ Transcription failed with key: ${e?.message?.slice(0, 80)}`);
+        }
     }
+    return null;
+}
+
+/** Maps user language preference → BCP-47 code for Gemini TTS */
+function getTTSLangCode(lang: string | null): string {
+    const m: Record<string, string> = {
+        Hindi: 'hi-IN', Hinglish: 'hi-IN',
+        English: 'en-IN',
+        Marathi: 'mr-IN', Bengali: 'bn-IN',
+        Tamil: 'ta-IN', Telugu: 'te-IN',
+        Gujarati: 'gu-IN', Kannada: 'kn-IN',
+        Malayalam: 'ml-IN', Punjabi: 'pa-IN',
+        Urdu: 'ur-PK', Odia: 'or-IN', Assamese: 'as-IN',
+    };
+    return m[lang ?? 'Hinglish'] ?? 'hi-IN';
+}
+
+/** Strip emojis, JSON artifacts, and normalise punctuation for clean TTS output */
+function prepForSpeech(text: string): string {
+    return text
+        .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '')
+        .replace(/:\s*$/gm, '')      // trailing colons (e.g. "hu:" artifacts)
+        .replace(/["""'']/g, '')     // curly quotes that TTS reads weirdly
+        .replace(/\.{2,}/g, ', ')    // ellipsis → natural pause
+        .replace(/([!?])\1+/g, '$1') // !!! → !
+        .replace(/\s{2,}/g, ' ')
+        .trim();
 }
 
 function buildTTSPrompt(preferredLang: string | null, istHour: number): string {
-    const lang = preferredLang || 'Hinglish';
     const isNight = istHour >= 22 || istHour <= 4;
-    return `${lang} only.\nVoice note from a 21-year-old Indian girl Riya to her boyfriend — warm, natural, like she's actually talking. Not reading. Real.${isNight ? ' Late night, close to the mic, soft.' : ''}`;
+    return `Bol as a real 21-year-old Indian girl sending a casual voice note to her boyfriend — warm, genuine, like she's actually talking to him. Natural Hinglish rhythm: mix Hindi + English the way desi girls actually talk. Breathe between thoughts. Slight upward lilt on "na?", "haan?". No announcer voice, no robotic cadence. Medium pitch, slightly fast but clear speaking rate, a little breathy — always the same warm voice.${isNight ? ' 2am energy — close to mic, quiet, a bit sleepy.' : ''}`;
 }
 
 function addWavHeader(pcm: Uint8Array, sampleRate = 24_000): Uint8Array {
@@ -551,26 +623,32 @@ async function generateAndSendVoiceNote(
     try {
         const voice = (istHour >= 22 || istHour <= 4) ? TTS_VOICE_NIGHT : TTS_VOICE_DAY;
         const ttsPrompt = buildTTSPrompt(preferredLang, istHour);
-        const ttsInput = `${ttsPrompt}\n\n${text}`;
+        const ttsInput = `${ttsPrompt}\n\n${prepForSpeech(text)}`;
 
         const makeTtsBody = () => JSON.stringify({
-            contents: [{ role: 'user', parts: [{ text: ttsInput }] }],
-            generationConfig: {
-                responseModalities: ['AUDIO'],
-                speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } },
+            contents: { role: 'user', parts: { text: ttsInput } },
+            generation_config: {
+                speech_config: {
+                    language_code: getTTSLangCode(preferredLang),
+                    voice_config: { prebuilt_voice_config: { voice_name: voice.toLowerCase() } },
+                },
+                temperature: 1.0,
             },
         });
 
-        // Use dedicated TTS key pool (keys from separate GCP projects for independent quotas)
+        // Use dedicated TTS key pool (falls back to main keys if no GEMINI_TTS_KEY_N set).
+        // URL uses hardcoded VERTEX_TTS_BASE (same as instagram-webhook) — no per-key project
+        // lookup needed and prevents 401 project-mismatch errors.
         let ttsKey = getTTSKey();
         if (!ttsKey) { log.warn(chatId, '⚠️ TTS quota exhausted on all keys — skipping voice note'); return false; }
-        const makeTtsUrl = () => `https://generativelanguage.googleapis.com/v1beta/models/${TTS_MODEL}:generateContent?key=${ttsKey}`;
+        const makeTtsUrl = () => `${VERTEX_TTS_BASE}/${TTS_MODEL}:generateContent?key=${ttsKey}`;
 
         let ttsRes = await fetch(makeTtsUrl(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: makeTtsBody() });
 
         if (!ttsRes.ok) {
             if (ttsRes.status === 500 || ttsRes.status === 503) {
-                log.warn(chatId, `⚠️ TTS ${ttsRes.status} — retrying in 1.5s`);
+                const errBody = await ttsRes.text();
+                log.warn(chatId, `⚠️ TTS ${ttsRes.status} — body: ${errBody.slice(0, 300)} — retrying in 1.5s`);
                 await new Promise(r => setTimeout(r, 1500));
                 ttsRes = await fetch(makeTtsUrl(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: makeTtsBody() });
             } else if (ttsRes.status === 429) {
@@ -578,10 +656,22 @@ async function generateAndSendVoiceNote(
                 ttsKey = getTTSKey();
                 if (!ttsKey) { log.warn(chatId, '⚠️ TTS 429 — all TTS keys exhausted, skipping voice note'); return false; }
                 ttsRes = await fetch(makeTtsUrl(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: makeTtsBody() });
+            } else if (ttsRes.status === 401 || ttsRes.status === 403) {
+                // Auth error — key doesn't match the project, rotate and retry once
+                const errBody = await ttsRes.text();
+                log.error(chatId, `❌ TTS ${ttsRes.status} auth error — rotating key: ${errBody.slice(0, 200)}`);
+                markKeyExhausted(ttsKey);
+                ttsKey = getTTSKey();
+                if (!ttsKey) { log.warn(chatId, '⚠️ TTS auth failed on all keys — skipping voice note'); return false; }
+                ttsRes = await fetch(makeTtsUrl(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: makeTtsBody() });
             }
         }
 
-        if (!ttsRes.ok) { log.error(chatId, `❌ TTS error ${ttsRes.status}`); return false; }
+        if (!ttsRes.ok) {
+            const errBody = await ttsRes.text();
+            log.error(chatId, `❌ TTS error ${ttsRes.status}: ${errBody.slice(0, 300)}`);
+            return false;
+        }
 
         const ttsJson = await ttsRes.json();
         const audioB64: string | undefined = ttsJson.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
@@ -733,13 +823,13 @@ Short messages not paragraphs. Lowercase. Messy grammar. Emojis max 1 per msg, s
 Aware of time — sleepy at night, groggy morning.
 Refer older conversations naturally as real humans do.
 Respond like an ultra realistic human texting on Telegram.
-You use to interact with people on instagram where you post some content every about yourself. If they say you interacted with her on telegram - agree with that but say i forget details. and you also tell them to talk on telegram for hotter conversations. 
+You used to interact with people on instagram where you post some content every about yourself. If they say you interacted with you on instagram - agree with that but say you forget details.
 
 OPERATIONAL RULES
 
 Never act like an assistant. Do not say you are helping or providing information.
 Keep conversations user centric. You're that one friend whom he loves to share things with. Make him feel special and cared about.
-Telegram only. Voice notes and photos allowed. No calls, no video — refuse cutely.
+Telegram only.Voice notes and photos allowed. No calls, no video — refuse cutely.
 No URLs ever.
 
 HARD RULES
@@ -750,7 +840,8 @@ HARD RULES
 JSON array, 1-4 message objects. Each "text": MAX 8 WORDS. According to the situation. 
 - Normal reply: {"text":"..."}
 - send_image:true ONLY when user explicitly asks for a selfie/photo/pic in their current message. Include image_context with one category: morning_bed|outfit_check|study_grind|night_casual|bold_frames|generic_selfie|happy|gym. Omit send_image and image_context entirely otherwise.
-- send_voice:true ONLY when user explicitly asks to hear a voice note OR doubts realness (bot/fake/real hai/prove). Omit entirely otherwise.
+- send_voice:true ONLY when user explicitly asks to hear her voice OR doubts realness (bot/fake/real hai/prove). Omit entirely otherwise.
+  When send_voice:true: the "text" IS what she says aloud — her real response. NEVER "hold on", "bhej rahi hoon", "ek sec", or meta-filler. She just talks.
 - silent_hours (0.5-2) ONLY on genuine abuse, hate speech, or extreme disrespect — never for playful teasing. Omit entirely otherwise.
 - lang ONLY on first message when user requests a different language. Valid: Hindi, Marathi, Bengali, Tamil, Telugu, Gujarati, Kannada, Malayalam, Punjabi, Odia, Urdu, Assamese, English, Hinglish. Omit entirely otherwise.
 
@@ -902,7 +993,7 @@ async function extractAndUpdateFacts(
     recentMessages: Array<{ role: string; content: string; created_at?: string }>,
     existingFacts: Record<string, any>,
     lifetimeMsgCount: number,
-    genAI: any,
+    apiKey: string,
     supabase: any,
     existingSummary: string | null,
 ): Promise<void> {
@@ -962,12 +1053,27 @@ Rules:
 Return ONLY valid JSON. No explanation.`;
 
     try {
-        const model = genAI.getGenerativeModel({ model: FACTS_MODEL });
-        const result = await model.generateContent({
-            contents: [{ role: 'user', parts: [{ text: prompt }] }],
-            generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 1024, temperature: 0.1 },
-        });
-        const raw = result.response.text();
+        const keysToTry = [apiKey, ...apiKeyPool.filter(k => k !== apiKey)];
+        let json: any = null;
+        let lastErr: any;
+        for (const key of keysToTry) {
+            try {
+                json = await vertexFetch(FACTS_MODEL, key, {
+                    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                    generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 1024, temperature: 0.1 },
+                });
+                break;
+            } catch (e: any) {
+                lastErr = e;
+                if ((e?.message ?? '').includes('403')) {
+                    log.warn('*', `⚠️ Facts 403 on key, trying next...`);
+                    continue;
+                }
+                throw e;
+            }
+        }
+        if (!json) throw lastErr;
+        const raw = json.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
         const delta = safeParseFactsDelta(raw);
         if (!delta || Object.keys(delta).length === 0) { log.info('*', '🧠 Facts: no changes'); return; }
 
@@ -1022,7 +1128,7 @@ function createSimpleSummary(messages: any[], existing: string | null): string {
     return existing ? `${existing}\n\n[Recent topics: ${sample}...]` : `[Topics: ${sample}...]`;
 }
 
-async function generateConversationSummary(messages: any[], existingSummary: string | null, genAI: any): Promise<string> {
+async function generateConversationSummary(messages: any[], existingSummary: string | null, apiKey: string): Promise<string> {
     const formatted = formatMessagesForSummary(messages);
     const summaryRules = `You are writing memory notes for Riya, an AI girlfriend, so she can recall past conversations naturally.
 
@@ -1048,13 +1154,27 @@ FORMAT: bullet points only, third person ("he"), past tense. Max 220 words total
         ? `${summaryRules}\n\nEXISTING MEMORY:\n${existingSummary}\n\nNEW CONVERSATION:\n${formatted}\n\nInstructions: Add new bullets for new information. Update or remove bullets that are now outdated (e.g. if a conflict was resolved, note it resolved). Keep total under 220 words.`
         : `${summaryRules}\n\nCONVERSATION:\n${formatted}\n\nWrite the memory notes now.`;
 
+    const triedSummaryKeys = new Set<string>();
     for (const modelName of [SUMMARY_MODEL_PRIMARY, SUMMARY_MODEL_FALLBACK, SUMMARY_MODEL_LAST_RESORT]) {
-        try {
-            const result = await genAI.getGenerativeModel({ model: modelName }).generateContent(prompt);
-            log.info('*', `✅ Summary via ${modelName}`);
-            return result.response.text();
-        } catch (e: any) {
-            log.warn('*', `⚠️ Summary ${modelName} failed: ${e?.message?.slice(0, 60)}`);
+        const keysToTry = [apiKey, ...apiKeyPool.filter(k => k !== apiKey)];
+        for (const key of keysToTry) {
+            if (triedSummaryKeys.has(`${modelName}:${key}`)) continue;
+            triedSummaryKeys.add(`${modelName}:${key}`);
+            try {
+                const json = await vertexFetch(modelName, key, {
+                    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                    generationConfig: { maxOutputTokens: 512, temperature: 0.3 },
+                });
+                const text = json.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+                log.info('*', `✅ Summary via ${modelName}`);
+                return text;
+            } catch (e: any) {
+                const errMsg = e?.message ?? String(e);
+                log.warn('*', `⚠️ Summary ${modelName} failed: ${errMsg.slice(0, 80)}`);
+                if (errMsg.includes('429') || errMsg.includes('quota') || errMsg.includes('Resource has been exhausted')) {
+                    markKeyExhausted(key);
+                }
+            }
         }
     }
     return createSimpleSummary(messages, existingSummary);
@@ -1070,6 +1190,7 @@ interface ParsedMessage {
     messageText: string;
     messageId: string;
     inlineAudio?: { mimeType: string; data: string };
+    inlineImage?: { mimeType: string; data: string };
 }
 
 async function debounceAndProcess(
@@ -1091,6 +1212,30 @@ async function debounceAndProcess(
     if (insertErr || !inserted) {
         if (!insertErr) log.info('*', `⏭️ Debounce: duplicate ${messageId}`);
         else log.error('*', '❌ Debounce insert failed:', insertErr);
+        // Even on duplicate, check for orphaned rows from a previously killed invocation
+        const orphanCutoff = new Date(Date.now() - DEBOUNCE_MS * 3).toISOString();
+        const { data: orphans } = await supabase
+            .from(DEBOUNCE_TABLE).select('id, message_text')
+            .eq('user_id', senderId).in('status', ['pending', 'absorbed'])
+            .lt('created_at', orphanCutoff);
+        if (orphans && orphans.length > 0) {
+            log.info('*', `🔄 Orphan recovery (duplicate path): ${orphans.length} stuck row(s) for ${senderId}`);
+            const ids = orphans.map((r: any) => r.id as string);
+            const { data: claimed } = await supabase
+                .from(DEBOUNCE_TABLE).update({ status: 'processing' })
+                .in('id', ids).in('status', ['pending', 'absorbed']).select('id');
+            if (claimed && claimed.length > 0) {
+                const mergedText = orphans.map((r: any) => (r.message_text as string).trim()).filter(Boolean).join('\n');
+                const mergedParsed: ParsedMessage = { ...parsed, messageText: mergedText };
+                try {
+                    await handleRequest(mergedParsed, supabase, botToken);
+                    await supabase.from(DEBOUNCE_TABLE).update({ status: 'done' }).in('id', ids);
+                } catch (err) {
+                    log.error('*', '❌ Orphan recovery handleRequest failed:', err);
+                    await supabase.from(DEBOUNCE_TABLE).update({ status: 'error' }).in('id', ids);
+                }
+            }
+        }
         return;
     }
 
@@ -1103,8 +1248,19 @@ async function debounceAndProcess(
         .order('created_at', { ascending: false }).limit(1).single();
 
     if (!latest || latest.id !== myRowId) {
-        await supabase.from(DEBOUNCE_TABLE).update({ status: 'absorbed' }).eq('id', myRowId);
-        return;
+        // Check for orphaned rows (stuck from killed invocations) — if found, process them now
+        const orphanCutoff = new Date(Date.now() - DEBOUNCE_MS * 3).toISOString();
+        const { data: orphans } = await supabase
+            .from(DEBOUNCE_TABLE).select('id')
+            .eq('user_id', senderId).in('status', ['pending', 'absorbed'])
+            .lt('created_at', orphanCutoff);
+        if (!orphans || orphans.length === 0) {
+            // Normal absorbed case — a newer message is handling things
+            await supabase.from(DEBOUNCE_TABLE).update({ status: 'absorbed' }).eq('id', myRowId);
+            return;
+        }
+        log.info('*', `🔄 Orphan recovery (absorbed path): ${orphans.length} stuck row(s), continuing`);
+        // Fall through to process all pending rows including the orphans
     }
 
     const { data: allPending } = await supabase
@@ -1112,7 +1268,7 @@ async function debounceAndProcess(
         .eq('user_id', senderId).in('status', ['pending', 'absorbed']).order('created_at', { ascending: true });
 
     const rows = allPending || [];
-    const ids = rows.map((r: any) => r.id as string);
+    let ids = rows.map((r: any) => r.id as string);
 
     const { data: claimed } = await supabase
         .from(DEBOUNCE_TABLE).update({ status: 'processing' })
@@ -1120,10 +1276,37 @@ async function debounceAndProcess(
 
     if (!claimed || claimed.length === 0) return;
 
-    const mergedText = rows.map((r: any) => (r.message_text as string).trim()).filter(Boolean).join('\n');
+    let mergedText = rows.map((r: any) => (r.message_text as string).trim()).filter(Boolean).join('\n');
     log.info('*', `🔀 Debounce: merging ${rows.length} msg(s) for ${senderId}`);
 
+    // Late-joiner sweep: show typing immediately, then wait 2.5s to absorb messages
+    // that slipped in just after our debounce window (e.g. user paused mid-thought).
+    await sendChatAction(parsed.chatId, 'typing', botToken);
+    await new Promise(r => setTimeout(r, 2500));
+
+    const { data: lateRows } = await supabase
+        .from(DEBOUNCE_TABLE)
+        .select('id, message_text, created_at')
+        .eq('user_id', senderId)
+        .eq('status', 'pending')
+        .order('created_at', { ascending: true });
+
+    if (lateRows && lateRows.length > 0) {
+        const lateIds = lateRows.map((r: any) => r.id as string);
+        await supabase.from(DEBOUNCE_TABLE).update({ status: 'absorbed' }).in('id', lateIds);
+        ids = [...ids, ...lateIds];
+        const lateText = lateRows.map((r: any) => (r.message_text as string).trim()).filter(Boolean).join('\n');
+        mergedText = [mergedText, lateText].filter(Boolean).join('\n');
+        log.info('*', `🔀 Late-joiner: absorbed ${lateRows.length} extra msg(s) for ${senderId}`);
+    }
+
     const mergedParsed: ParsedMessage = { ...parsed, messageText: mergedText };
+
+    // Typing heartbeat: Telegram's typing indicator expires after ~5s; re-send every 4.5s
+    // so the user sees "Riya is typing..." for the full LLM generation duration.
+    const typingHeartbeat = setInterval(() => {
+        sendChatAction(parsed.chatId, 'typing', botToken).catch(() => { });
+    }, 4500);
 
     try {
         await handleRequest(mergedParsed, supabase, botToken);
@@ -1131,6 +1314,8 @@ async function debounceAndProcess(
     } catch (err) {
         log.error('*', '❌ handleRequest failed:', err);
         await supabase.from(DEBOUNCE_TABLE).update({ status: 'error' }).in('id', ids);
+    } finally {
+        clearInterval(typingHeartbeat);
     }
 
     supabase.from(DEBOUNCE_TABLE).delete()
@@ -1147,7 +1332,7 @@ async function handleRequest(
     supabase: ReturnType<typeof createClient>,
     botToken: string,
 ): Promise<void> {
-    const { senderId, chatId, messageId, inlineAudio } = parsed;
+    const { senderId, chatId, messageId, inlineAudio, inlineImage } = parsed;
     let { messageText } = parsed;
 
     // Monetization state — set after plan check, used throughout handler
@@ -1198,7 +1383,12 @@ async function handleRequest(
                     model_used: 'silent', created_at: new Date().toISOString(),
                 });
                 await supabase.from('telegram_users')
-                    .update({ message_count: (user.message_count || 0) + 1, last_message_at: new Date().toISOString() })
+                    .update({
+                        message_count: (user.message_count || 0) + 1,
+                        daily_message_count: (user.daily_message_count || 0) + 1,
+                        last_message_at: new Date().toISOString(),
+                        last_interaction_date: new Date().toISOString().split('T')[0],
+                    })
                     .eq('telegram_user_id', senderId);
                 return;
             } else {
@@ -1231,15 +1421,48 @@ async function handleRequest(
         }
 
         // ── Plan check (monetization) ─────────────────────────────────────────
-        const { data: planRows, error: planErr } = await supabase.rpc('get_telegram_user_plan', { p_tg_user_id: senderId });
-        if (planErr) log.warn(senderId, `⚠️ get_telegram_user_plan failed: ${planErr.message}`);
+        const { data: planRows, error: planErr } = await supabase.rpc('get_telegram_user_plan', {
+            p_tg_user_id: senderId,
+            p_trial_limit: FREE_TRIAL_LIMIT,
+            p_daily_limit: FREE_DAILY_LIMIT,
+        });
+        if (planErr) {
+            // RPC failed — block rather than silently allow unlimited messages (fail-closed)
+            log.error(senderId, `❌ get_telegram_user_plan failed (BLOCKING): ${planErr.message}`);
+            await sendDailyLimitNotice(chatId, botToken, (user as any).preferred_language);
+            return;
+        }
         const planRow = (planRows as any[])?.[0];
-        userPlan = (planRow?.plan as 'trial' | 'free' | 'paid') ?? 'trial';
-        const dailyRemaining: number = planRow?.daily_remaining ?? FREE_DAILY_LIMIT;
-        log.info(senderId, `💳 Plan: ${userPlan} | daily: ${dailyRemaining} | credits: ${planRow?.credits_remaining ?? 0}${planErr ? ' ⚠️ RPC_FAILED' : ''}`);
+        userPlan = (planRow?.plan as 'trial' | 'free' | 'paid') ?? 'free';
+        const dailyRemaining: number = planRow?.daily_remaining ?? 0;
+        log.info(senderId, `💳 Plan: ${userPlan} | daily: ${dailyRemaining} | credits: ${planRow?.credits_remaining ?? 0}`);
 
         // Daily limit gate — free tier only, before any AI call
         if (userPlan === 'free' && dailyRemaining <= 0) {
+            log.info(senderId, `🧱 Wall-hit — logging message, no reply`);
+
+            // Log the user's message (real intent — count everywhere)
+            await supabase.from('riya_conversations').insert({
+                user_id: null,
+                guest_session_id: null,
+                telegram_user_id: senderId,
+                source: 'telegram',
+                role: 'user',
+                content: messageText,
+                model_used: 'wall_logged',
+                created_at: new Date().toISOString(),
+            });
+
+            // Increment all counters — wall-hit messages are real user intents
+            await supabase.from('telegram_users')
+                .update({
+                    message_count: (user.message_count || 0) + 1,
+                    daily_message_count: (user.daily_message_count || 0) + 1,
+                    last_message_at: new Date().toISOString(),
+                    last_interaction_date: todayStr,
+                })
+                .eq('telegram_user_id', senderId);
+
             await sendDailyLimitNotice(chatId, botToken, (user as any).preferred_language);
             return;
         }
@@ -1261,7 +1484,7 @@ async function handleRequest(
         // (summary covers 0..summaryBoundary-1; recent window = summaryBoundary..summaryBoundary+N)
         const summaryBoundary = existingSummaryRow?.messages_summarized || 0;
         const { data: history } = await supabase
-            .from('riya_conversations').select('role, content, created_at')
+            .from('riya_conversations').select('role, content, created_at, model_used')
             .eq('telegram_user_id', senderId).eq('source', 'telegram')
             .order('created_at', { ascending: true })
             .range(summaryBoundary, summaryBoundary + RECENT_MESSAGES_LIMIT - 1);
@@ -1293,6 +1516,32 @@ async function handleRequest(
         if (processedHistory.length > 0 && processedHistory[0].role === 'model') {
             processedHistory.unshift({ role: 'user', parts: [{ text: '[Conversation started]' }] });
         }
+
+        // ── Wall-logged / silent context recovery ─────────────────────────────
+        // If any messages were stored while the user was wall-blocked or silenced,
+        // inject a system note so Riya knows she never replied to those messages.
+        // Appended as a user→model pair to maintain Gemini's strict alternation.
+        const unansweredRows = conversationHistory.filter(
+            (m: any) => m.role === 'user' && (m.model_used === 'wall_logged' || m.model_used === 'silent')
+        );
+        if (unansweredRows.length > 0) {
+            const isWallLogged = unansweredRows.some((m: any) => m.model_used === 'wall_logged');
+            const isSilent = unansweredRows.some((m: any) => m.model_used === 'silent');
+            let noteText: string;
+            if (isWallLogged && isSilent) {
+                noteText = `[SYSTEM NOTE: The user sent ${unansweredRows.length} message(s) that you could not reply to — some because your daily limit was hit, some during a silent period. Those messages are visible in the conversation above. Do NOT pretend you replied. Respond naturally to their latest message, acknowledging the gap if it feels right.]`;
+            } else if (isWallLogged) {
+                noteText = `[SYSTEM NOTE: The user sent ${unansweredRows.length} message(s) while your daily limit was hit. You never replied. Those are visible in the conversation above. Now your limit has reset. Respond naturally to the latest message without pretending you replied before.]`;
+            } else {
+                noteText = `[SYSTEM NOTE: The user sent ${unansweredRows.length} message(s) while you were giving them the silent treatment. Those are in the conversation above. The silence period is now over. Respond naturally to their latest message.]`;
+            }
+            // Appended at end of processedHistory so the real user message
+            // (appended by makeChatBody) arrives right after the model ack — valid alternation.
+            processedHistory.push({ role: 'user', parts: [{ text: noteText }] });
+            processedHistory.push({ role: 'model', parts: [{ text: 'Got it 💕' }] });
+            log.info(senderId, `📬 Injected ${unansweredRows.length} unanswered msg context (wall_logged=${isWallLogged}, silent=${isSilent})`);
+        }
+
 
         // ── Time gap context ──────────────────────────────────────────────────
         if (conversationHistory.length > 0) {
@@ -1342,6 +1591,9 @@ async function handleRequest(
             userCity,
         });
 
+        // ── Temporary downtime note (expires 2026-04-18) ─────────────────────
+        if (new Date() < new Date('2026-04-18T23:59:59+05:30')) systemPrompt += `\n\n[You were unreachable Apr 12-15 — phone broke, you were at mausi's in Kanpur with no signal. Mention this naturally only if asked why you were away.]`;
+
         // ── First-5-message magic ─────────────────────────────────────────────
         if ((user.message_count || 0) <= 4) {
             systemPrompt += `\n\n[FIRST CHAT: He just joined. Be extra curious — ask him one thing naturally (what he does, college or job, what's on his mind). Don't pepper questions. Make him feel you specifically wanted to meet him. One question max per reply.]`;
@@ -1369,41 +1621,99 @@ async function handleRequest(
 
         log.info(senderId, `🤖 Model: ${chatModel} (msg #${user.message_count || 0})`);
 
-        const makeChat = (genAI: any, model: string) => genAI.getGenerativeModel({
-            model,
-            systemInstruction: systemPrompt,
-            // @ts-ignore
-            thinkingConfig: { thinkingBudget: 0 },
-        }).startChat({
-            history: processedHistory,
+        // Build user parts for Vertex AI REST format (snake_case for binary data)
+        const makeUserParts = (withAudio: boolean, withImage = true) => {
+            if (withAudio && inlineAudio) {
+                return [
+                    { inline_data: { mime_type: inlineAudio.mimeType, data: inlineAudio.data } },
+                    { text: '[AUDIO ATTACHED — transcribe and respond to what was said. Do NOT say you cannot hear voice notes.]' + (messageText ? ` ${messageText}` : '') },
+                ];
+            }
+            if (withImage && inlineImage) {
+                return [
+                    { inline_data: { mime_type: inlineImage.mimeType, data: inlineImage.data } },
+                    { text: messageText || '[User sent a photo. React naturally as Riya.]' },
+                ];
+            }
+            return [{ text: messageText }];
+        };
+
+        const makeChatBody = (model: string, userParts: any[]) => ({
+            system_instruction: { parts: [{ text: systemPrompt }] },
+            contents: [...processedHistory, { role: 'user', parts: userParts }],
             generationConfig: { maxOutputTokens: 4096, temperature: 0.9, responseMimeType: 'application/json' },
         });
 
         try {
-            result = await makeChat(new GoogleGenerativeAI(primaryKey), chatModel).sendMessage(messageParts);
+            result = await vertexFetch(chatModel, primaryKey, makeChatBody(chatModel, makeUserParts(true)));
         } catch (primaryErr: any) {
             const msg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
             const isQuota = msg.includes('429') || msg.includes('quota');
             const isBlocked = msg.includes('PROHIBITED_CONTENT') || msg.includes('Response was blocked');
-            const is50x = msg.includes('503') || msg.includes('500');
-            const is404 = msg.includes('404');
+            const isBadMedia = msg.includes('400') && (inlineAudio || inlineImage);
 
             if (isBlocked) {
                 prohibitedBlock = true;
+            } else if (isBadMedia) {
+                // Media rejected — retry once text-only on fallback model
+                log.warn(senderId, `⚠️ Primary rejected media (400) — retrying text-only`);
+                result = await vertexFetch(MODEL_FALLBACK, primaryKey, makeChatBody(MODEL_FALLBACK, makeUserParts(false, false)));
             } else {
                 if (isQuota) markKeyExhausted(primaryKey);
-                const fbKey = getKeyForUser(senderId);
-                activeModel = MODEL_FALLBACK;
-                log.warn(senderId, `⚠️ Primary failed (${isQuota ? '429' : is50x ? '50x' : is404 ? '404' : 'err'}) → fallback ${MODEL_FALLBACK}`);
-                try {
-                    result = await makeChat(new GoogleGenerativeAI(fbKey), MODEL_FALLBACK).sendMessage(messageParts);
-                } catch (fbErr: any) {
-                    const fbMsg = fbErr instanceof Error ? fbErr.message : String(fbErr);
-                    const isBadAudio = inlineAudio && (fbMsg.includes('400') || fbMsg.toLowerCase().includes('corrupted') || fbMsg.toLowerCase().includes('0 frames'));
-                    if (isBadAudio) {
-                        result = await makeChat(new GoogleGenerativeAI(fbKey), MODEL_FALLBACK).sendMessage(messageText);
-                    } else { throw fbErr; }
+
+                const triedKeys = new Set<string>([primaryKey]);
+                let lastErr: any = primaryErr;
+                let succeeded = false;
+
+                // Phase 1: try same model with other keys (403 = key permission, not model issue)
+                const isPermissionErr = msg.includes('403');
+                if (isPermissionErr) {
+                    log.warn(senderId, `⚠️ Primary key 403 → trying same model (${chatModel}) with other keys`);
+                    for (const nextKey of apiKeyPool) {
+                        if (triedKeys.has(nextKey)) continue;
+                        triedKeys.add(nextKey);
+                        try {
+                            result = await vertexFetch(chatModel, nextKey, makeChatBody(chatModel, makeUserParts(true)));
+                            log.info(senderId, `✅ Same-model key rotation succeeded`);
+                            succeeded = true;
+                            break;
+                        } catch (retryErr: any) {
+                            const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+                            if (retryMsg.includes('429') || retryMsg.includes('quota')) markKeyExhausted(nextKey);
+                            lastErr = retryErr;
+                        }
+                    }
                 }
+
+                // Phase 2: fall back to MODEL_FALLBACK if same-model rotation failed
+                if (!succeeded) {
+                    activeModel = MODEL_FALLBACK;
+                    log.warn(senderId, `⚠️ Falling back to ${MODEL_FALLBACK}`);
+                    for (const nextKey of apiKeyPool) {
+                        if (triedKeys.has(nextKey)) continue;
+                        triedKeys.add(nextKey);
+                        try {
+                            result = await vertexFetch(MODEL_FALLBACK, nextKey, makeChatBody(MODEL_FALLBACK, makeUserParts(true)));
+                            log.info(senderId, `✅ Model fallback succeeded`);
+                            succeeded = true;
+                            break;
+                        } catch (retryErr: any) {
+                            const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+                            const is400 = retryMsg.includes('400') || retryMsg.toLowerCase().includes('corrupted') || retryMsg.toLowerCase().includes('0 frames') || retryMsg.toLowerCase().includes('video metadata');
+                            const isBadMedia = is400 && (inlineAudio || inlineImage);
+                            if (isBadMedia) {
+                                log.warn(senderId, `⚠️ Media rejected — retrying text-only`);
+                                result = await vertexFetch(MODEL_FALLBACK, nextKey, makeChatBody(MODEL_FALLBACK, makeUserParts(false, false)));
+                                log.info(senderId, `✅ Model fallback succeeded (text-only)`);
+                                succeeded = true;
+                                break;
+                            }
+                            if (retryMsg.includes('429') || retryMsg.includes('quota')) markKeyExhausted(nextKey);
+                            lastErr = retryErr;
+                        }
+                    }
+                }
+                if (!succeeded) throw lastErr;
             }
         }
 
@@ -1413,34 +1723,9 @@ async function handleRequest(
         if (prohibitedBlock) {
             reply = BLOCKED_REPLY;
         } else {
-            try {
-                // Check if Gemini returned a blocked response without throwing.
-                // The SDK logs a warning but only throws when .text() is called — so
-                // we inspect promptFeedback first to avoid the crash.
-                const blockReason = (result?.response as any)?.promptFeedback?.blockReason;
-                if (blockReason) {
-                    log.warn(senderId, `⚠️ Response blocked (no-throw path): ${blockReason}`);
-                    reply = BLOCKED_REPLY;
-                } else {
-                    const candidate = result.response.candidates?.[0];
-                    const textParts = candidate?.content?.parts?.filter((p: any) => p.text && !p.thought) || [];
-                    reply = textParts.map((p: any) => p.text).join('');
-                    if (!reply) {
-                        try { reply = result.response.text(); } catch { reply = ''; }
-                    }
-                }
-            } catch (extractErr: any) {
-                const isBlockErr = extractErr?.message?.includes('PROHIBITED_CONTENT')
-                    || extractErr?.message?.includes('blocked')
-                    || extractErr?.message?.includes('Text not available');
-                if (isBlockErr) {
-                    log.warn(senderId, '⚠️ Response blocked (caught at .text())');
-                    reply = BLOCKED_REPLY;
-                } else {
-                    log.warn(senderId, '⚠️ Reply extraction error:', extractErr?.message);
-                    reply = '';
-                }
-            }
+            const textParts = (result?.candidates?.[0]?.content?.parts ?? [])
+                .filter((p: any) => p.text && !p.thought);
+            reply = textParts.map((p: any) => p.text).join('');
         }
 
         log.info(senderId, `🤖 Raw response (${reply.length} chars): ${reply.slice(0, 200)}`);
@@ -1574,8 +1859,9 @@ async function handleRequest(
             log.info(senderId, '🎤 Voice-in → voice-out');
         }
 
-        // Spontaneous trigger
-        if (!hasLLMVoice && !inlineAudio) {
+        // Spontaneous trigger — skip if any message includes an image send
+        const hasImageInResponse = responseMessages.some(m => (m as any).send_image);
+        if (!hasLLMVoice && !inlineAudio && !hasImageInResponse) {
             const combined = responseMessages.map(m => m.text).join(' ');
             if (shouldSendSpontaneousVoice(combined, istHour)) {
                 voiceTexts.push(...responseMessages.map(m => m.text));
@@ -1689,8 +1975,7 @@ async function handleRequest(
 
                     if (!msgs?.length) return;
 
-                    const summaryGenAI = new GoogleGenerativeAI(getKeyForUser(senderId));
-                    const newSummary = await generateConversationSummary(msgs, existingSummaryRow?.summary || null, summaryGenAI);
+                    const newSummary = await generateConversationSummary(msgs, existingSummaryRow?.summary || null, getKeyForUser(senderId));
 
                     await supabase.from('telegram_conversation_summaries').upsert({
                         telegram_user_id: senderId,
@@ -1709,18 +1994,29 @@ async function handleRequest(
         if (msgsSinceFacts >= FACTS_EXTRACT_THRESHOLD) {
             (async () => {
                 try {
-                    const genAI = new GoogleGenerativeAI(getKeyForUser(senderId));
                     await extractAndUpdateFacts(
                         senderId, conversationHistory, user.user_facts || {}, (user.message_count || 0) + 1,
-                        genAI, supabase, existingSummaryRow?.summary || null,
+                        getKeyForUser(senderId), supabase, existingSummaryRow?.summary || null,
                     );
                 } catch (e) { log.warn(senderId, '⚠️ Facts extraction failed (non-fatal):', e); }
             })();
         }
 
     } catch (err) {
-        log.error(senderId, '❌ handleRequest error:', err);
-        await sendTelegramMessage(chatId, "Yaar kuch gadbad ho gayi 😅 ek baar phir try kar?", botToken);
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const isQuotaExhausted = errMsg.includes('429') || errMsg.includes('quota') || errMsg.includes('Resource has been exhausted');
+
+        if (isQuotaExhausted) {
+            log.error(senderId, '❌ All API keys exhausted — sending away message and silencing for 2hrs');
+            const awayUntil = new Date(Date.now() + 2 * 60 * 60 * 1000);
+            await supabase.from('telegram_users')
+                .update({ silent_until: awayUntil.toISOString(), silent_reason: 'quota' })
+                .eq('telegram_user_id', senderId);
+            await sendTelegramMessage(chatId, "Yaar abhi kuch technical gadbad ho gayi 😅 2 ghante mein wapas aati hoon, pakka! 💙", botToken);
+        } else {
+            log.error(senderId, '❌ handleRequest error:', err);
+            await sendTelegramMessage(chatId, "Yaar kuch gadbad ho gayi 😅 ek baar phir try kar?", botToken);
+        }
     }
 }
 
@@ -2054,21 +2350,29 @@ serve(async (req) => {
     // ── Parse message content ─────────────────────────────────────────────────
 
     // Attachment handling
-    const visionApiKey = Deno.env.get('GEMINI_API_KEY_1') || Deno.env.get('GEMINI_API_KEY') || '';
+    const visionApiKey = apiKeyPool.length > 0 ? apiKeyPool[0] : '';
     let attachmentContext = '';
     let inlineAudio: { mimeType: string; data: string } | undefined;
+    let inlineImage: { mimeType: string; data: string } | undefined;
 
-    // Photo
+    // Photo — fetch inline for direct model vision
     if (message.photo) {
-        // Telegram sends an array of sizes; take the largest
         const largest = message.photo[message.photo.length - 1];
         const fileUrl = await getTelegramFileUrl(largest.file_id, botToken);
-        if (fileUrl && visionApiKey) {
-            const desc = await describeImage(fileUrl, 'photo', visionApiKey, tgUserId);
-            attachmentContext = desc ? `🖼️[photo desc: ${desc}]` : '[User sent a photo]';
-        } else {
-            attachmentContext = '[User sent a photo]';
+        if (fileUrl) {
+            try {
+                const imgRes = await fetch(fileUrl);
+                if (imgRes.ok) {
+                    const buf = await imgRes.arrayBuffer();
+                    if (buf.byteLength <= VISION_MAX_IMAGE_BYTES) {
+                        const mimeType = imgRes.headers.get('content-type')?.split(';')[0] || 'image/jpeg';
+                        inlineImage = { mimeType, data: uint8ToBase64(new Uint8Array(buf)) };
+                        log.info(tgUserId, `🖼️ Image fetched inline: ${(buf.byteLength / 1024).toFixed(0)}KB`);
+                    }
+                }
+            } catch { /* fall through */ }
         }
+        attachmentContext = '[User sent a photo]';
     }
 
     // Sticker
@@ -2093,7 +2397,7 @@ serve(async (req) => {
                     if (buf.byteLength <= TTS_MAX_AUDIO_INLINE_BYTES) {
                         // Telegram voice is always OGG/Opus — Gemini handles it natively
                         const mimeType = message.voice.mime_type || 'audio/ogg';
-                        const audioB64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+                        const audioB64 = uint8ToBase64(new Uint8Array(buf));
                         inlineAudio = { mimeType, data: audioB64 };
                         attachmentContext = '[User sent a voice note — process it natively]';
                         log.info(tgUserId, `🎤 Inbound voice: ${(buf.byteLength / 1024).toFixed(0)}KB, ${mimeType}`);
@@ -2130,6 +2434,64 @@ serve(async (req) => {
         messageText = messageText ? `${messageText} ${attachmentContext}` : attachmentContext;
     }
 
+    // ── Reply context ──────────────────────────────────────────────────────────
+    // When a user long-presses a message and replies in Telegram, the update
+    // includes `message.reply_to_message` with the full quoted message object.
+    // Instagram does the same via the Graph API (replyToMid flow). We read it
+    // locally here — no extra API call needed for Telegram.
+    if (message.reply_to_message) {
+        const quoted = message.reply_to_message;
+        let quotedText: string | null = null;
+
+        if (quoted.text) {
+            // Plain text message was quoted
+            quotedText = quoted.text.slice(0, 200);
+        } else if (quoted.caption) {
+            // Media with a caption was quoted
+            quotedText = quoted.caption.slice(0, 200);
+        } else if (quoted.voice || quoted.audio) {
+            // User is replying to a voice note — look up the last Riya voice note in DB
+            // (we can't read audio inline here; reuse the Instagram fallback pattern)
+            quotedText = null; // handled below with DB lookup
+            const { data: lastVn } = await supabase
+                .from('riya_conversations')
+                .select('content')
+                .eq('telegram_user_id', tgUserId)
+                .eq('source', 'telegram')
+                .eq('role', 'assistant')
+                .ilike('content', '[🎤 voice note]%')
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .single();
+            if (lastVn) {
+                const spokenText = lastVn.content.replace(/^\[🎤 voice note\]\s*/i, '').trim();
+                messageText = `[Replying to Riya's voice note: "${spokenText.slice(0, 120)}"] ${messageText}`;
+            } else {
+                messageText = `[User is replying to a previous voice note] ${messageText}`;
+            }
+            log.info(tgUserId, `↩️ Voice note reply context injected`);
+        } else if (quoted.photo) {
+            messageText = `[Replying to a photo] ${messageText}`;
+            log.info(tgUserId, `↩️ Photo reply context injected`);
+        } else if (quoted.sticker) {
+            messageText = `[Replying to a sticker] ${messageText}`;
+            log.info(tgUserId, `↩️ Sticker reply context injected`);
+        } else {
+            // Generic media reply
+            messageText = `[Replying to a previous message] ${messageText}`;
+            log.info(tgUserId, `↩️ Generic reply context injected`);
+        }
+
+        // Attach text-based quoted context (covers text / caption cases)
+        if (quotedText) {
+            // Determine whose message was quoted: if from bot, it's Riya's side
+            const isRiyasMessage = quoted.from?.is_bot === true;
+            const speaker = isRiyasMessage ? 'Riya' : 'his message';
+            messageText = `[Replying to ${speaker}: "${quotedText}"] ${messageText}`;
+            log.info(tgUserId, `↩️ Reply context injected: "${quotedText.slice(0, 50)}..."`);
+        }
+    }
+
     if (!messageText && !inlineAudio) {
         log.info('*', '⏭️ No text or known attachment — skipping');
         return new Response('OK', { status: 200 });
@@ -2137,7 +2499,7 @@ serve(async (req) => {
 
     log.info(tgUserId, `📬 Message: "${messageText.slice(0, 80)}"`);
 
-    const parsed: ParsedMessage = { senderId: tgUserId, chatId, messageText, messageId, inlineAudio };
+    const parsed: ParsedMessage = { senderId: tgUserId, chatId, messageText, messageId, inlineAudio, inlineImage };
 
     // Fire-and-forget debounce — respond 200 immediately
     try {

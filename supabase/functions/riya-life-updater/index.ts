@@ -1,6 +1,30 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { GoogleGenerativeAI, SchemaType } from "npm:@google/generative-ai@0.21.0";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
+
+const VERTEX_PROJECT = Deno.env.get('VERTEX_DEFAULT_PROJECT') ?? 'project-daba100c-c6fe-4fef-b20';
+const VERTEX_BASE = `https://aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT}/locations/global/publishers/google/models`;
+
+// API key pool — loaded once at cold start
+let apiKeyPool: string[] = [];
+function initApiKeyPool(): void {
+    const keys: string[] = [];
+    let i = 1;
+    while (true) {
+        const k = Deno.env.get(`GEMINI_API_KEY_${i}`);
+        if (k) { keys.push(k); i++; } else break;
+    }
+    if (keys.length === 0) {
+        const k = Deno.env.get('GEMINI_API_KEY');
+        if (k) keys.push(k);
+    }
+    apiKeyPool = keys;
+    console.log(`✅ riya-life-updater: ${apiKeyPool.length} key(s) loaded`);
+}
+function getPoolKey(): string {
+    if (apiKeyPool.length === 0) throw new Error('No API keys configured');
+    return apiKeyPool[Math.floor(Date.now() / 1000) % apiKeyPool.length];
+}
+initApiKeyPool();
 
 // =======================================
 // CONFIG
@@ -60,19 +84,7 @@ Rules:
 Return ONLY a JSON object. No explanation, no markdown.`;
 }
 
-// =======================================
-// RESPONSE SCHEMA
-// =======================================
-const LIFE_STATE_SCHEMA = {
-    type: SchemaType.OBJECT,
-    properties: {
-        current_focus:      { type: SchemaType.STRING },
-        mood_baseline:      { type: SchemaType.STRING },
-        recent_events:      { type: SchemaType.STRING },
-        background_tension: { type: SchemaType.STRING },
-    },
-    required: ['current_focus', 'mood_baseline', 'recent_events', 'background_tension'],
-};
+// Schema validation is done via JSON.parse + field checks after the API call
 
 // =======================================
 // MAIN HANDLER
@@ -125,15 +137,8 @@ serve(async (req) => {
 
     console.log(`📚 History rows loaded: ${history?.length ?? 0}`);
 
-    // ── 3. Call Gemini ───────────────────────────────────────────────────────
-    const geminiApiKey = Deno.env.get('GEMINI_API_KEY') || Deno.env.get('GEMINI_API_KEY_1');
-    if (!geminiApiKey) {
-        console.error('❌ riya-life-updater: no Gemini API key found');
-        return new Response(JSON.stringify({ error: 'No API key' }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json' },
-        });
-    }
+    // ── 3. Call Vertex AI ────────────────────────────────────────────────────
+    const geminiApiKey = getPoolKey();
 
     const prompt = buildLifeUpdatePrompt(
         {
@@ -148,20 +153,28 @@ serve(async (req) => {
     let newState: { current_focus: string; mood_baseline: string; recent_events: string; background_tension: string } | null = null;
 
     try {
-        const genAI = new GoogleGenerativeAI(geminiApiKey);
-        const model  = genAI.getGenerativeModel({
-            model: LIFE_UPDATE_MODEL,
-            generationConfig: {
-                responseMimeType: 'application/json',
-                responseSchema:   LIFE_STATE_SCHEMA as any,
-                maxOutputTokens:  512,
-                temperature:      0.85,
-            },
-        });
-
-        const result = await model.generateContent(prompt);
-        const raw    = result.response.text();
-        console.log(`🤖 Gemini response (${raw.length} chars): ${raw.slice(0, 200)}`);
+        const vertexRes = await fetch(
+            `${VERTEX_BASE}/${LIFE_UPDATE_MODEL}:generateContent?key=${geminiApiKey}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                    generationConfig: {
+                        responseMimeType: 'application/json',
+                        maxOutputTokens:  512,
+                        temperature:      0.85,
+                    },
+                }),
+            }
+        );
+        if (!vertexRes.ok) {
+            const errText = await vertexRes.text();
+            throw new Error(`Vertex AI ${vertexRes.status}: ${errText.slice(0, 200)}`);
+        }
+        const json = await vertexRes.json();
+        const raw = json.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+        console.log(`🤖 Vertex AI response (${raw.length} chars): ${raw.slice(0, 200)}`);
 
         const parsed = JSON.parse(raw);
 

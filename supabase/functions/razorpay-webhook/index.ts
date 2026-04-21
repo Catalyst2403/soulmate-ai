@@ -77,13 +77,14 @@ serve(async (req) => {
 
         const userId = payment.notes?.user_id === 'instagram_user' ? null : payment.notes?.user_id;
         const instagramUserId = payment.notes?.instagram_user_id;
+        const telegramUserId = payment.notes?.telegram_user_id || null;
         // pack_name takes priority (new credit system), fallback to plan_type for legacy
         const packName = payment.notes?.pack_name || null;
         const planType = payment.notes?.plan_type || 'instagram_monthly';
 
-        console.log(`👤 Processing: User=${userId || 'IG:' + instagramUserId}, Order=${orderId}, Pack=${packName || planType}`);
+        console.log(`👤 Processing: User=${userId || ('IG:' + instagramUserId) || ('TG:' + telegramUserId)}, Order=${orderId}, Pack=${packName || planType}`);
 
-        if (!orderId || (!userId && !instagramUserId)) {
+        if (!orderId || (!userId && !instagramUserId && !telegramUserId)) {
             console.error("❌ Missing identifier in notes");
             return new Response("Missing identifiers", { status: 200 });
         }
@@ -180,6 +181,71 @@ serve(async (req) => {
             }
 
             console.log(`✅ Credit pack activation complete for ${orderId}`);
+            return new Response("Success", { status: 200 });
+        }
+
+        // ============================================================
+        // TELEGRAM CREDIT PACK ACTIVATION
+        // ============================================================
+        if (isCreditPack && telegramUserId) {
+            console.log(`💳 Telegram credit pack: ${packName} for ${telegramUserId}`);
+
+            const { data: pack, error: packErr } = await supabase
+                .from('riya_recharge_packs')
+                .select('id, message_credits, validity_days, display_name')
+                .eq('pack_name', packName)
+                .eq('is_active', true)
+                .single();
+
+            if (packErr || !pack) {
+                console.error(`❌ Pack not found: ${packName}`, packErr);
+                return new Response("Pack not found", { status: 200 });
+            }
+
+            const { data: newBalance, error: rpcErr } = await supabase.rpc('add_telegram_message_credits', {
+                p_tg_user_id:    telegramUserId,
+                p_pack_id:       pack.id,
+                p_credits:       pack.message_credits,
+                p_validity_days: pack.validity_days,
+            });
+
+            if (rpcErr) {
+                console.error(`❌ add_telegram_message_credits RPC failed:`, rpcErr);
+                throw rpcErr;
+            }
+
+            console.log(`✅ Telegram credits added: ${newBalance} remaining for ${telegramUserId}`);
+
+            await supabase
+                .from('riya_payments')
+                .upsert({
+                    razorpay_order_id: orderId,
+                    razorpay_payment_id: paymentId,
+                    telegram_user_id: telegramUserId,
+                    status: 'success',
+                    amount: payment.amount / 100,
+                    updated_at: now.toISOString()
+                }, { onConflict: 'razorpay_order_id' });
+
+            await supabase.from('riya_conversations').insert({
+                telegram_user_id: telegramUserId,
+                source: 'telegram',
+                role: 'user',
+                content: JSON.stringify([{
+                    text: `[SYSTEM EVENT: User just purchased the ${pack.display_name} pack (${pack.message_credits} messages). React warmly but briefly on the next reply — natural, not salesy. Then continue normally.]`
+                }]),
+                model_used: 'system',
+                metadata: { type: 'system_event', event: 'credit_purchase', pack: packName, platform: 'telegram' }
+            });
+
+            try {
+                await supabase.from('riya_payment_events').insert({
+                    event_type: 'payment_success',
+                    metadata: { telegram_user_id: telegramUserId, orderId, paymentId, packName, credits: pack.message_credits, platform: 'telegram', source: 'razorpay-webhook' },
+                });
+            } catch (e) { console.warn('⚠️ analytics log failed:', e); }
+
+            console.log(`✅ Telegram credit pack activation complete for ${orderId}`);
             return new Response("Success", { status: 200 });
         }
 
