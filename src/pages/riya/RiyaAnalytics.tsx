@@ -137,6 +137,13 @@ interface AnalyticsData {
             payments: number; clickRate: string; conversionRate: string;
             recentVisitors: Array<{ id: string; username: string; name: string; visitedAt: string }>;
         };
+        sessionMetrics?: {
+            avgSessionMinutes: number; medianSessionMinutes: number; maxSessionMinutes: number;
+            totalSessions: number; avgSessionsPerUser: number;
+            distribution: Array<{ bucket: string; count: number }>;
+            dailyTrend: Array<{ date: string; avg_session_minutes: number; sessions: number }>;
+            topSessions: Array<{ telegram_user_id: string; username: string; name: string; longest_session_min: number; total_sessions: number; total_messages: number }>;
+        };
     } | null;
     pmfScore: {
         totalAllUsers: number;
@@ -1713,6 +1720,69 @@ ORDER BY c1.created_at DESC;`}</pre>
                                 )}
                             </div>
                         )}
+
+                        {/* Session Time Analytics */}
+                        {analytics.telegramMetrics.sessionMetrics && (() => {
+                            const sm = analytics.telegramMetrics!.sessionMetrics!;
+                            return (
+                                <div className="mb-6">
+                                    <h3 className="font-display text-lg font-semibold text-foreground mb-3 flex items-center gap-2">
+                                        <Clock className="w-5 h-5 text-cyan-400" />
+                                        Session Time Analytics
+                                        <span className="text-xs text-muted-foreground font-normal">(30-min inactivity = new session)</span>
+                                    </h3>
+                                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
+                                        {[
+                                            { label: 'Avg Session', value: `${sm.avgSessionMinutes.toFixed(2)} min` },
+                                            { label: 'Median Session', value: `${sm.medianSessionMinutes.toFixed(2)} min` },
+                                            { label: 'Longest Session 🔥', value: `${sm.maxSessionMinutes.toFixed(2)} min`, highlight: true },
+                                            { label: 'Total Sessions', value: sm.totalSessions.toLocaleString() },
+                                            { label: 'Sessions / User', value: sm.avgSessionsPerUser.toFixed(2) },
+                                        ].map((c) => (
+                                            <div key={c.label} className={`p-4 rounded-xl text-center ${c.highlight ? 'bg-orange-500/10 border border-orange-500/20' : 'bg-cyan-500/10'}`}>
+                                                <p className="text-muted-foreground text-xs mb-1">{c.label}</p>
+                                                <p className="font-display text-xl font-bold text-foreground">{c.value}</p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    {sm.distribution.some(d => d.count > 0) && (
+                                        <div className="h-48 mb-4">
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <BarChart data={sm.distribution}>
+                                                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(240, 10%, 20%)" />
+                                                    <XAxis dataKey="bucket" stroke="hsl(240, 5%, 65%)" tick={{ fontSize: 11 }} />
+                                                    <YAxis stroke="hsl(240, 5%, 65%)" tick={{ fontSize: 11 }} />
+                                                    <Tooltip contentStyle={{ backgroundColor: 'hsl(240, 10%, 8%)', border: '1px solid hsl(240, 10%, 20%)', borderRadius: '8px' }} />
+                                                    <Bar dataKey="count" fill="hsl(190, 80%, 50%)" name="Sessions" radius={[4, 4, 0, 0]} />
+                                                </BarChart>
+                                            </ResponsiveContainer>
+                                        </div>
+                                    )}
+                                    {sm.topSessions.length > 0 && (
+                                        <div>
+                                            <p className="text-sm font-semibold text-muted-foreground mb-2">🏆 Top Session Users</p>
+                                            <div className="space-y-2">
+                                                {sm.topSessions.map((u, i) => (
+                                                    <div key={i} className="flex items-center justify-between p-3 rounded-lg bg-cyan-500/5 border border-cyan-500/10">
+                                                        <div className="flex items-center gap-3 min-w-0">
+                                                            <span className="text-muted-foreground text-sm font-mono w-5 shrink-0">{i + 1}</span>
+                                                            <div className="min-w-0">
+                                                                <p className="text-sm font-medium text-foreground">@{u.username}</p>
+                                                                <p className="text-xs text-muted-foreground truncate">{u.name}</p>
+                                                            </div>
+                                                        </div>
+                                                        <div className="text-right shrink-0 ml-3">
+                                                            <p className="text-sm font-bold text-cyan-400">{u.longest_session_min} min</p>
+                                                            <p className="text-[10px] text-muted-foreground">{u.total_sessions} sessions · {u.total_messages} msgs</p>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })()}
 
                         {/* Daily Activity Chart */}
                         {(() => {
