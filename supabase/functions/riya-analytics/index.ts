@@ -579,7 +579,13 @@ serve(async (req) => {
 
         const tgDauMauRatio = tgMau > 0 ? ((tgDau / tgMau) * 100).toFixed(1) : '0';
 
-        const totalTgMessages = tgUsers?.reduce((sum: number, u: any) => sum + (u.message_count || 0), 0) || 0;
+        // Total messages from riya_conversations (source of truth — avoids drift in message_count counter)
+        const { count: tgConvCount } = await supabase
+            .from('riya_conversations')
+            .select('*', { count: 'exact', head: true })
+            .eq('source', 'telegram')
+            .eq('role', 'user');
+        const totalTgMessages = tgConvCount || 0;
         const avgTgMsgsPerUser = totalTgUsers > 0 ? (totalTgMessages / totalTgUsers).toFixed(2) : '0';
         const tgApproxCostINR = (totalTgMessages * 0.08).toFixed(2);
 
@@ -702,6 +708,31 @@ serve(async (req) => {
                 revenue: (Number(d.revenue) || 0) / 100,
             })),
         } : null;
+
+        // TG Session Metrics via RPC
+        console.log('⏱️ Fetching TG session metrics...');
+        const { data: tgSessionRpc, error: tgSessionError } = await supabase
+            .rpc('get_telegram_session_metrics', { days_lookback: daysLookback });
+        if (tgSessionError) console.error('Error fetching TG session metrics:', tgSessionError);
+
+        const tgSessionRow = tgSessionRpc?.[0] || {};
+        const tgSessionMetrics = {
+            avgSessionMinutes: Number(tgSessionRow.avg_session_minutes) || 0,
+            medianSessionMinutes: Number(tgSessionRow.median_session_minutes) || 0,
+            maxSessionMinutes: Number(tgSessionRow.max_session_minutes) || 0,
+            totalSessions: Number(tgSessionRow.total_sessions) || 0,
+            avgSessionsPerUser: Number(tgSessionRow.avg_sessions_per_user) || 0,
+            distribution: [
+                { bucket: '0-5 min',  count: Number(tgSessionRow.bucket_0_5) || 0 },
+                { bucket: '5-15 min', count: Number(tgSessionRow.bucket_5_15) || 0 },
+                { bucket: '15-30 min',count: Number(tgSessionRow.bucket_15_30) || 0 },
+                { bucket: '30-60 min',count: Number(tgSessionRow.bucket_30_60) || 0 },
+                { bucket: '60+ min',  count: Number(tgSessionRow.bucket_60_plus) || 0 },
+            ],
+            dailyTrend: tgSessionRow.daily_data || [],
+            topSessions: tgSessionRow.top_sessions || [],
+        };
+        console.log(`⏱️ TG Sessions: ${tgSessionMetrics.totalSessions} total, avg=${tgSessionMetrics.avgSessionMinutes}min`);
 
         // Payment funnel for Telegram (from riya_payment_events.metadata.telegram_user_id)
         const tgPaymentSinceISO = sinceISO
@@ -927,6 +958,7 @@ serve(async (req) => {
                 dailyActivity: tgDailyActivity,
                 proUsers: tgProUsers,
                 aggregateMetrics: tgAggregateMetrics,
+                sessionMetrics: tgSessionMetrics,
                 paymentFunnel: tgPaymentFunnel,
             },
             pmfScore: {
