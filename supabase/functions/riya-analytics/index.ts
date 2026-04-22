@@ -551,6 +551,205 @@ serve(async (req) => {
         console.log(`🎯 PMF: ${totalAllUsers} total, ${dauPercentage}% DAU, D7=${combinedD7}%, verdict=${pmfVerdict}`);
 
         // ============================================
+        // 11. TELEGRAM METRICS
+        // ============================================
+        console.log('📱 Fetching Telegram metrics...');
+
+        let tgUsersQuery = supabase
+            .from('telegram_users')
+            .select('id, telegram_user_id, telegram_username, first_name, message_count, message_credits, total_credits_purchased, last_message_at, created_at, chat_streak_days');
+        if (sinceISO) tgUsersQuery = tgUsersQuery.gte('created_at', sinceISO);
+        const { data: tgUsers } = await tgUsersQuery;
+
+        const totalTgUsers = tgUsers?.length || 0;
+
+        const oneDayAgoTg = new Date();
+        oneDayAgoTg.setDate(oneDayAgoTg.getDate() - 1);
+        const tgDau = tgUsers?.filter((u: any) => {
+            if (!u.last_message_at) return false;
+            return new Date(u.last_message_at) >= oneDayAgoTg;
+        }).length || 0;
+
+        const thirtyDaysAgoTg = new Date();
+        thirtyDaysAgoTg.setDate(thirtyDaysAgoTg.getDate() - 30);
+        const tgMau = tgUsers?.filter((u: any) => {
+            if (!u.last_message_at) return false;
+            return new Date(u.last_message_at) >= thirtyDaysAgoTg;
+        }).length || 0;
+
+        const tgDauMauRatio = tgMau > 0 ? ((tgDau / tgMau) * 100).toFixed(1) : '0';
+
+        const totalTgMessages = tgUsers?.reduce((sum: number, u: any) => sum + (u.message_count || 0), 0) || 0;
+        const avgTgMsgsPerUser = totalTgUsers > 0 ? (totalTgMessages / totalTgUsers).toFixed(2) : '0';
+        const tgApproxCostINR = (totalTgMessages * 0.08).toFixed(2);
+
+        // Tiers: trial (<50 msgs), paid (credits > 0), free (post-trial, no credits)
+        const TG_TRIAL_LIMIT = 50;
+        const tgInTrial = tgUsers?.filter((u: any) => (u.message_count || 0) < TG_TRIAL_LIMIT).length || 0;
+        const tgPaidUsers = tgUsers?.filter((u: any) => (u.message_credits || 0) > 0).length || 0;
+        const tgFreeUsers = totalTgUsers - tgInTrial - tgPaidUsers;
+
+        // User classification tiers
+        const tgTiers = { '0-10': 0, '11-50': 0, '51-100': 0, '101-200': 0, '201-500': 0, '500+': 0 };
+        tgUsers?.forEach((u: any) => {
+            const count = u.message_count || 0;
+            if (count <= 10) tgTiers['0-10']++;
+            else if (count <= 50) tgTiers['11-50']++;
+            else if (count <= 100) tgTiers['51-100']++;
+            else if (count <= 200) tgTiers['101-200']++;
+            else if (count <= 500) tgTiers['201-500']++;
+            else tgTiers['500+']++;
+        });
+
+        // Retention (D1, D3, D7, D30) based on last_message_at vs created_at
+        const calculateTgRetention = (days: number) => {
+            const eligible = tgUsers?.filter((u: any) => {
+                const created = new Date(u.created_at);
+                const cutoff = new Date();
+                cutoff.setDate(cutoff.getDate() - days);
+                return created <= cutoff;
+            }) || [];
+            if (eligible.length === 0) return '0';
+            const retained = eligible.filter((u: any) => {
+                if (!u.last_message_at) return false;
+                const created = new Date(u.created_at);
+                const lastMsg = new Date(u.last_message_at);
+                const targetDate = new Date(created);
+                targetDate.setDate(targetDate.getDate() + days);
+                return lastMsg >= targetDate;
+            }).length;
+            return ((retained / eligible.length) * 100).toFixed(2);
+        };
+        const tgD1 = calculateTgRetention(1);
+        const tgD3 = calculateTgRetention(3);
+        const tgD7 = calculateTgRetention(7);
+        const tgD30 = calculateTgRetention(30);
+
+        // New users per day
+        const tgNewUsersPerDay: Record<string, number> = {};
+        tgUsers?.forEach((u: any) => {
+            const date = new Date(u.created_at).toISOString().split('T')[0];
+            tgNewUsersPerDay[date] = (tgNewUsersPerDay[date] || 0) + 1;
+        });
+        const tgNewUsersTrend = Object.entries(tgNewUsersPerDay)
+            .map(([date, count]) => ({ date, new_users: count }))
+            .sort((a, b) => b.date.localeCompare(a.date));
+
+        // MRR from riya_payments (Telegram)
+        const { data: tgPayments } = await supabase
+            .from('riya_payments')
+            .select('amount, status, created_at, telegram_user_id')
+            .not('telegram_user_id', 'is', null)
+            .eq('status', 'captured');
+
+        const tgMrr = tgPayments?.reduce((sum: number, p: any) => sum + (p.amount || 0), 0) || 0;
+
+        // Revenue by date
+        const tgRevenueByDate: Record<string, number> = {};
+        tgPayments?.forEach((p: any) => {
+            if (p.created_at) {
+                const date = new Date(p.created_at).toISOString().split('T')[0];
+                tgRevenueByDate[date] = (tgRevenueByDate[date] || 0) + (p.amount || 0);
+            }
+        });
+
+        // Pro users list (paid users with credits)
+        const tgProUsers = tgUsers?.filter((u: any) => (u.message_credits || 0) > 0)
+            .map((u: any) => ({
+                name: u.first_name || 'Telegram User',
+                username: u.telegram_username || u.telegram_user_id,
+                messageCount: u.message_count || 0,
+                credits: u.message_credits || 0,
+            }))
+            .sort((a: any, b: any) => b.messageCount - a.messageCount) || [];
+
+        // Daily activity via RPC
+        const { data: tgDailyActivityRpc, error: tgDailyError } = await supabase
+            .rpc('get_telegram_daily_activity', { days_lookback: daysLookback });
+        if (tgDailyError) console.error('Error fetching TG daily activity:', tgDailyError);
+
+        const tgDailyActivity = (tgDailyActivityRpc || []).map((d: any) => ({
+            date: d.activity_date,
+            active_users: Number(d.active_users) || 0,
+            messages: Number(d.message_count) || 0,
+            approx_cost: parseFloat((Number(d.message_count) * 0.08).toFixed(2)),
+            daily_revenue: tgRevenueByDate[d.activity_date] || 0,
+        }));
+
+        // Aggregate metrics via RPC
+        const { data: tgAggRpc, error: tgAggError } = await supabase
+            .rpc('get_telegram_aggregate_metrics', { p_days: daysLookback });
+        if (tgAggError) console.error('Error fetching TG aggregate metrics:', tgAggError);
+
+        const tgAggRow = tgAggRpc?.[0] || {};
+        const tgAggregateMetrics = tgAggRow && Object.keys(tgAggRow).length > 0 ? {
+            period: daysLookback,
+            avgDau: Math.round(Number(tgAggRow.avg_dau) || 0),
+            mau: Number(tgAggRow.mau) || tgMau,
+            dauMauRatio: Number(tgAggRow.avg_dau_mau_ratio) > 0
+                ? Number(tgAggRow.avg_dau_mau_ratio).toFixed(1)
+                : tgMau > 0 ? ((tgDau / tgMau) * 100).toFixed(1) : '0',
+            avgNewUsersPerDay: Math.round(Number(tgAggRow.avg_new_users_per_day) || 0),
+            totalNewUsers: Number(tgAggRow.total_new_users_period) || 0,
+            avgMsgsPerActiveDay: Math.round(Number(tgAggRow.avg_msgs_per_active_day) || 0),
+            totalRevenueINR: Math.round((Number(tgAggRow.total_revenue_period) || 0) / 100).toString(),
+            avgDailyRevenueINR: (Number(tgAggRow.avg_revenue_per_day) || 0) / 100,
+            dailyBreakdown: (tgAggRow.daily_breakdown || []).map((d: any) => ({
+                date: d.date,
+                dau: Number(d.dau) || 0,
+                messages: Number(d.messages) || 0,
+                new_users: Number(d.new_users) || 0,
+                revenue: (Number(d.revenue) || 0) / 100,
+            })),
+        } : null;
+
+        // Payment funnel for Telegram (from riya_payment_events.metadata.telegram_user_id)
+        const tgPaymentSinceISO = sinceISO
+            ? (new Date(sinceISO) > thirtyDaysAgoTg ? sinceISO : thirtyDaysAgoTg.toISOString())
+            : thirtyDaysAgoTg.toISOString();
+        const { data: tgPaymentEvents } = await supabase
+            .from('riya_payment_events')
+            .select('event_type, metadata, created_at')
+            .gte('created_at', tgPaymentSinceISO)
+            .or('metadata->>platform.eq.telegram,metadata->>telegram_user_id.neq.');
+
+        const tgPageVisits = tgPaymentEvents?.filter((e: any) =>
+            e.event_type === 'page_visit' &&
+            (e.metadata?.platform === 'telegram' || e.metadata?.telegram_user_id)
+        ).length || 0;
+        const tgUpgradeClicks = tgPaymentEvents?.filter((e: any) =>
+            e.event_type === 'upgrade_click' &&
+            (e.metadata?.platform === 'telegram' || e.metadata?.telegram_user_id)
+        ).length || 0;
+        const tgPaymentSuccesses = tgPaymentEvents?.filter((e: any) =>
+            e.event_type === 'payment_success' &&
+            (e.metadata?.platform === 'telegram' || e.metadata?.telegram_user_id)
+        ).length || 0;
+
+        // Unique Telegram users who visited the payment page (last 30 days)
+        const tgPageVisitUserIds = [...new Set(
+            (tgPaymentEvents || [])
+                .filter((e: any) =>
+                    e.event_type === 'page_visit' &&
+                    (e.metadata?.platform === 'telegram' || e.metadata?.telegram_user_id)
+                )
+                .map((e: any) => e.metadata?.telegram_user_id)
+                .filter(Boolean)
+        )];
+
+        const tgPaymentFunnel = {
+            pageVisits: tgPageVisits,
+            uniqueVisitors: tgPageVisitUserIds.length,
+            upgradeClicks: tgUpgradeClicks,
+            payments: tgPaymentSuccesses,
+            clickRate: tgPageVisits > 0 ? ((tgUpgradeClicks / tgPageVisits) * 100).toFixed(1) : '0',
+            conversionRate: tgUpgradeClicks > 0 ? ((tgPaymentSuccesses / tgUpgradeClicks) * 100).toFixed(1) : '0',
+            recentVisitors: tgPageVisitUserIds.slice(0, 20), // last 20 unique visitor IDs for drill-down
+        };
+
+        console.log(`📱 TG: ${totalTgUsers} users, ${tgDau} DAU, ${totalTgMessages} msgs, cost≈₹${tgApproxCostINR}, pageVisits=${tgPageVisits}`);
+
+        // ============================================
         // 10. EXTERNAL INTEGRATIONS (Optional)
         // ============================================
         let googleCloudBilling = null;
@@ -685,6 +884,33 @@ serve(async (req) => {
                 mrr: mrr.toFixed(2),
                 sessionMetrics: sessionMetrics,
                 paymentFunnel: paymentFunnel
+            },
+            telegramMetrics: {
+                total: totalTgUsers,
+                dau: tgDau,
+                mau: tgMau,
+                dauMauRatio: tgDauMauRatio,
+                totalMessages: totalTgMessages,
+                avgMsgsPerUser: avgTgMsgsPerUser,
+                inTrial: tgInTrial,
+                paidUsers: tgPaidUsers,
+                freeUsers: tgFreeUsers,
+                approxCostINR: tgApproxCostINR,
+                mrr: tgMrr.toFixed(2),
+                classification: [
+                    { tier: '0-10 msgs', count: tgTiers['0-10'] },
+                    { tier: '11-50 msgs', count: tgTiers['11-50'] },
+                    { tier: '51-100 msgs', count: tgTiers['51-100'] },
+                    { tier: '101-200 msgs', count: tgTiers['101-200'] },
+                    { tier: '201-500 msgs', count: tgTiers['201-500'] },
+                    { tier: '500+ msgs', count: tgTiers['500+'] },
+                ],
+                retention: { d1: tgD1, d3: tgD3, d7: tgD7, d30: tgD30 },
+                newUsersTrend: tgNewUsersTrend,
+                dailyActivity: tgDailyActivity,
+                proUsers: tgProUsers,
+                aggregateMetrics: tgAggregateMetrics,
+                paymentFunnel: tgPaymentFunnel,
             },
             pmfScore: {
                 totalAllUsers: totalAllUsers,
