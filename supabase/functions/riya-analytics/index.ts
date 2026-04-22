@@ -727,24 +727,41 @@ serve(async (req) => {
         ).length || 0;
 
         // Unique Telegram users who visited the payment page (last 30 days)
-        const tgPageVisitUserIds = [...new Set(
-            (tgPaymentEvents || [])
-                .filter((e: any) =>
-                    e.event_type === 'page_visit' &&
-                    (e.metadata?.platform === 'telegram' || e.metadata?.telegram_user_id)
-                )
-                .map((e: any) => e.metadata?.telegram_user_id)
-                .filter(Boolean)
-        )];
+        // Build a map of telegram_user_id -> { username, name } from already-fetched tgUsers
+        const tgUserMap = new Map<string, { username: string; name: string }>(
+            (tgUsers || []).map((u: any) => [
+                u.telegram_user_id,
+                { username: u.telegram_username || '', name: u.first_name || 'Telegram User' }
+            ])
+        );
+
+        // Deduplicate visitors, preserving most-recent first (events are unsorted)
+        const tgVisitorMap = new Map<string, { id: string; username: string; name: string; visitedAt: string }>();
+        (tgPaymentEvents || [])
+            .filter((e: any) =>
+                e.event_type === 'page_visit' &&
+                (e.metadata?.platform === 'telegram' || e.metadata?.telegram_user_id)
+            )
+            .sort((a: any, b: any) => b.created_at?.localeCompare(a.created_at))
+            .forEach((e: any) => {
+                const id = e.metadata?.telegram_user_id;
+                if (!id) return;
+                if (!tgVisitorMap.has(id)) {
+                    const info = tgUserMap.get(id) || { username: '', name: 'Telegram User' };
+                    tgVisitorMap.set(id, { id, username: info.username, name: info.name, visitedAt: e.created_at });
+                }
+            });
+
+        const tgRecentVisitors = [...tgVisitorMap.values()].slice(0, 20);
 
         const tgPaymentFunnel = {
             pageVisits: tgPageVisits,
-            uniqueVisitors: tgPageVisitUserIds.length,
+            uniqueVisitors: tgVisitorMap.size,
             upgradeClicks: tgUpgradeClicks,
             payments: tgPaymentSuccesses,
             clickRate: tgPageVisits > 0 ? ((tgUpgradeClicks / tgPageVisits) * 100).toFixed(1) : '0',
             conversionRate: tgUpgradeClicks > 0 ? ((tgPaymentSuccesses / tgUpgradeClicks) * 100).toFixed(1) : '0',
-            recentVisitors: tgPageVisitUserIds.slice(0, 20), // last 20 unique visitor IDs for drill-down
+            recentVisitors: tgRecentVisitors,
         };
 
         console.log(`📱 TG: ${totalTgUsers} users, ${tgDau} DAU, ${totalTgMessages} msgs, cost≈₹${tgApproxCostINR}, pageVisits=${tgPageVisits}`);
