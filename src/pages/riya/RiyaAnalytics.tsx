@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { Users, MessageSquare, TrendingUp, Lock, DollarSign, Activity, RefreshCw, Instagram, Target, Crown, Clock, AlertCircle, Terminal, Search, Filter, ChevronDown, ChevronRight } from 'lucide-react';
+import { Users, MessageSquare, TrendingUp, Lock, DollarSign, Activity, RefreshCw, Instagram, Target, Crown, Clock, AlertCircle, Terminal, Search, Filter, ChevronDown, ChevronRight, Send } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -109,6 +109,35 @@ interface AnalyticsData {
             conversionRate: string;
         };
     } | null;
+    telegramMetrics: {
+        total: number;
+        dau: number;
+        mau: number;
+        dauMauRatio: string;
+        totalMessages: number;
+        avgMsgsPerUser: string;
+        inTrial: number;
+        paidUsers: number;
+        freeUsers: number;
+        approxCostINR: string;
+        mrr: string;
+        classification: Array<{ tier: string; count: number }>;
+        retention: { d1: string; d3: string; d7: string; d30: string };
+        newUsersTrend: Array<{ date: string; new_users: number }>;
+        dailyActivity: Array<{ date: string; active_users: number; messages: number; approx_cost: number; daily_revenue: number }>;
+        proUsers: Array<{ name: string; username: string; messageCount: number; credits: number }>;
+        aggregateMetrics?: {
+            period: number; avgDau: number; mau: number; dauMauRatio: string;
+            avgNewUsersPerDay: number; totalNewUsers: number; avgMsgsPerActiveDay: number;
+            totalRevenueINR: string; avgDailyRevenueINR: number;
+            dailyBreakdown: Array<{ date: string; dau: number; messages: number; new_users: number; revenue: number }>;
+        };
+        paymentFunnel?: {
+            pageVisits: number; uniqueVisitors: number; upgradeClicks: number;
+            payments: number; clickRate: string; conversionRate: string;
+            recentVisitors: string[];
+        };
+    } | null;
     pmfScore: {
         totalAllUsers: number;
         totalAllDau: number;
@@ -154,7 +183,7 @@ const RiyaAnalytics = () => {
     const [isLoading, setIsLoading] = useState(false);
     const [activeUsersInterval, setActiveUsersInterval] = useState('7 days');
     const [sinceDate, setSinceDate] = useState(''); // '' = all time; 'YYYY-MM-DD' = filter
-    const [analyticsView, setAnalyticsView] = useState<'combined' | 'web' | 'instagram' | 'logs'>('instagram');
+    const [analyticsView, setAnalyticsView] = useState<'combined' | 'web' | 'instagram' | 'telegram' | 'logs'>('instagram');
 
     // Log viewer state
     const [logs, setLogs] = useState<any[]>([]);
@@ -500,18 +529,21 @@ const RiyaAnalytics = () => {
                     transition={{ delay: 0.02 }}
                     className="flex gap-2 mb-6"
                 >
-                    {(['combined', 'web', 'instagram', 'logs'] as const).map((view) => (
+                    {(['combined', 'web', 'instagram', 'telegram', 'logs'] as const).map((view) => (
                         <button
                             key={view}
                             onClick={() => setAnalyticsView(view)}
-                            className={`px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 ${analyticsView === view
-                                ? view === 'instagram'
-                                    ? 'bg-pink-500/20 text-pink-400 ring-1 ring-pink-500/40'
-                                    : 'bg-primary/20 text-primary ring-1 ring-primary/40'
-                                : 'bg-muted/10 text-muted-foreground hover:bg-muted/20'
-                                }`}
+                            className={`px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 ${
+                                analyticsView === view
+                                    ? view === 'instagram'
+                                        ? 'bg-pink-500/20 text-pink-400 ring-1 ring-pink-500/40'
+                                        : view === 'telegram'
+                                            ? 'bg-cyan-500/20 text-cyan-400 ring-1 ring-cyan-500/40'
+                                            : 'bg-primary/20 text-primary ring-1 ring-primary/40'
+                                    : 'bg-muted/10 text-muted-foreground hover:bg-muted/20'
+                            }`}
                         >
-                            {view === 'combined' ? '📊 Combined' : view === 'web' ? '🌐 Web' : view === 'instagram' ? '📸 Instagram' : '🔍 Logs'}
+                            {view === 'combined' ? '📊 Combined' : view === 'web' ? '🌐 Web' : view === 'instagram' ? '📸 Instagram' : view === 'telegram' ? '✈️ Telegram' : '🔍 Logs'}
                         </button>
                     ))}
                 </motion.div>
@@ -1569,6 +1601,262 @@ ORDER BY c1.created_at DESC;`}</pre>
                                         </div>
                                     </div>
                                 )}
+                            </div>
+                        </div>
+                    </motion.div>
+                )}
+
+                {/* ===== TELEGRAM METRICS ===== */}
+                {(analyticsView === 'combined' || analyticsView === 'telegram') && analytics.telegramMetrics && (
+                    <motion.div
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: 0.55 }}
+                        className="glass-card p-6 mb-6"
+                    >
+                        <h2 className="font-display text-xl font-semibold text-foreground mb-4 flex items-center gap-2">
+                            <Send className="w-5 h-5 text-cyan-400" />
+                            Telegram Metrics
+                        </h2>
+
+                        {/* Stat cards */}
+                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+                            {[
+                                { label: 'TG Users', value: analytics.telegramMetrics.total },
+                                { label: 'TG DAU', value: analytics.telegramMetrics.dau },
+                                { label: 'TG MAU', value: analytics.telegramMetrics.mau },
+                                { label: 'DAU / MAU', value: `${analytics.telegramMetrics.dauMauRatio}%` },
+                                { label: 'Total Msgs', value: analytics.telegramMetrics.totalMessages.toLocaleString() },
+                                { label: 'Avg Msgs/User', value: analytics.telegramMetrics.avgMsgsPerUser },
+                            ].map((card) => (
+                                <div key={card.label} className="p-4 rounded-xl bg-cyan-500/10">
+                                    <p className="text-muted-foreground text-sm">{card.label}</p>
+                                    <p className="font-display text-2xl font-bold text-foreground">{card.value}</p>
+                                </div>
+                            ))}
+                            <div className="p-4 rounded-xl bg-cyan-500/10">
+                                <p className="text-muted-foreground text-sm">Trial / Paid / Free</p>
+                                <p className="font-display text-lg font-bold text-foreground">
+                                    {analytics.telegramMetrics.inTrial}
+                                    <span className="text-sm text-muted-foreground"> / {analytics.telegramMetrics.paidUsers} / {analytics.telegramMetrics.freeUsers}</span>
+                                </p>
+                            </div>
+                            <div className="p-4 rounded-xl bg-cyan-500/10">
+                                <p className="text-muted-foreground text-sm">Approx Cost</p>
+                                <p className="font-display text-2xl font-bold text-foreground">₹{analytics.telegramMetrics.approxCostINR}</p>
+                                <p className="text-xs text-muted-foreground mt-0.5">msgs × ₹0.08</p>
+                            </div>
+                            <div className="p-4 rounded-xl bg-cyan-500/10">
+                                <p className="text-muted-foreground text-sm">Total Revenue</p>
+                                <p className="font-display text-2xl font-bold text-foreground">₹{(parseFloat(analytics.telegramMetrics.mrr) / 100).toFixed(0)}</p>
+                            </div>
+                        </div>
+
+                        {/* Payment Funnel */}
+                        {analytics.telegramMetrics.paymentFunnel && (
+                            <div className="mb-6">
+                                <h3 className="font-display text-lg font-semibold text-foreground mb-3 flex items-center gap-2">
+                                    <DollarSign className="w-5 h-5 text-green-400" />
+                                    Payment Funnel
+                                    <span className="text-xs text-muted-foreground font-normal">(last 30 days)</span>
+                                </h3>
+                                <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-3">
+                                    <div className="p-4 rounded-xl bg-purple-500/10 text-center">
+                                        <p className="text-muted-foreground text-sm">Page Visits</p>
+                                        <p className="font-display text-2xl font-bold text-foreground">{analytics.telegramMetrics.paymentFunnel.pageVisits}</p>
+                                        <p className="text-xs text-muted-foreground mt-0.5">total hits</p>
+                                    </div>
+                                    <div className="p-4 rounded-xl bg-blue-500/10 text-center">
+                                        <p className="text-muted-foreground text-sm">Unique Visitors</p>
+                                        <p className="font-display text-2xl font-bold text-foreground">{analytics.telegramMetrics.paymentFunnel.uniqueVisitors}</p>
+                                        <p className="text-xs text-muted-foreground mt-0.5">distinct users</p>
+                                    </div>
+                                    <div className="p-4 rounded-xl bg-pink-500/10 text-center">
+                                        <p className="text-muted-foreground text-sm">Upgrade Clicks</p>
+                                        <p className="font-display text-2xl font-bold text-foreground">{analytics.telegramMetrics.paymentFunnel.upgradeClicks}</p>
+                                        <p className="text-xs text-muted-foreground mt-0.5">{analytics.telegramMetrics.paymentFunnel.clickRate}% of visits</p>
+                                    </div>
+                                    <div className="p-4 rounded-xl bg-green-500/10 text-center">
+                                        <p className="text-muted-foreground text-sm">Payments</p>
+                                        <p className="font-display text-2xl font-bold text-foreground">{analytics.telegramMetrics.paymentFunnel.payments}</p>
+                                        <p className="text-xs text-muted-foreground mt-0.5">{analytics.telegramMetrics.paymentFunnel.conversionRate}% of clicks</p>
+                                    </div>
+                                    <div className="p-4 rounded-xl bg-cyan-500/10 text-center">
+                                        <p className="text-muted-foreground text-sm">Visit → Pay</p>
+                                        <p className="font-display text-2xl font-bold text-foreground">
+                                            {analytics.telegramMetrics.paymentFunnel.uniqueVisitors > 0
+                                                ? ((analytics.telegramMetrics.paymentFunnel.payments / analytics.telegramMetrics.paymentFunnel.uniqueVisitors) * 100).toFixed(1)
+                                                : '0'}%
+                                        </p>
+                                        <p className="text-xs text-muted-foreground mt-0.5">overall conv.</p>
+                                    </div>
+                                </div>
+                                {/* Recent visitor IDs */}
+                                {analytics.telegramMetrics.paymentFunnel.recentVisitors.length > 0 && (
+                                    <div className="p-3 rounded-lg bg-muted/10 border border-border/30">
+                                        <p className="text-xs font-semibold text-muted-foreground mb-2">Recent payment page visitors (Telegram IDs):</p>
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {analytics.telegramMetrics.paymentFunnel.recentVisitors.map((id, i) => (
+                                                <span key={i} className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">{id}</span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* Daily Activity Chart */}
+                        {(() => {
+                            const dailyData = analytics.telegramMetrics?.dailyActivity || [];
+                            const combined = [...dailyData]
+                                .sort((a, b) => a.date.localeCompare(b.date));
+                            if (combined.length === 0) return null;
+                            return (
+                                <div className="mb-6">
+                                    <h3 className="font-display text-lg font-semibold text-foreground mb-3">TG Daily Overview</h3>
+                                    <div className="h-72">
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            <BarChart data={combined}>
+                                                <CartesianGrid strokeDasharray="3 3" stroke="hsl(240, 10%, 20%)" />
+                                                <XAxis dataKey="date" stroke="hsl(240, 5%, 65%)"
+                                                    tickFormatter={(v: string) => {
+                                                        const d = new Date(v + 'T00:00:00');
+                                                        return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                                                    }}
+                                                />
+                                                <YAxis stroke="hsl(240, 5%, 65%)" />
+                                                <Tooltip contentStyle={{ backgroundColor: 'hsl(240, 10%, 8%)', border: '1px solid hsl(240, 10%, 20%)', borderRadius: '8px' }} />
+                                                <Legend />
+                                                <Bar dataKey="messages" fill="hsl(190, 80%, 50%)" name="Messages" radius={[4, 4, 0, 0]} />
+                                                <Bar dataKey="approx_cost" fill="hsl(45, 90%, 55%)" name="Approx Cost (₹)" radius={[4, 4, 0, 0]} />
+                                                <Bar dataKey="daily_revenue" fill="hsl(150, 100%, 40%)" name="Revenue (₹)" radius={[4, 4, 0, 0]} />
+                                                <Bar dataKey="active_users" fill="hsl(200, 100%, 60%)" name="Active Users" radius={[4, 4, 0, 0]} />
+                                            </BarChart>
+                                        </ResponsiveContainer>
+                                    </div>
+                                </div>
+                            );
+                        })()}
+
+                        {/* Aggregate Metrics */}
+                        {analytics.telegramMetrics.aggregateMetrics && (() => {
+                            const ag = analytics.telegramMetrics!.aggregateMetrics!;
+                            const breakdown = [...(ag.dailyBreakdown || [])].sort((a, b) => a.date.localeCompare(b.date));
+                            const last7 = breakdown.slice(-7);
+                            const avg7Dau = last7.length ? Math.round(last7.reduce((s, d) => s + d.dau, 0) / last7.length) : 0;
+                            const todayStr = new Date().toISOString().split('T')[0];
+                            const todayEntry = breakdown.find(d => d.date === todayStr);
+                            return (
+                                <div className="mb-6">
+                                    <h3 className="font-display text-lg font-semibold text-foreground mb-3 flex items-center gap-2">
+                                        <TrendingUp className="w-5 h-5 text-cyan-400" />
+                                        Aggregate Metrics
+                                        <span className="text-xs text-muted-foreground font-normal">({ag.period}d rolling)</span>
+                                    </h3>
+                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                                        {[
+                                            { label: 'Avg DAU', value: ag.avgDau, sub: `7d avg: ${avg7Dau}` },
+                                            { label: 'MAU (30d)', value: ag.mau, sub: '' },
+                                            { label: 'Stickiness', value: `${ag.dauMauRatio}%`, sub: 'DAU/MAU', color: parseFloat(ag.dauMauRatio) >= 20 ? 'text-green-400' : parseFloat(ag.dauMauRatio) >= 10 ? 'text-yellow-400' : 'text-foreground' },
+                                            { label: 'Avg New/Day', value: ag.avgNewUsersPerDay, sub: `Total: ${ag.totalNewUsers}` },
+                                            { label: `Total Rev (${ag.period}d)`, value: `₹${ag.totalRevenueINR}`, sub: '', green: true },
+                                            { label: 'Avg Daily Rev', value: `₹${ag.avgDailyRevenueINR.toFixed(0)}`, sub: '', green: true },
+                                            { label: 'Today DAU', value: todayEntry?.dau ?? '—', sub: '' },
+                                            { label: '7d Avg DAU', value: avg7Dau, sub: '' },
+                                        ].map((c: any) => (
+                                            <div key={c.label} className={`p-4 rounded-xl text-center ${c.green ? 'bg-green-500/10' : 'bg-cyan-500/10'}`}>
+                                                <p className="text-muted-foreground text-xs mb-1">{c.label}</p>
+                                                <p className={`font-display text-2xl font-bold ${c.color || 'text-foreground'}`}>{c.value}</p>
+                                                {c.sub && <p className="text-[10px] text-muted-foreground mt-1">{c.sub}</p>}
+                                            </div>
+                                        ))}
+                                    </div>
+                                    {breakdown.length > 0 && (
+                                        <div className="h-56">
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <LineChart data={breakdown.slice(-30).map((d, i, arr) => {
+                                                    const window = arr.slice(Math.max(0, i - 6), i + 1);
+                                                    return { date: d.date, dau: d.dau, '7d avg': Math.round(window.reduce((s, x) => s + x.dau, 0) / window.length), new_users: d.new_users };
+                                                })}>
+                                                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(240, 10%, 20%)" />
+                                                    <XAxis dataKey="date" stroke="hsl(240, 5%, 65%)" tick={{ fontSize: 10 }}
+                                                        tickFormatter={(v: string) => new Date(v + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} />
+                                                    <YAxis stroke="hsl(240, 5%, 65%)" tick={{ fontSize: 10 }} />
+                                                    <Tooltip contentStyle={{ backgroundColor: 'hsl(240, 10%, 8%)', border: '1px solid hsl(240, 10%, 20%)', borderRadius: '8px' }} />
+                                                    <Legend />
+                                                    <Line type="monotone" dataKey="dau" stroke="hsl(190, 100%, 50%)" strokeWidth={2} dot={false} name="DAU" />
+                                                    <Line type="monotone" dataKey="7d avg" stroke="hsl(280, 80%, 65%)" strokeWidth={2} strokeDasharray="5 3" dot={false} name="7d Avg" />
+                                                    <Line type="monotone" dataKey="new_users" stroke="hsl(45, 90%, 55%)" strokeWidth={1.5} dot={false} name="New Users" />
+                                                </LineChart>
+                                            </ResponsiveContainer>
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })()}
+
+                        {/* Classification + Retention + Pro Users */}
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            {/* Classification */}
+                            <div>
+                                <h3 className="font-display text-lg font-semibold text-foreground mb-3">TG User Classification</h3>
+                                <div className="space-y-2">
+                                    {analytics.telegramMetrics.classification.map((item, i) => (
+                                        <div key={i} className="flex justify-between items-center p-3 rounded-lg bg-cyan-500/5 hover:bg-cyan-500/10 transition-colors">
+                                            <span className="text-muted-foreground">{item.tier}</span>
+                                            <span className="font-bold text-foreground">{item.count}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Pro Users */}
+                            <div className="bg-cyan-500/5 rounded-xl p-4 overflow-hidden flex flex-col">
+                                <h3 className="font-display text-lg font-semibold text-foreground mb-3 flex items-center gap-2">
+                                    <Crown className="w-5 h-5 text-yellow-500" />
+                                    Paid Users ({analytics.telegramMetrics.proUsers.length})
+                                </h3>
+                                <div className="space-y-2 overflow-y-auto max-h-[300px] pr-1">
+                                    {analytics.telegramMetrics.proUsers.length > 0 ? (
+                                        analytics.telegramMetrics.proUsers.map((user, i) => (
+                                            <div key={i} className="flex justify-between items-center p-3 rounded-lg bg-background/50 border border-cyan-500/20">
+                                                <div className="min-w-0">
+                                                    <p className="text-sm font-medium text-foreground truncate">{user.name}</p>
+                                                    <p className="text-xs text-muted-foreground font-mono truncate">@{user.username}</p>
+                                                </div>
+                                                <div className="text-right shrink-0 ml-2">
+                                                    <p className="text-sm font-bold text-foreground">{user.messageCount} msgs</p>
+                                                    <p className="text-[10px] text-cyan-400">{user.credits} credits</p>
+                                                </div>
+                                            </div>
+                                        ))
+                                    ) : (
+                                        <div className="text-center py-8 text-muted-foreground">
+                                            <p>No paid users yet</p>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Retention */}
+                            <div>
+                                <h3 className="font-display text-lg font-semibold text-foreground mb-3">TG Retention</h3>
+                                <div className="space-y-2">
+                                    {[
+                                        { label: 'D1', rate: analytics.telegramMetrics.retention.d1 },
+                                        { label: 'D3', rate: analytics.telegramMetrics.retention.d3 },
+                                        { label: 'D7', rate: analytics.telegramMetrics.retention.d7 },
+                                        { label: 'D30', rate: analytics.telegramMetrics.retention.d30 },
+                                    ].map(({ label, rate }) => (
+                                        <div key={label} className="flex justify-between items-center p-3 rounded-lg bg-cyan-500/5">
+                                            <span className="text-muted-foreground">{label} Retention</span>
+                                            <span className={`font-bold text-lg ${
+                                                parseFloat(rate) >= 30 ? 'text-green-400' :
+                                                parseFloat(rate) >= 15 ? 'text-yellow-400' : 'text-foreground'
+                                            }`}>{rate}%</span>
+                                        </div>
+                                    ))}
+                                </div>
                             </div>
                         </div>
                     </motion.div>

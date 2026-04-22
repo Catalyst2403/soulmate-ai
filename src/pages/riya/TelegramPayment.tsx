@@ -164,11 +164,10 @@ const PlanSwitcher = ({ selected, onSelect }: { selected: Pack; onSelect: (p: Pa
                 <button
                     key={pack.id}
                     onClick={() => onSelect(pack)}
-                    className={`flex-1 relative rounded-xl border py-2 px-1 text-center transition-all duration-200 ${
-                        isActive
+                    className={`flex-1 relative rounded-xl border py-2 px-1 text-center transition-all duration-200 ${isActive
                             ? 'border-pink-500/70 bg-pink-500/10 shadow-md shadow-pink-500/20'
                             : 'border-white/10 bg-white/[0.02] hover:border-white/20'
-                    }`}
+                        }`}
                 >
                     {pack.tag && (
                         <span className={`text-[9px] font-bold text-white px-1.5 py-0.5 rounded-full ${pack.tagStyle} block w-fit mx-auto mb-1`}>
