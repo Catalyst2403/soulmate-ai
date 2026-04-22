@@ -135,7 +135,7 @@ interface AnalyticsData {
         paymentFunnel?: {
             pageVisits: number; uniqueVisitors: number; upgradeClicks: number;
             payments: number; clickRate: string; conversionRate: string;
-            recentVisitors: string[];
+            recentVisitors: Array<{ id: string; username: string; name: string; visitedAt: string }>;
         };
     } | null;
     pmfScore: {
@@ -1694,10 +1694,19 @@ ORDER BY c1.created_at DESC;`}</pre>
                                 {/* Recent visitor IDs */}
                                 {analytics.telegramMetrics.paymentFunnel.recentVisitors.length > 0 && (
                                     <div className="p-3 rounded-lg bg-muted/10 border border-border/30">
-                                        <p className="text-xs font-semibold text-muted-foreground mb-2">Recent payment page visitors (Telegram IDs):</p>
-                                        <div className="flex flex-wrap gap-1.5">
-                                            {analytics.telegramMetrics.paymentFunnel.recentVisitors.map((id, i) => (
-                                                <span key={i} className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">{id}</span>
+                                        <p className="text-xs font-semibold text-muted-foreground mb-2">Recent payment page visitors ({analytics.telegramMetrics.paymentFunnel.recentVisitors.length} unique):</p>
+                                        <div className="divide-y divide-border/20">
+                                            {analytics.telegramMetrics.paymentFunnel.recentVisitors.map((v, i) => (
+                                                <div key={i} className="flex items-center justify-between py-1.5 gap-2">
+                                                    <div className="flex items-center gap-2 min-w-0">
+                                                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 shrink-0">{v.id}</span>
+                                                        <span className="text-xs text-foreground truncate">{v.name}</span>
+                                                        {v.username && <span className="text-[10px] text-muted-foreground shrink-0">@{v.username}</span>}
+                                                    </div>
+                                                    <span className="text-[10px] text-muted-foreground shrink-0">
+                                                        {new Date(v.visitedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                                                    </span>
+                                                </div>
                                             ))}
                                         </div>
                                     </div>
