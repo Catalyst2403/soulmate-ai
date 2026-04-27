@@ -253,7 +253,7 @@ const RiyaPricing = () => {
                 }
             });
 
-            if (error || !data.success) {
+            if (error || !data?.success || !data?.fulfilled) {
                 throw new Error(data?.error || 'Payment verification failed');
             }
 

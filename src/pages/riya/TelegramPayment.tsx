@@ -6,7 +6,8 @@ import { Button } from '@/components/ui/button';
 import { toast } from '@/hooks/use-toast';
 import { Check, Shield, Crown, Leaf, Loader2, ChevronDown, Heart, Sparkles } from 'lucide-react';
 
-const BOT_URL = '/riya/tg';
+const BOT_USERNAME = 'thisisriya_bot';
+const BOT_URL = `https://t.me/${BOT_USERNAME}`;
 
 // ─── Razorpay types ────────────────────────────────────────────────────────────
 declare global {
@@ -344,7 +345,9 @@ const TelegramPayment = () => {
                     packName: pack.id,
                 },
             });
-            if (error || !data?.success) throw new Error(data?.error || 'Verification failed');
+            if (error || !data?.success || !data?.fulfilled) {
+                throw new Error(data?.error || 'Verification failed');
+            }
             setSuccessPack(pack);
             setStep('success');
         } catch (err) {

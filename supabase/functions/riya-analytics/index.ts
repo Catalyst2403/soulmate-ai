@@ -551,6 +551,58 @@ serve(async (req) => {
         console.log(`🎯 PMF: ${totalAllUsers} total, ${dauPercentage}% DAU, D7=${combinedD7}%, verdict=${pmfVerdict}`);
 
         // ============================================
+        // 9b. INSTAGRAM PAYMENT FUNNEL
+        // ============================================
+        const todayStartISO = new Date(new Date().setHours(0, 0, 0, 0)).toISOString();
+
+        const { data: igPaymentEvents } = await supabase
+            .from('riya_payment_events')
+            .select('event_type, instagram_user_id, metadata, created_at')
+            .not('instagram_user_id', 'is', null)
+            .neq('instagram_user_id', 'anonymous');
+
+        const igPageVisitsTotal = igPaymentEvents?.filter((e: any) => e.event_type === 'page_visit').length || 0;
+        const igUpgradeClicksTotal = igPaymentEvents?.filter((e: any) => e.event_type === 'upgrade_click').length || 0;
+        const igPaymentSuccessTotal = igPaymentEvents?.filter((e: any) => e.event_type === 'payment_success').length || 0;
+
+        // Build map of ig users we already have loaded
+        const igUserMap = new Map<string, { username: string; name: string }>(
+            (igUsers || []).map((u: any) => [
+                u.instagram_user_id,
+                { username: u.instagram_username || '', name: u.instagram_name || 'Instagram User' }
+            ])
+        );
+
+        // Today's unique visitors — all, not capped
+        const igVisitorMapAll = new Map<string, { id: string; username: string; name: string; visitedAt: string }>();
+        (igPaymentEvents || [])
+            .filter((e: any) => e.event_type === 'page_visit')
+            .sort((a: any, b: any) => b.created_at?.localeCompare(a.created_at))
+            .forEach((e: any) => {
+                const id = e.instagram_user_id;
+                if (!id) return;
+                if (!igVisitorMapAll.has(id)) {
+                    const info = igUserMap.get(id) || { username: '', name: 'Instagram User' };
+                    igVisitorMapAll.set(id, { id, username: info.username, name: info.name, visitedAt: e.created_at });
+                }
+            });
+
+        // Today-only slice
+        const igVisitorsToday = [...igVisitorMapAll.values()].filter(v => v.visitedAt >= todayStartISO);
+
+        const igPaymentFunnel = {
+            pageVisits: igPageVisitsTotal,
+            uniqueVisitors: igVisitorMapAll.size,
+            upgradeClicks: igUpgradeClicksTotal,
+            payments: igPaymentSuccessTotal,
+            clickRate: igPageVisitsTotal > 0 ? ((igUpgradeClicksTotal / igPageVisitsTotal) * 100).toFixed(1) : '0',
+            conversionRate: igUpgradeClicksTotal > 0 ? ((igPaymentSuccessTotal / igUpgradeClicksTotal) * 100).toFixed(1) : '0',
+            visitorsToday: igVisitorsToday,
+        };
+
+        console.log(`📸 IG Payment Funnel: ${igPageVisitsTotal} visits, ${igVisitorMapAll.size} unique, ${igVisitorsToday.length} today`);
+
+        // ============================================
         // 11. TELEGRAM METRICS
         // ============================================
         console.log('📱 Fetching Telegram metrics...');
@@ -783,7 +835,9 @@ serve(async (req) => {
                 }
             });
 
-        const tgRecentVisitors = [...tgVisitorMap.values()].slice(0, 20);
+        // Today-only unique visitors (all, not capped)
+        const tgVisitorsToday = [...tgVisitorMap.values()].filter(v => v.visitedAt >= todayStartISO);
+        const tgRecentVisitors = [...tgVisitorMap.values()]; // all unique, sorted newest first
 
         const tgPaymentFunnel = {
             pageVisits: tgPageVisits,
@@ -793,6 +847,7 @@ serve(async (req) => {
             clickRate: tgPageVisits > 0 ? ((tgUpgradeClicks / tgPageVisits) * 100).toFixed(1) : '0',
             conversionRate: tgUpgradeClicks > 0 ? ((tgPaymentSuccesses / tgUpgradeClicks) * 100).toFixed(1) : '0',
             recentVisitors: tgRecentVisitors,
+            visitorsToday: tgVisitorsToday,
         };
 
         console.log(`📱 TG: ${totalTgUsers} users, ${tgDau} DAU, ${totalTgMessages} msgs, cost≈₹${tgApproxCostINR}, pageVisits=${tgPageVisits}`);
@@ -931,7 +986,8 @@ serve(async (req) => {
                 proUsers: proUsers,
                 mrr: mrr.toFixed(2),
                 sessionMetrics: sessionMetrics,
-                paymentFunnel: paymentFunnel
+                paymentFunnel: paymentFunnel,
+                igPaymentFunnel: igPaymentFunnel,
             },
             telegramMetrics: {
                 total: totalTgUsers,
