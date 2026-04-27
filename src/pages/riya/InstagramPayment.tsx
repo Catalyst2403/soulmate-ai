@@ -329,7 +329,9 @@ const InstagramPayment = () => {
                 },
             });
 
-            if (error || !data?.success) throw new Error(data?.error || 'Verification failed');
+            if (error || !data?.success || !data?.fulfilled) {
+                throw new Error(data?.error || 'Verification failed');
+            }
 
             setSuccessPack(pack);
             setStep('success');
