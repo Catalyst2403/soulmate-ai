@@ -9,6 +9,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { createClient } from '@supabase/supabase-js';
 
+type PaymentVisitor = { id: string; username: string; name: string; visitedAt: string; visits: number };
+
 interface AnalyticsData {
     userMetrics: {
         total: number;
@@ -116,6 +118,7 @@ interface AnalyticsData {
             clickRate: string;
             conversionRate: string;
             visitorsToday: Array<{ id: string; username: string; name: string; visitedAt: string }>;
+            visitorsLast7Days: PaymentVisitor[];
         };
     } | null;
     telegramMetrics: {
@@ -146,6 +149,7 @@ interface AnalyticsData {
             payments: number; clickRate: string; conversionRate: string;
             recentVisitors: Array<{ id: string; username: string; name: string; visitedAt: string }>;
             visitorsToday: Array<{ id: string; username: string; name: string; visitedAt: string }>;
+            visitorsLast7Days: PaymentVisitor[];
         };
         sessionMetrics?: {
             avgSessionMinutes: number; medianSessionMinutes: number; maxSessionMinutes: number;
@@ -476,6 +480,47 @@ const RiyaAnalytics = () => {
         { period: 'Day 7', percentage: parseFloat(analytics.retention.d7) },
         { period: 'Day 30', percentage: parseFloat(analytics.retention.d30) },
     ];
+
+    const renderPaymentVisitors = (visitors: PaymentVisitor[] = [], accent: 'instagram' | 'telegram') => {
+        const badgeClass = accent === 'instagram'
+            ? 'bg-pink-500/10 text-pink-400 border-pink-500/20'
+            : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20';
+
+        return (
+            <div className="p-3 rounded-lg bg-muted/10 border border-border/30">
+                <p className="text-xs font-semibold text-muted-foreground mb-2">
+                    Visitors in last 7 days ({visitors.length})
+                    {visitors.length === 0 && <span className="ml-1 text-muted-foreground">- none</span>}
+                </p>
+                {visitors.length > 0 && (
+                    <div className="max-h-72 overflow-y-auto pr-1 divide-y divide-border/20">
+                        {visitors.map((v, i) => (
+                            <div key={`${v.id}-${i}`} className="flex items-center justify-between py-2 gap-3">
+                                <div className="flex items-center gap-2 min-w-0">
+                                    <span
+                                        title={v.id}
+                                        className={`text-[10px] font-mono px-1.5 py-0.5 rounded border shrink-0 max-w-[120px] truncate ${badgeClass}`}
+                                    >
+                                        {v.id}
+                                    </span>
+                                    <div className="min-w-0">
+                                        <p className="text-xs text-foreground truncate">{v.name}</p>
+                                        {v.username && <p className="text-[10px] text-muted-foreground truncate">@{v.username}</p>}
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                    <span className="text-[10px] text-muted-foreground">{v.visits}x</span>
+                                    <span className="text-[10px] text-muted-foreground">
+                                        {new Date(v.visitedAt).toLocaleString('en-IN', { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+        );
+    };
 
     return (
         <div className="min-h-screen bg-background p-6">
@@ -1731,6 +1776,7 @@ ORDER BY c1.created_at DESC;`}</pre>
                                                 </div>
                                             ))}
                                         </div>
+                                        {renderPaymentVisitors(analytics.instagramMetrics.igPaymentFunnel.visitorsLast7Days, 'instagram')}
                                         <div className="p-3 rounded-lg bg-muted/10 border border-border/30">
                                             <p className="text-xs font-semibold text-muted-foreground mb-2">
                                                 👁️ Today's visitors ({analytics.instagramMetrics.igPaymentFunnel.visitorsToday.length})
@@ -1878,6 +1924,7 @@ ORDER BY c1.created_at DESC;`}</pre>
                                     </div>
                                 </div>
                                 {/* Today's visitors — all, not capped */}
+                                {renderPaymentVisitors(analytics.telegramMetrics.paymentFunnel.visitorsLast7Days, 'telegram')}
                                 {analytics.telegramMetrics.paymentFunnel.visitorsToday.length > 0 && (
                                     <div className="p-3 rounded-lg bg-muted/10 border border-border/30">
                                         <p className="text-xs font-semibold text-muted-foreground mb-2">👁️ Today's visitors ({analytics.telegramMetrics.paymentFunnel.visitorsToday.length})</p>
