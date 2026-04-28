@@ -554,10 +554,19 @@ serve(async (req) => {
         // 9b. INSTAGRAM PAYMENT FUNNEL
         // ============================================
         const todayStartISO = new Date(new Date().setHours(0, 0, 0, 0)).toISOString();
+        const sevenDaysAgoISO = new Date(Date.now() - 7 * 86_400_000).toISOString();
 
         const { data: igPaymentEvents } = await supabase
             .from('riya_payment_events')
             .select('event_type, instagram_user_id, metadata, created_at')
+            .not('instagram_user_id', 'is', null)
+            .neq('instagram_user_id', 'anonymous');
+
+        const { data: igPaymentVisitEvents7d } = await supabase
+            .from('riya_payment_events')
+            .select('instagram_user_id, created_at')
+            .eq('event_type', 'page_visit')
+            .gte('created_at', sevenDaysAgoISO)
             .not('instagram_user_id', 'is', null)
             .neq('instagram_user_id', 'anonymous');
 
@@ -590,6 +599,22 @@ serve(async (req) => {
         // Today-only slice
         const igVisitorsToday = [...igVisitorMapAll.values()].filter(v => v.visitedAt >= todayStartISO);
 
+        const igVisitorMap7d = new Map<string, { id: string; username: string; name: string; visitedAt: string; visits: number }>();
+        (igPaymentVisitEvents7d || [])
+            .sort((a: any, b: any) => b.created_at?.localeCompare(a.created_at))
+            .forEach((e: any) => {
+                const id = e.instagram_user_id;
+                if (!id) return;
+                const existing = igVisitorMap7d.get(id);
+                if (existing) {
+                    existing.visits += 1;
+                    return;
+                }
+                const info = igUserMap.get(id) || { username: '', name: 'Instagram User' };
+                igVisitorMap7d.set(id, { id, username: info.username, name: info.name, visitedAt: e.created_at, visits: 1 });
+            });
+        const igVisitorsLast7Days = [...igVisitorMap7d.values()];
+
         const igPaymentFunnel = {
             pageVisits: igPageVisitsTotal,
             uniqueVisitors: igVisitorMapAll.size,
@@ -598,6 +623,7 @@ serve(async (req) => {
             clickRate: igPageVisitsTotal > 0 ? ((igUpgradeClicksTotal / igPageVisitsTotal) * 100).toFixed(1) : '0',
             conversionRate: igUpgradeClicksTotal > 0 ? ((igPaymentSuccessTotal / igUpgradeClicksTotal) * 100).toFixed(1) : '0',
             visitorsToday: igVisitorsToday,
+            visitorsLast7Days: igVisitorsLast7Days,
         };
 
         console.log(`📸 IG Payment Funnel: ${igPageVisitsTotal} visits, ${igVisitorMapAll.size} unique, ${igVisitorsToday.length} today`);
@@ -796,6 +822,13 @@ serve(async (req) => {
             .gte('created_at', tgPaymentSinceISO)
             .or('metadata->>platform.eq.telegram,metadata->>telegram_user_id.neq.');
 
+        const { data: tgPaymentVisitEvents7d } = await supabase
+            .from('riya_payment_events')
+            .select('metadata, created_at')
+            .eq('event_type', 'page_visit')
+            .gte('created_at', sevenDaysAgoISO)
+            .or('metadata->>platform.eq.telegram,metadata->>telegram_user_id.neq.');
+
         const tgPageVisits = tgPaymentEvents?.filter((e: any) =>
             e.event_type === 'page_visit' &&
             (e.metadata?.platform === 'telegram' || e.metadata?.telegram_user_id)
@@ -839,6 +872,23 @@ serve(async (req) => {
         const tgVisitorsToday = [...tgVisitorMap.values()].filter(v => v.visitedAt >= todayStartISO);
         const tgRecentVisitors = [...tgVisitorMap.values()]; // all unique, sorted newest first
 
+        const tgVisitorMap7d = new Map<string, { id: string; username: string; name: string; visitedAt: string; visits: number }>();
+        (tgPaymentVisitEvents7d || [])
+            .filter((e: any) => e.metadata?.platform === 'telegram' || e.metadata?.telegram_user_id)
+            .sort((a: any, b: any) => b.created_at?.localeCompare(a.created_at))
+            .forEach((e: any) => {
+                const id = e.metadata?.telegram_user_id;
+                if (!id) return;
+                const existing = tgVisitorMap7d.get(id);
+                if (existing) {
+                    existing.visits += 1;
+                    return;
+                }
+                const info = tgUserMap.get(id) || { username: '', name: 'Telegram User' };
+                tgVisitorMap7d.set(id, { id, username: info.username, name: info.name, visitedAt: e.created_at, visits: 1 });
+            });
+        const tgVisitorsLast7Days = [...tgVisitorMap7d.values()];
+
         const tgPaymentFunnel = {
             pageVisits: tgPageVisits,
             uniqueVisitors: tgVisitorMap.size,
@@ -848,6 +898,7 @@ serve(async (req) => {
             conversionRate: tgUpgradeClicks > 0 ? ((tgPaymentSuccesses / tgUpgradeClicks) * 100).toFixed(1) : '0',
             recentVisitors: tgRecentVisitors,
             visitorsToday: tgVisitorsToday,
+            visitorsLast7Days: tgVisitorsLast7Days,
         };
 
         console.log(`📱 TG: ${totalTgUsers} users, ${tgDau} DAU, ${totalTgMessages} msgs, cost≈₹${tgApproxCostINR}, pageVisits=${tgPageVisits}`);

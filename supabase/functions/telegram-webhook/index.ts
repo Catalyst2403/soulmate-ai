@@ -102,6 +102,7 @@ const DEBOUNCE_TABLE = "telegram_pending_messages";
 const FREE_TRIAL_LIMIT = 200; // lifetime msgs before daily cap kicks in
 const FREE_DAILY_LIMIT = 20; // msgs/day after trial ends
 const PAYMENT_PAGE_BASE = "https://riya-ai-ten.vercel.app/riya/pay/telegram";
+const DEFAULT_TELEGRAM_USER_AGE = 35;
 
 // History
 const MAX_HISTORY_CHARS = 200_000;
@@ -2580,7 +2581,7 @@ async function handleRequest(
 
         let systemPrompt = getTelegramSystemPrompt({
             userName,
-            userAge: 21, // Telegram doesn't expose age; use default
+            userAge: user.user_age ?? DEFAULT_TELEGRAM_USER_AGE,
             dateTimeIST,
             chatStreak,
             factsText: userFacts ? formatFactsForPrompt(userFacts) : "",
@@ -3225,6 +3226,7 @@ async function handleCallbackQuery(
             telegram_username: from.username || null,
             first_name: from.first_name || null,
             language_code: from.language_code || null,
+            user_age: DEFAULT_TELEGRAM_USER_AGE,
         });
         ({ data: user } = await supabase.from("telegram_users").select("*").eq(
             "telegram_user_id",
@@ -3532,6 +3534,7 @@ serve(async (req) => {
                 telegram_username: from.username || null,
                 first_name: from.first_name || null,
                 language_code: from.language_code || null,
+                user_age: DEFAULT_TELEGRAM_USER_AGE,
                 ...(tgCity ? { city: tgCity } : {}),
             })
             .select().single();
