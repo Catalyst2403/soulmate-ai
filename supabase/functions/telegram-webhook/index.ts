@@ -196,6 +196,16 @@ function getTTSKey(): string {
     return available[Math.floor(now / 1000) % available.length];
 }
 
+function maskKey(key: string): string {
+    if (!key) return "none";
+    return `${key.slice(0, 8)}...${key.slice(-4)}`;
+}
+
+function ttsKeyLabel(key: string): string {
+    const idx = ttsKeyPool.indexOf(key);
+    return idx >= 0 ? `GEMINI_TTS_KEY_${idx + 1}` : "GEMINI_API_KEY_fallback";
+}
+
 function markKeyExhausted(key: string): void {
     quotaExhaustedKeys.set(key, Date.now() + QUOTA_COOLDOWN_MS);
     log.warn("*", `⚠️ Key exhausted: ${key.slice(0, 8)}...`);
@@ -618,26 +628,59 @@ async function sendTelegramVoiceBytes(
     wav: Uint8Array,
     token: string,
 ): Promise<boolean> {
-    try {
-        const form = new FormData();
-        form.append("chat_id", chatId);
-        form.append("voice", new Blob([wav], { type: "audio/wav" }), "voice.wav");
-        const res = await fetch(`https://api.telegram.org/bot${token}/sendVoice`, {
-            method: "POST",
-            body: form,
-        });
-        const json = await res.json().catch(() => ({}));
-        if (!res.ok) {
+    const maxAttempts = 3; // first try + 2 retries for transient network issues
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            const form = new FormData();
+            form.append("chat_id", chatId);
+            form.append("voice", new Blob([wav], { type: "audio/wav" }), "voice.wav");
+            const res = await fetch(`https://api.telegram.org/bot${token}/sendVoice`, {
+                method: "POST",
+                body: form,
+            });
+            const json = await res.json().catch(() => ({}));
+            if (res.ok) return true;
+
+            const retryAfterRaw = (json as any)?.parameters?.retry_after;
+            const retryAfterSec = Number.isFinite(retryAfterRaw)
+                ? Number(retryAfterRaw)
+                : null;
+            const shouldRetryHttp = res.status >= 500 ||
+                (res.status === 429 && attempt < maxAttempts);
+
             log.warn(
                 "*",
-                `⚠️ Telegram sendVoice failed: ${JSON.stringify(json).slice(0, 200)}`,
+                `⚠️ Telegram sendVoice failed (attempt ${attempt}/${maxAttempts}, status ${res.status}): ${JSON.stringify(json).slice(0, 200)}`,
             );
+
+            if (!shouldRetryHttp || attempt >= maxAttempts) return false;
+
+            const waitMs = res.status === 429
+                ? Math.max(500, Math.min((retryAfterSec ?? 1) * 1000, 5000))
+                : attempt === 1
+                ? 700
+                : 1500;
+            await new Promise((r) => setTimeout(r, waitMs));
+        } catch (e: any) {
+            const msg = String(e?.message || e || "").toLowerCase();
+            const transientNetwork = msg.includes("connection reset") ||
+                msg.includes("sendrequest") ||
+                msg.includes("timed out") ||
+                msg.includes("timeout") ||
+                msg.includes("temporar") ||
+                msg.includes("network");
+
+            log.error(
+                "*",
+                `❌ sendTelegramVoiceBytes (attempt ${attempt}/${maxAttempts}): ${e?.message || e}`,
+            );
+
+            if (!transientNetwork || attempt >= maxAttempts) return false;
+            const waitMs = attempt === 1 ? 700 : 1500;
+            await new Promise((r) => setTimeout(r, waitMs));
         }
-        return res.ok;
-    } catch (e: any) {
-        log.error("*", "❌ sendTelegramVoiceBytes:", e?.message);
-        return false;
     }
+    return false;
 }
 
 async function sendChatAction(
@@ -1187,7 +1230,14 @@ async function generateAndSendVoiceNote(
         }
         const makeTtsUrl = () =>
             `${VERTEX_TTS_BASE}/${TTS_MODEL}:generateContent?key=${ttsKey}`;
+        const debugTtsContext = (stage: string) => {
+            log.info(
+                chatId,
+                `[TTS DEBUG:${stage}] project=${DEFAULT_PROJECT} model=${TTS_MODEL} voice=${voice.toLowerCase()} lang=${getTTSLangCode(preferredLang)} key_label=${ttsKeyLabel(ttsKey)} key_mask=${maskKey(ttsKey)} pool_size=${ttsKeyPool.length} endpoint=${VERTEX_TTS_BASE}/${TTS_MODEL}:generateContent`,
+            );
+        };
 
+        debugTtsContext("first_attempt");
         let ttsRes = await fetch(makeTtsUrl(), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1203,6 +1253,7 @@ async function generateAndSendVoiceNote(
                     } — retrying in 1.5s`,
                 );
                 await new Promise((r) => setTimeout(r, 1500));
+                debugTtsContext("retry_after_5xx");
                 ttsRes = await fetch(makeTtsUrl(), {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -1218,6 +1269,7 @@ async function generateAndSendVoiceNote(
                     );
                     return false;
                 }
+                debugTtsContext("retry_after_429_with_rotated_key");
                 ttsRes = await fetch(makeTtsUrl(), {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -1228,7 +1280,7 @@ async function generateAndSendVoiceNote(
                 const errBody = await ttsRes.text();
                 log.error(
                     chatId,
-                    `❌ TTS ${ttsRes.status} auth error — rotating key: ${errBody.slice(0, 200)
+                    `❌ TTS ${ttsRes.status} auth error — key_label=${ttsKeyLabel(ttsKey)} key_mask=${maskKey(ttsKey)} project=${DEFAULT_PROJECT} model=${TTS_MODEL} endpoint=${VERTEX_TTS_BASE}/${TTS_MODEL}:generateContent — rotating key: ${errBody.slice(0, 200)
                     }`,
                 );
                 markKeyExhausted(ttsKey);
@@ -1240,6 +1292,7 @@ async function generateAndSendVoiceNote(
                     );
                     return false;
                 }
+                debugTtsContext("retry_after_auth_with_rotated_key");
                 ttsRes = await fetch(makeTtsUrl(), {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
