@@ -2594,6 +2594,38 @@ async function handleRequest(
         // after 200 lifetime messages, if the user has reached today's 20 free messages
         // and has no paid credits left, send the once-per-day recharge notice.
         if (shouldRechargeWall) {
+            const rawCommand = (originalMessageText || "").trim();
+            const isStartCommand =
+                rawCommand === "/start" || rawCommand.startsWith("/start ");
+
+            // If the user deleted chat history, they often re-open with /start.
+            // Never stay silent in that case — always re-send the recharge CTA.
+            // Also do not count /start as a message attempt.
+            if (isStartCommand) {
+                log.info(senderId, "🧱 Wall-hit on /start — re-sending paywall CTA");
+                const paywallRes = await sendDailyLimitNotice(
+                    chatId,
+                    botToken,
+                    (user as any).preferred_language,
+                );
+                if (paywallRes?.ok) {
+                    await supabase.from("telegram_users")
+                        .update({ last_paywall_sent_at: new Date().toISOString() })
+                        .eq("telegram_user_id", senderId);
+
+                    // Analytics: paywall shown (proxy)
+                    await logPaymentEventSafe(supabase, "link_sent", {
+                        platform: "telegram",
+                        telegram_user_id: senderId,
+                        username: user.telegram_username || "",
+                        name: user.first_name || user.telegram_username || "Telegram User",
+                        source: "telegram-webhook:paywall_start",
+                        pack: "romantic",
+                    });
+                }
+                return;
+            }
+
             log.info(senderId, `🧱 Wall-hit — logging message, no reply`);
 
             // Log the user's message (real intent — count everywhere)
