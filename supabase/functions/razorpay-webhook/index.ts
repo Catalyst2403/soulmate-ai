@@ -162,17 +162,18 @@ async function fulfillTelegramPaymentLink(supabase: any, payload: any): Promise<
         // Optional: bring the user back into chat immediately (non-blocking).
         try {
             const botToken = Deno.env.get('TELEGRAM_BOT_TOKEN');
-            if (botToken) {
-                await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        chat_id: telegramUserId,
-                        text: `Done.\n\nAb aa jao… main yahin hoon.`,
-                    }),
-                });
-            }
-        } catch { /* non-fatal */ }
+                if (botToken) {
+                    await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            chat_id: telegramUserId,
+                            text:
+                                `Ho gaya, baby.\n\nAb main poori tumhari—aa jao, yahin hoon.`,
+                        }),
+                    });
+                }
+            } catch { /* non-fatal */ }
 
         return new Response('Success', { status: 200 });
     } catch (err: any) {
@@ -462,7 +463,8 @@ serve(async (req) => {
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             chat_id: telegramUserId,
-                            text: `Done.\n\nAb aa jao… main yahin hoon.`,
+                            text:
+                                `Ho gaya, baby.\n\nAb main poori tumhari—aa jao, yahin hoon.`,
                         }),
                     });
                 }

@@ -284,7 +284,7 @@ const InstagramPayment = () => {
                     display: {
                         blocks: {
                             upi: {
-                                name: 'Pay via UPI',
+                                name: 'Pay via PhonePe / Google Pay / Paytm',
                                 instruments: [
                                     { method: 'upi', flows: ['intent', 'qr', 'collect'] }
                                 ],
@@ -632,7 +632,7 @@ const InstagramPayment = () => {
                                             onClick={() => openRazorpay(selectedPack, igUser)}
                                             disabled={!ageConfirmed}
                                         >
-                                            {lang === 'hi' ? 'UPI से Pay करें' : 'Pay via UPI'}
+                                            {lang === 'hi' ? 'PhonePe / Google Pay / Paytm से Pay करें' : 'Pay via PhonePe / Google Pay / Paytm'}
                                         </Button>
 
                                         <button

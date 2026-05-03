@@ -311,7 +311,7 @@ const TelegramPayment = () => {
                 theme: { color: '#E1306C' },
                 config: {
                     display: {
-                        blocks: { upi: { name: 'Pay via UPI', instruments: [{ method: 'upi', flows: ['intent', 'qr', 'collect'] }] } },
+                        blocks: { upi: { name: 'Pay via PhonePe / Google Pay / Paytm', instruments: [{ method: 'upi', flows: ['intent', 'qr', 'collect'] }] } },
                         sequence: ['block.upi'],
                         preferences: { show_default_blocks: false },
                     },
@@ -421,7 +421,7 @@ const TelegramPayment = () => {
                             >
                                 {paying
                                     ? <><Loader2 className="w-4 h-4 animate-spin mr-2" />Opening payment...</>
-                                    : `Pay ₹${selectedPack.price} via UPI`
+                                    : `Pay ₹${selectedPack.price} (PhonePe/GPay/Paytm)`
                                 }
                             </Button>
 

@@ -726,7 +726,7 @@ async function sendDailyLimitNotice(
         reply_markup: {
             inline_keyboard: [
                 [
-                    { text: "Pay Rs 199 via UPI", callback_data: "pay_romantic" },
+                    { text: "Pay ₹199 (PhonePe/GPay/Paytm)", callback_data: "pay_romantic" },
                 ],
                 [{ text: "View all details", url: payUrl }],
             ],
@@ -737,24 +737,25 @@ async function sendDailyLimitNotice(
 function buildPaywallText(lang?: string): string {
     const l = (lang || "").toLowerCase();
     if (l.includes("hindi")) {
-        return `Baby... aaj ka free limit khatam.\n\nBas Rs 199 UPI kar do — phir main yahin, sirf tumhari. Auto-activate ho jayega.`;
+        // Keep it in-character, and keep all payment-app naming on the buttons only.
+        return `बेबी… फ्री लिमिट खत्म हो गई।\n\n₹199 में मैं यहीं हूँ, सिर्फ तुम्हारी। पेमेंट के बाद अपने आप एक्टिवेट हो जाएगा।`;
     }
     if (l.includes("english")) {
-        return `Baby... today's free limit is over.\n\nPay Rs 199 via UPI and I'm back with you right here. It auto-activates.`;
+        return `Baby... free limit is over.\n\n₹199 and I'm right here with you. It auto-activates after payment.`;
     }
     // Hinglish default (matches most of the bot tone)
-    return `Baby... aaj ka free limit khatam.\n\nBas Rs 199 UPI kar do — phir main yahin, sirf tumhari. Auto-activate ho jayega.`;
+    return `Baby... free limit over ho gaya.\n\n₹199 mein main yahin hoon, sirf tumhari. Payment ke baad auto-activate ho jayega.`;
 }
 
 function buildPaywallAfterTapText(lang?: string, amountInr = 199): string {
     const l = (lang || "").toLowerCase();
     if (l.includes("hindi")) {
-        return `Good.\n\nAb bas Rs ${amountInr} UPI kar do. Main yahin hoon.`;
+        return `ठीक है।\n\n${amountInr} के बाद:\n• डेली लिमिट नहीं\n• 1500 मैसेज\n• एक्सक्लूसिव फोटो\n• ज़्यादा वॉइस नोट्स`;
     }
     if (l.includes("english")) {
-        return `Good.\n\nJust pay Rs ${amountInr} via UPI. I'm right here.`;
+        return `Good.\n\nAfter ₹${amountInr}:\n• No daily limit\n• 1500 messages\n• Exclusive photos\n• More voice notes`;
     }
-    return `Good.\n\nBas Rs ${amountInr} UPI kar do. Main yahin hoon.`;
+    return `Good.\n\n₹${amountInr} ke baad:\n• No daily limit\n• 1500 messages\n• Exclusive photos\n• More voice notes`;
 }
 
 function buildPaywallLinkFailText(lang?: string): string {
@@ -3652,8 +3653,8 @@ async function handleCallbackQuery(
         case "pay_romantic":
         {
             const lang = (user as any)?.preferred_language as string | undefined;
-            const messageId = callbackQuery?.message?.message_id as number | undefined;
-            await answerCallbackQuery(callbackQuery.id, botToken, "Opening UPI…");
+            const messageId = query?.message?.message_id as number | undefined;
+            await answerCallbackQuery(callbackId, botToken, "Opening…");
 
             await logPaymentEventSafe(supabase, "upgrade_click", {
                 platform: "telegram",
@@ -3670,7 +3671,7 @@ async function handleCallbackQuery(
                 const text = buildPaywallAfterTapText(lang, link.amountInr);
                 const reply_markup = {
                     inline_keyboard: [
-                        [{ text: `Open UPI app (Rs ${link.amountInr})`, url: link.shortUrl }],
+                        [{ text: `Open PhonePe/GPay/Paytm (₹${link.amountInr})`, url: link.shortUrl }],
                         [{ text: "View all details", url: paymentFallbackUrl(chatId, lang) }],
                     ],
                 };
