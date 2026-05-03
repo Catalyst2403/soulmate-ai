@@ -822,15 +822,17 @@ serve(async (req) => {
             .gte('created_at', tgPaymentSinceISO)
             .or('metadata->>platform.eq.telegram,metadata->>telegram_user_id.neq.');
 
-        const { data: tgPaymentVisitEvents7d } = await supabase
+        const { data: tgPayButtonEvents7d } = await supabase
             .from('riya_payment_events')
             .select('metadata, created_at')
-            .eq('event_type', 'page_visit')
+            .eq('event_type', 'upgrade_click')
             .gte('created_at', sevenDaysAgoISO)
             .or('metadata->>platform.eq.telegram,metadata->>telegram_user_id.neq.');
 
-        const tgPageVisits = tgPaymentEvents?.filter((e: any) =>
-            e.event_type === 'page_visit' &&
+        // For Telegram, "page visits" is a bad proxy (many users never open the web page).
+        // Use paywall-shown events logged by telegram-webhook as the top-of-funnel metric.
+        const tgPaywallShown = tgPaymentEvents?.filter((e: any) =>
+            e.event_type === 'link_sent' &&
             (e.metadata?.platform === 'telegram' || e.metadata?.telegram_user_id)
         ).length || 0;
         const tgUpgradeClicks = tgPaymentEvents?.filter((e: any) =>
@@ -851,11 +853,11 @@ serve(async (req) => {
             ])
         );
 
-        // Deduplicate visitors, preserving most-recent first (events are unsorted)
+        // Deduplicate "pay button pressers", preserving most-recent first (events are unsorted)
         const tgVisitorMap = new Map<string, { id: string; username: string; name: string; visitedAt: string }>();
         (tgPaymentEvents || [])
             .filter((e: any) =>
-                e.event_type === 'page_visit' &&
+                e.event_type === 'upgrade_click' &&
                 (e.metadata?.platform === 'telegram' || e.metadata?.telegram_user_id)
             )
             .sort((a: any, b: any) => b.created_at?.localeCompare(a.created_at))
@@ -864,7 +866,9 @@ serve(async (req) => {
                 if (!id) return;
                 if (!tgVisitorMap.has(id)) {
                     const info = tgUserMap.get(id) || { username: '', name: 'Telegram User' };
-                    tgVisitorMap.set(id, { id, username: info.username, name: info.name, visitedAt: e.created_at });
+                    const username = e.metadata?.username || info.username || '';
+                    const name = e.metadata?.name || info.name || 'Telegram User';
+                    tgVisitorMap.set(id, { id, username, name, visitedAt: e.created_at });
                 }
             });
 
@@ -873,7 +877,7 @@ serve(async (req) => {
         const tgRecentVisitors = [...tgVisitorMap.values()]; // all unique, sorted newest first
 
         const tgVisitorMap7d = new Map<string, { id: string; username: string; name: string; visitedAt: string; visits: number }>();
-        (tgPaymentVisitEvents7d || [])
+        (tgPayButtonEvents7d || [])
             .filter((e: any) => e.metadata?.platform === 'telegram' || e.metadata?.telegram_user_id)
             .sort((a: any, b: any) => b.created_at?.localeCompare(a.created_at))
             .forEach((e: any) => {
@@ -885,23 +889,25 @@ serve(async (req) => {
                     return;
                 }
                 const info = tgUserMap.get(id) || { username: '', name: 'Telegram User' };
-                tgVisitorMap7d.set(id, { id, username: info.username, name: info.name, visitedAt: e.created_at, visits: 1 });
+                const username = e.metadata?.username || info.username || '';
+                const name = e.metadata?.name || info.name || 'Telegram User';
+                tgVisitorMap7d.set(id, { id, username, name, visitedAt: e.created_at, visits: 1 });
             });
         const tgVisitorsLast7Days = [...tgVisitorMap7d.values()];
 
         const tgPaymentFunnel = {
-            pageVisits: tgPageVisits,
+            pageVisits: tgPaywallShown,
             uniqueVisitors: tgVisitorMap.size,
             upgradeClicks: tgUpgradeClicks,
             payments: tgPaymentSuccesses,
-            clickRate: tgPageVisits > 0 ? ((tgUpgradeClicks / tgPageVisits) * 100).toFixed(1) : '0',
+            clickRate: tgPaywallShown > 0 ? ((tgUpgradeClicks / tgPaywallShown) * 100).toFixed(1) : '0',
             conversionRate: tgUpgradeClicks > 0 ? ((tgPaymentSuccesses / tgUpgradeClicks) * 100).toFixed(1) : '0',
             recentVisitors: tgRecentVisitors,
             visitorsToday: tgVisitorsToday,
             visitorsLast7Days: tgVisitorsLast7Days,
         };
 
-        console.log(`📱 TG: ${totalTgUsers} users, ${tgDau} DAU, ${totalTgMessages} msgs, cost≈₹${tgApproxCostINR}, pageVisits=${tgPageVisits}`);
+        console.log(`📱 TG: ${totalTgUsers} users, ${tgDau} DAU, ${totalTgMessages} msgs, cost≈₹${tgApproxCostINR}, paywallShown=${tgPaywallShown}`);
 
         // ============================================
         // 10. EXTERNAL INTEGRATIONS (Optional)
@@ -1180,13 +1186,13 @@ async function fetchWebAnalytics(supabaseClient: any) {
         }
 
         // 1. VISITORS & PAGE VIEWS
-        const uniqueSessions = new Set(events.map(e => e.session_id));
+        const uniqueSessions = new Set(events.map((e: any) => e.session_id));
         const totalVisitors = uniqueSessions.size;
         const totalPageViews = events.length;
 
         // 2. BOUNCE RATE (sessions with only 1 page view)
         const sessionCounts = new Map<string, number>();
-        events.forEach(e => {
+        events.forEach((e: any) => {
             sessionCounts.set(e.session_id, (sessionCounts.get(e.session_id) || 0) + 1);
         });
 
@@ -1195,7 +1201,7 @@ async function fetchWebAnalytics(supabaseClient: any) {
 
         // 3. TOP PAGES (by unique visitor count)
         const pageVisitors = new Map<string, Set<string>>();
-        events.forEach(e => {
+        events.forEach((e: any) => {
             if (!pageVisitors.has(e.page_path)) {
                 pageVisitors.set(e.page_path, new Set());
             }
@@ -1212,7 +1218,7 @@ async function fetchWebAnalytics(supabaseClient: any) {
 
         // 4. TOP REFERRERS
         const referrerVisitors = new Map<string, Set<string>>();
-        events.forEach(e => {
+        events.forEach((e: any) => {
             if (e.referrer_source && e.referrer_source !== '') {
                 if (!referrerVisitors.has(e.referrer_source)) {
                     referrerVisitors.set(e.referrer_source, new Set());
@@ -1231,7 +1237,7 @@ async function fetchWebAnalytics(supabaseClient: any) {
 
         // 5. COUNTRIES (percentage breakdown)
         const countryCounts = new Map<string, number>();
-        events.forEach(e => {
+        events.forEach((e: any) => {
             if (e.country && e.country !== '') {
                 countryCounts.set(e.country, (countryCounts.get(e.country) || 0) + 1);
             }
@@ -1252,7 +1258,7 @@ async function fetchWebAnalytics(supabaseClient: any) {
         const deviceCounts = new Map<string, number>();
         const osCounts = new Map<string, number>();
 
-        events.forEach(e => {
+        events.forEach((e: any) => {
             if (e.device_type && e.device_type !== '') {
                 deviceCounts.set(e.device_type, (deviceCounts.get(e.device_type) || 0) + 1);
             }

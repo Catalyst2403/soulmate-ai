@@ -1894,9 +1894,9 @@ ORDER BY c1.created_at DESC;`}</pre>
                                 </h3>
                                 <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-3">
                                     <div className="p-4 rounded-xl bg-purple-500/10 text-center">
-                                        <p className="text-muted-foreground text-sm">Page Visits</p>
+                                        <p className="text-muted-foreground text-sm">Paywall Shown</p>
                                         <p className="font-display text-2xl font-bold text-foreground">{analytics.telegramMetrics.paymentFunnel.pageVisits}</p>
-                                        <p className="text-xs text-muted-foreground mt-0.5">total hits</p>
+                                        <p className="text-xs text-muted-foreground mt-0.5">total shows</p>
                                     </div>
                                     <div className="p-4 rounded-xl bg-blue-500/10 text-center">
                                         <p className="text-muted-foreground text-sm">Unique Visitors</p>
@@ -1906,7 +1906,7 @@ ORDER BY c1.created_at DESC;`}</pre>
                                     <div className="p-4 rounded-xl bg-pink-500/10 text-center">
                                         <p className="text-muted-foreground text-sm">Upgrade Clicks</p>
                                         <p className="font-display text-2xl font-bold text-foreground">{analytics.telegramMetrics.paymentFunnel.upgradeClicks}</p>
-                                        <p className="text-xs text-muted-foreground mt-0.5">{analytics.telegramMetrics.paymentFunnel.clickRate}% of visits</p>
+                                        <p className="text-xs text-muted-foreground mt-0.5">{analytics.telegramMetrics.paymentFunnel.clickRate}% of shows</p>
                                     </div>
                                     <div className="p-4 rounded-xl bg-green-500/10 text-center">
                                         <p className="text-muted-foreground text-sm">Payments</p>
@@ -1914,7 +1914,7 @@ ORDER BY c1.created_at DESC;`}</pre>
                                         <p className="text-xs text-muted-foreground mt-0.5">{analytics.telegramMetrics.paymentFunnel.conversionRate}% of clicks</p>
                                     </div>
                                     <div className="p-4 rounded-xl bg-cyan-500/10 text-center">
-                                        <p className="text-muted-foreground text-sm">Visit → Pay</p>
+                                        <p className="text-muted-foreground text-sm">Shown → Pay</p>
                                         <p className="font-display text-2xl font-bold text-foreground">
                                             {analytics.telegramMetrics.paymentFunnel.uniqueVisitors > 0
                                                 ? ((analytics.telegramMetrics.paymentFunnel.payments / analytics.telegramMetrics.paymentFunnel.uniqueVisitors) * 100).toFixed(1)
@@ -1927,7 +1927,7 @@ ORDER BY c1.created_at DESC;`}</pre>
                                 {renderPaymentVisitors(analytics.telegramMetrics.paymentFunnel.visitorsLast7Days, 'telegram')}
                                 {analytics.telegramMetrics.paymentFunnel.visitorsToday.length > 0 && (
                                     <div className="p-3 rounded-lg bg-muted/10 border border-border/30">
-                                        <p className="text-xs font-semibold text-muted-foreground mb-2">👁️ Today's visitors ({analytics.telegramMetrics.paymentFunnel.visitorsToday.length})</p>
+                                        <p className="text-xs font-semibold text-muted-foreground mb-2">Today's pay taps ({analytics.telegramMetrics.paymentFunnel.visitorsToday.length})</p>
                                         <div className="divide-y divide-border/20">
                                             {analytics.telegramMetrics.paymentFunnel.visitorsToday.map((v, i) => (
                                                 <div key={i} className="flex items-center justify-between py-1.5 gap-2">

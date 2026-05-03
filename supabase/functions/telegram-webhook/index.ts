@@ -101,7 +101,12 @@ const DEBOUNCE_TABLE = "telegram_pending_messages";
 // Monetization
 const FREE_TRIAL_LIMIT = 200; // lifetime msgs before daily cap kicks in
 const FREE_DAILY_LIMIT = 20; // msgs/day after trial ends
+const PAYWALL_COOLDOWN_HOURS = 6;
+const PAYWALL_COOLDOWN_MS = PAYWALL_COOLDOWN_HOURS * 60 * 60 * 1000;
 const PAYMENT_PAGE_BASE = "https://riya-ai-ten.vercel.app/riya/pay/telegram";
+const TELEGRAM_BOT_URL = "https://t.me/thisisriya_bot";
+const TELEGRAM_PAYMENT_PACKS = ["romantic"] as const;
+type TelegramPaymentPack = typeof TELEGRAM_PAYMENT_PACKS[number];
 const DEFAULT_TELEGRAM_USER_AGE = 35;
 
 // History
@@ -712,28 +717,183 @@ async function sendDailyLimitNotice(
     chatId: string,
     token: string,
     lang?: string,
-): Promise<void> {
-    const payUrl = `${PAYMENT_PAGE_BASE}?id=${chatId}${lang ? `&lang=${lang}` : ""
-        }`;
-    await tgPost(token, "sendMessage", {
+): Promise<any> {
+    const payUrl = paymentFallbackUrl(chatId, lang);
+    return await tgPost(token, "sendMessage", {
         chat_id: chatId,
         text:
-            `💬 You've reached today's free message limit.\n\nTo continue your conversation with Riya without any limits — recharge now.`,
+            buildPaywallText(lang),
         reply_markup: {
-            inline_keyboard: [[{
-                text: "💳 Recharge – ₹99 se shuru",
-                url: payUrl,
-            }]],
+            inline_keyboard: [
+                [
+                    { text: "Pay Rs 199 via UPI", callback_data: "pay_romantic" },
+                ],
+                [{ text: "View all details", url: payUrl }],
+            ],
         },
     });
 }
 
-function hasSentPaywallToday(
+function buildPaywallText(lang?: string): string {
+    const l = (lang || "").toLowerCase();
+    if (l.includes("hindi")) {
+        return `Baby... aaj ka free limit khatam.\n\nBas Rs 199 UPI kar do — phir main yahin, sirf tumhari. Auto-activate ho jayega.`;
+    }
+    if (l.includes("english")) {
+        return `Baby... today's free limit is over.\n\nPay Rs 199 via UPI and I'm back with you right here. It auto-activates.`;
+    }
+    // Hinglish default (matches most of the bot tone)
+    return `Baby... aaj ka free limit khatam.\n\nBas Rs 199 UPI kar do — phir main yahin, sirf tumhari. Auto-activate ho jayega.`;
+}
+
+function buildPaywallAfterTapText(lang?: string, amountInr = 199): string {
+    const l = (lang || "").toLowerCase();
+    if (l.includes("hindi")) {
+        return `Good.\n\nAb bas Rs ${amountInr} UPI kar do. Main yahin hoon.`;
+    }
+    if (l.includes("english")) {
+        return `Good.\n\nJust pay Rs ${amountInr} via UPI. I'm right here.`;
+    }
+    return `Good.\n\nBas Rs ${amountInr} UPI kar do. Main yahin hoon.`;
+}
+
+function buildPaywallLinkFailText(lang?: string): string {
+    const l = (lang || "").toLowerCase();
+    if (l.includes("hindi")) {
+        return `Baby sorry... link abhi nahi ban pa raha.\n\nDetails wale button se kar lo — main yahin hoon.`;
+    }
+    if (l.includes("english")) {
+        return `Sorry baby... the link isn't generating right now.\n\nUse the details button and come right back to me.`;
+    }
+    return `Baby sorry... link abhi nahi ban pa raha.\n\nDetails wale button se kar lo — main yahin hoon.`;
+}
+
+function paymentFallbackUrl(chatId: string, lang?: string): string {
+    return `${PAYMENT_PAGE_BASE}?id=${chatId}${lang ? `&lang=${lang}` : ""}`;
+}
+
+function toAsciiSafe(input: string, maxLen: number): string {
+    // Razorpay sometimes errors on 4-byte unicode (emoji) in certain fields.
+    // Keep API-bound strings plain ASCII to avoid collation issues.
+    const ascii = (input || "").replace(/[^\x20-\x7E]/g, "").trim();
+    return ascii.length > maxLen ? ascii.slice(0, maxLen) : ascii;
+}
+
+async function logPaymentEventSafe(
+    supabase: any,
+    eventType: string,
+    metadata: Record<string, any>,
+): Promise<void> {
+    try {
+        await supabase.from("riya_payment_events").insert({
+            instagram_user_id: null,
+            event_type: eventType,
+            metadata,
+        });
+    } catch (e) {
+        // Analytics must never block the user experience.
+        console.warn("⚠️ payment event log failed (non-fatal):", e);
+    }
+}
+
+async function createTelegramUpiPaymentLink(
+    supabase: any,
+    tgUserId: string,
+    packName: TelegramPaymentPack,
+): Promise<{ shortUrl: string; amountInr: number; displayName: string }> {
+    const { data: pack, error: packErr } = await supabase
+        .from("riya_recharge_packs")
+        .select("id, pack_name, display_name, price_inr, message_credits, validity_days")
+        .eq("pack_name", packName)
+        .eq("is_active", true)
+        .single();
+
+    if (packErr || !pack) throw new Error(`Pack not available: ${packName}`);
+
+    const razorpayKeyId = Deno.env.get("RAZORPAY_KEY_ID");
+    const razorpayKeySecret = Deno.env.get("RAZORPAY_KEY_SECRET");
+    if (!razorpayKeyId || !razorpayKeySecret) {
+        throw new Error("Razorpay credentials not configured");
+    }
+
+    const referenceId = `tg_${tgUserId.slice(-8)}_${packName}_${Date.now()}`.slice(0, 40);
+    const amountPaise = Number(pack.price_inr) * 100;
+    const authHeader = btoa(`${razorpayKeyId}:${razorpayKeySecret}`);
+    const razorpayDescription = toAsciiSafe(`Riya Telegram ${packName} pack`, 120);
+    const razorpayCustomerName = toAsciiSafe(`Telegram ${tgUserId}`, 70) || "Telegram User";
+
+    const res = await fetch("https://api.razorpay.com/v1/payment_links", {
+        method: "POST",
+        headers: {
+            Authorization: `Basic ${authHeader}`,
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            upi_link: true,
+            amount: amountPaise,
+            currency: "INR",
+            accept_partial: false,
+            // Keep links alive long enough that users don't hit expiry mid-flow.
+            expire_by: Math.floor(Date.now() / 1000) + (24 * 60 * 60),
+            reference_id: referenceId,
+            description: razorpayDescription,
+            customer: { name: razorpayCustomerName },
+            notify: { sms: false, email: false },
+            reminder_enable: false,
+            callback_url: TELEGRAM_BOT_URL,
+            callback_method: "get",
+            notes: {
+                platform: "telegram",
+                telegram_user_id: tgUserId,
+                pack_name: packName,
+                payment_link_reference_id: referenceId,
+            },
+        }),
+    });
+
+    if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Razorpay Payment Link failed (${res.status}): ${text.slice(0, 300)}`);
+    }
+
+    const link = await res.json();
+    if (!link?.id || !link?.short_url) {
+        throw new Error("Razorpay Payment Link response missing id/short_url");
+    }
+
+    const { error: paymentErr } = await supabase.from("riya_payments").insert({
+        user_id: null,
+        instagram_user_id: null,
+        telegram_user_id: tgUserId,
+        razorpay_order_id: referenceId,
+        razorpay_payment_link_id: link.id,
+        razorpay_payment_link_reference_id: referenceId,
+        plan_type: packName,
+        pack_name: packName,
+        amount: Number(pack.price_inr),
+        currency: "INR",
+        status: "pending",
+    });
+
+    if (paymentErr) {
+        throw new Error(`Payment Link saved but pending row failed: ${paymentErr.message}`);
+    }
+
+    return {
+        shortUrl: link.short_url,
+        amountInr: Number(pack.price_inr),
+        displayName: pack.display_name,
+    };
+}
+
+function hasSentPaywallRecently(
     lastPaywallSentAt: string | null | undefined,
-    todayStr: string,
+    cooldownMs: number,
 ): boolean {
     if (!lastPaywallSentAt) return false;
-    return lastPaywallSentAt.slice(0, 10) === todayStr;
+    const last = new Date(lastPaywallSentAt).getTime();
+    if (!Number.isFinite(last)) return false;
+    return Date.now() - last < cooldownMs;
 }
 
 /**
@@ -1474,6 +1634,7 @@ function getTelegramSystemPrompt(params: {
     const statusBlock = hasActivePaidPack
         ? `STATUS: ACTIVE PAID PACK
 - The user currently has an active paid Telegram pack with message credits available.
+- Treat them like a VIP: be extra affectionate and exclusive, and be more open to fantasies/roleplay/plans when the user wants it (keep consent and avoid pushing).
 - NEVER bring up payment, recharge, credits, packs, limits, or pricing on your own.
 - ONLY if the user explicitly asks whether payment worked, whether their subscription/pack/recharge is active, or whether they are paid/pro, confirm warmly that their paid status is active on Telegram.
 - Keep that confirmation short and natural, then continue the conversation normally.`
@@ -2456,17 +2617,31 @@ async function handleRequest(
                 })
                 .eq("telegram_user_id", senderId);
 
-            if (!hasSentPaywallToday((user as any).last_paywall_sent_at, todayStr)) {
-                await sendDailyLimitNotice(
+            const lastPaywallSentAt = (user as any).last_paywall_sent_at as string | null;
+            if (!hasSentPaywallRecently(lastPaywallSentAt, PAYWALL_COOLDOWN_MS)) {
+                const paywallRes = await sendDailyLimitNotice(
                     chatId,
                     botToken,
                     (user as any).preferred_language,
                 );
-                await supabase.from("telegram_users")
-                    .update({ last_paywall_sent_at: new Date().toISOString() })
-                    .eq("telegram_user_id", senderId);
+                if (paywallRes?.ok) {
+                    await supabase.from("telegram_users")
+                        .update({ last_paywall_sent_at: new Date().toISOString() })
+                        .eq("telegram_user_id", senderId);
+
+                    // Analytics: paywall shown (best proxy for "intent moment")
+                    await logPaymentEventSafe(supabase, "link_sent", {
+                        platform: "telegram",
+                        telegram_user_id: senderId,
+                        username: user.telegram_username || "",
+                        name: user.first_name || user.telegram_username || "Telegram User",
+                        source: "telegram-webhook:paywall",
+                        pack: "romantic",
+                        message_id: paywallRes?.result?.message_id ?? null,
+                    });
+                }
             } else {
-                log.info(senderId, "⏭️ Paywall already sent today — staying silent");
+                log.info(senderId, `⏭️ Paywall sent <${PAYWALL_COOLDOWN_HOURS}h ago — staying silent`);
             }
             return;
         }
@@ -3471,6 +3646,70 @@ async function handleCallbackQuery(
             await supabase.from("telegram_users")
                 .update({ is_underage: true }).eq("telegram_user_id", tgUserId);
             await sendTelegramMessage(chatId, "aww okay 🥺 tc!", botToken);
+            break;
+        }
+
+        case "pay_romantic":
+        {
+            const lang = (user as any)?.preferred_language as string | undefined;
+            const messageId = callbackQuery?.message?.message_id as number | undefined;
+            await answerCallbackQuery(callbackQuery.id, botToken, "Opening UPI…");
+
+            await logPaymentEventSafe(supabase, "upgrade_click", {
+                platform: "telegram",
+                telegram_user_id: tgUserId,
+                username: user?.telegram_username || "",
+                name: user?.first_name || user?.telegram_username || "Telegram User",
+                source: "telegram-webhook:paywall_button",
+                pack: "romantic",
+                message_id: messageId ?? null,
+            });
+
+            try {
+                const link = await createTelegramUpiPaymentLink(supabase, tgUserId, "romantic");
+                const text = buildPaywallAfterTapText(lang, link.amountInr);
+                const reply_markup = {
+                    inline_keyboard: [
+                        [{ text: `Open UPI app (Rs ${link.amountInr})`, url: link.shortUrl }],
+                        [{ text: "View all details", url: paymentFallbackUrl(chatId, lang) }],
+                    ],
+                };
+
+                if (messageId) {
+                    const edited = await tgPost(botToken, "editMessageText", {
+                        chat_id: chatId,
+                        message_id: messageId,
+                        text,
+                        disable_web_page_preview: true,
+                        reply_markup,
+                    });
+                    if (edited?.ok) break;
+                }
+
+                await sendTelegramMessage(chatId, text, botToken, reply_markup);
+            } catch (err: any) {
+                log.error(tgUserId, `UPI Payment Link create failed: ${err?.message || err}`);
+                const text = buildPaywallLinkFailText(lang);
+                const reply_markup = {
+                    inline_keyboard: [[{
+                        text: "View all details",
+                        url: paymentFallbackUrl(chatId, lang),
+                    }]],
+                };
+
+                if (messageId) {
+                    const edited = await tgPost(botToken, "editMessageText", {
+                        chat_id: chatId,
+                        message_id: messageId,
+                        text,
+                        disable_web_page_preview: true,
+                        reply_markup,
+                    });
+                    if (edited?.ok) break;
+                }
+
+                await sendTelegramMessage(chatId, text, botToken, reply_markup);
+            }
             break;
         }
 

@@ -13,15 +13,179 @@ const PLAN_DURATIONS: Record<string, number> = {
 
 // Credit pack names (must match pack_name in riya_recharge_packs)
 const CREDIT_PACK_NAMES = ['basic', 'romantic', 'soulmate'];
+const PAYMENT_LINK_EVENTS = ['payment_link.paid'];
 
-function stringToBytes(str: string): Uint8Array {
-    return new TextEncoder().encode(str);
+function stringToBytes(str: string): Uint8Array<ArrayBuffer> {
+    return new TextEncoder().encode(str) as Uint8Array<ArrayBuffer>;
 }
 
 function bytesToHex(bytes: Uint8Array): string {
     return Array.from(bytes)
         .map(b => b.toString(16).padStart(2, '0'))
         .join('');
+}
+
+async function findPaymentRow(
+    supabase: any,
+    orderId?: string | null,
+    paymentLinkId?: string | null,
+    referenceId?: string | null,
+) {
+    if (paymentLinkId) {
+        const { data } = await supabase.from('riya_payments').select('*')
+            .eq('razorpay_payment_link_id', paymentLinkId).maybeSingle();
+        if (data) return data;
+    }
+    if (referenceId) {
+        const { data } = await supabase.from('riya_payments').select('*')
+            .eq('razorpay_payment_link_reference_id', referenceId).maybeSingle();
+        if (data) return data;
+    }
+    if (orderId) {
+        const { data } = await supabase.from('riya_payments').select('*')
+            .eq('razorpay_order_id', orderId).maybeSingle();
+        if (data) return data;
+    }
+    return null;
+}
+
+async function fulfillTelegramPaymentLink(supabase: any, payload: any): Promise<Response> {
+    const paymentLink = payload.payload?.payment_link?.entity;
+    const payment = payload.payload?.payment?.entity;
+    const order = payload.payload?.order?.entity;
+    const notes = { ...(paymentLink?.notes || {}), ...(payment?.notes || {}) };
+    const paymentLinkId = paymentLink?.id || null;
+    const referenceId = paymentLink?.reference_id || notes.payment_link_reference_id || null;
+    const orderId = payment?.order_id || order?.id || null;
+    const paymentId = payment?.id || null;
+    const amountPaise = Number(payment?.amount || paymentLink?.amount_paid || paymentLink?.amount || 0);
+    const now = new Date().toISOString();
+
+    let paymentRow = await findPaymentRow(supabase, orderId, paymentLinkId, referenceId);
+    if (!paymentRow && notes.telegram_user_id && notes.pack_name) {
+        const { data: inserted, error: insertErr } = await supabase.from('riya_payments').insert({
+            user_id: null,
+            instagram_user_id: null,
+            telegram_user_id: notes.telegram_user_id,
+            razorpay_order_id: orderId || referenceId || paymentLinkId,
+            razorpay_payment_id: paymentId,
+            razorpay_payment_link_id: paymentLinkId,
+            razorpay_payment_link_reference_id: referenceId,
+            plan_type: notes.pack_name,
+            pack_name: notes.pack_name,
+            amount: amountPaise / 100,
+            currency: 'INR',
+            status: 'pending',
+        }).select('*').single();
+        if (insertErr) {
+            console.error('❌ Missing payment row and self-heal failed:', insertErr);
+            return new Response('Payment row missing', { status: 200 });
+        }
+        paymentRow = inserted;
+    }
+
+    if (!paymentRow) return new Response('Payment row missing', { status: 200 });
+    if (paymentRow.status !== 'pending' || paymentRow.fulfilled_at) {
+        return new Response('Already processed', { status: 200 });
+    }
+
+    const telegramUserId = paymentRow.telegram_user_id || notes.telegram_user_id;
+    const packName = paymentRow.pack_name || notes.pack_name;
+    if (!telegramUserId || !packName || !CREDIT_PACK_NAMES.includes(packName)) {
+        await supabase.from('riya_payments').update({
+            status: 'failed',
+            fulfillment_error: 'Missing Telegram user id or valid pack name',
+            updated_at: now,
+        }).eq('id', paymentRow.id);
+        return new Response('Invalid payment metadata', { status: 200 });
+    }
+
+    const { data: claimed, error: claimErr } = await supabase.from('riya_payments').update({
+        fulfillment_claimed_at: now,
+        fulfillment_source: 'razorpay-webhook:payment_link.paid',
+        fulfillment_error: null,
+        updated_at: now,
+    }).eq('id', paymentRow.id).eq('status', 'pending').is('fulfilled_at', null)
+        .is('fulfillment_claimed_at', null).select('*').maybeSingle();
+    if (claimErr) return new Response('Claim failed', { status: 500 });
+    if (!claimed) return new Response('Already claimed', { status: 200 });
+
+    try {
+        const { data: pack, error: packErr } = await supabase.from('riya_recharge_packs')
+            .select('id, message_credits, validity_days, display_name, price_inr')
+            .eq('pack_name', packName).eq('is_active', true).single();
+        if (packErr || !pack) throw new Error(`Pack not found: ${packName}`);
+        if (amountPaise !== Number(pack.price_inr) * 100) {
+            throw new Error(`Amount mismatch: paid=${amountPaise}, expected=${Number(pack.price_inr) * 100}`);
+        }
+
+        const { data: newBalance, error: rpcErr } = await supabase.rpc('add_telegram_message_credits', {
+            p_tg_user_id: telegramUserId,
+            p_pack_id: pack.id,
+            p_credits: pack.message_credits,
+            p_validity_days: pack.validity_days,
+        });
+        if (rpcErr) throw rpcErr;
+
+        await supabase.from('riya_payments').update({
+            razorpay_order_id: orderId || claimed.razorpay_order_id,
+            razorpay_payment_id: paymentId,
+            razorpay_payment_link_id: paymentLinkId || claimed.razorpay_payment_link_id,
+            razorpay_payment_link_reference_id: referenceId || claimed.razorpay_payment_link_reference_id,
+            telegram_user_id: telegramUserId,
+            amount: amountPaise / 100,
+            status: 'success',
+            fulfilled_at: new Date().toISOString(),
+            fulfillment_source: 'razorpay-webhook:payment_link.paid',
+            fulfillment_error: null,
+            updated_at: new Date().toISOString(),
+        }).eq('id', claimed.id);
+
+        await supabase.from('riya_conversations').insert({
+            telegram_user_id: telegramUserId,
+            source: 'telegram',
+            role: 'user',
+            content: JSON.stringify([{ text: `[SYSTEM EVENT: User just purchased the ${pack.display_name} pack (${pack.message_credits} messages). Make him feel exclusive — warm, possessive, and proud. You may call him "king" once. Keep it brief, not salesy. Then continue normally.]` }]),
+            model_used: 'system',
+            metadata: { type: 'system_event', event: 'credit_purchase', pack: packName, platform: 'telegram' }
+        });
+
+        try {
+            await supabase.from('riya_payment_events').insert({
+                event_type: 'payment_success',
+                metadata: { telegram_user_id: telegramUserId, orderId, paymentId, paymentLinkId, referenceId, packName, credits: pack.message_credits, balance: newBalance, platform: 'telegram', source: 'razorpay-webhook:payment_link.paid' },
+            });
+        } catch (e) {
+            console.warn('⚠️ analytics log failed:', e);
+        }
+
+        // Optional: bring the user back into chat immediately (non-blocking).
+        try {
+            const botToken = Deno.env.get('TELEGRAM_BOT_TOKEN');
+            if (botToken) {
+                await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        chat_id: telegramUserId,
+                        text: `Done.\n\nAb aa jao… main yahin hoon.`,
+                    }),
+                });
+            }
+        } catch { /* non-fatal */ }
+
+        return new Response('Success', { status: 200 });
+    } catch (err: any) {
+        const message = err?.message || String(err);
+        const terminal = message.includes('Amount mismatch') || message.includes('Pack not found');
+        await supabase.from('riya_payments').update({
+            status: terminal ? 'failed' : 'pending',
+            fulfillment_claimed_at: terminal ? claimed.fulfillment_claimed_at : null,
+            fulfillment_error: message.slice(0, 500),
+            updated_at: new Date().toISOString(),
+        }).eq('id', claimed.id);
+        return new Response(terminal ? 'Fulfillment rejected' : 'Retry later', { status: terminal ? 200 : 500 });
+    }
 }
 
 serve(async (req) => {
@@ -66,9 +230,17 @@ serve(async (req) => {
         const event = payload.event;
         console.log(`📡 Event: ${event}`);
 
-        if (event !== 'payment.captured' && event !== 'order.paid') {
+        if (event !== 'payment.captured' && event !== 'order.paid' && !PAYMENT_LINK_EVENTS.includes(event)) {
             console.log(`⏭️ Ignoring event: ${event}`);
             return new Response("Event ignored", { status: 200 });
+        }
+
+        const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+        const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+        const supabase = createClient(supabaseUrl, supabaseKey);
+
+        if (event === 'payment_link.paid') {
+            return await fulfillTelegramPaymentLink(supabase, payload);
         }
 
         const payment = payload.payload.payment.entity;
@@ -89,16 +261,13 @@ serve(async (req) => {
             return new Response("Missing identifiers", { status: 200 });
         }
 
-        const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-        const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-        const supabase = createClient(supabaseUrl, supabaseKey);
-
         // IDEMPOTENCY CHECK
-        const { data: existingPayment } = await supabase
-            .from('riya_payments')
-            .select('status, subscription_id')
-            .eq('razorpay_order_id', orderId)
-            .single();
+        const existingPayment = await findPaymentRow(
+            supabase,
+            orderId,
+            null,
+            payment.notes?.payment_link_reference_id || null,
+        );
 
         if (existingPayment && existingPayment.status !== 'pending') {
             console.log(`⏭️ Order ${orderId} already claimed/activated (status=${existingPayment.status}). Skipping.`);
@@ -163,7 +332,7 @@ serve(async (req) => {
                 source: 'instagram',
                 role: 'user',
                 content: JSON.stringify([{
-                    text: `[SYSTEM EVENT: User purchased the ${pack.display_name} pack (${pack.message_credits} messages). React warmly and naturally — thank them briefly, then continue the conversation. Do NOT list features or sound like a bot.]`
+                    text: `[SYSTEM EVENT: User purchased the ${pack.display_name} pack (${pack.message_credits} messages). Make him feel exclusive — warm, possessive, and proud. You may call him "king" once. Keep it brief, not salesy. Then continue normally.]`
                 }]),
                 model_used: 'system',
                 metadata: { type: 'system_event', event: 'credit_purchase', pack: packName }
@@ -202,6 +371,26 @@ serve(async (req) => {
                 return new Response("Pack not found", { status: 200 });
             }
 
+            if (existingPayment?.id) {
+                const { data: claimedPayment, error: claimErr } = await supabase
+                    .from('riya_payments')
+                    .update({
+                        fulfillment_claimed_at: now.toISOString(),
+                        fulfillment_source: 'razorpay-webhook',
+                        fulfillment_error: null,
+                        updated_at: now.toISOString()
+                    })
+                    .eq('id', existingPayment.id)
+                    .eq('status', 'pending')
+                    .is('fulfilled_at', null)
+                    .is('fulfillment_claimed_at', null)
+                    .select('id')
+                    .maybeSingle();
+
+                if (claimErr) return new Response("Claim failed", { status: 500 });
+                if (!claimedPayment) return new Response("Already claimed", { status: 200 });
+            }
+
             const { data: newBalance, error: rpcErr } = await supabase.rpc('add_telegram_message_credits', {
                 p_tg_user_id:    telegramUserId,
                 p_pack_id:       pack.id,
@@ -211,28 +400,47 @@ serve(async (req) => {
 
             if (rpcErr) {
                 console.error(`❌ add_telegram_message_credits RPC failed:`, rpcErr);
+                if (existingPayment?.id) {
+                    await supabase.from('riya_payments').update({
+                        fulfillment_claimed_at: null,
+                        fulfillment_error: rpcErr.message || String(rpcErr),
+                        updated_at: new Date().toISOString()
+                    }).eq('id', existingPayment.id);
+                }
                 throw rpcErr;
             }
 
             console.log(`✅ Telegram credits added: ${newBalance} remaining for ${telegramUserId}`);
 
-            await supabase
-                .from('riya_payments')
-                .upsert({
-                    razorpay_order_id: orderId,
-                    razorpay_payment_id: paymentId,
-                    telegram_user_id: telegramUserId,
-                    status: 'success',
-                    amount: payment.amount / 100,
-                    updated_at: now.toISOString()
-                }, { onConflict: 'razorpay_order_id' });
+            const telegramPaymentUpdate = {
+                razorpay_order_id: orderId,
+                razorpay_payment_id: paymentId,
+                telegram_user_id: telegramUserId,
+                status: 'success',
+                amount: payment.amount / 100,
+                fulfilled_at: now.toISOString(),
+                fulfillment_source: 'razorpay-webhook',
+                fulfillment_error: null,
+                updated_at: now.toISOString()
+            };
+
+            if (existingPayment?.id) {
+                await supabase
+                    .from('riya_payments')
+                    .update(telegramPaymentUpdate)
+                    .eq('id', existingPayment.id);
+            } else {
+                await supabase
+                    .from('riya_payments')
+                    .upsert(telegramPaymentUpdate, { onConflict: 'razorpay_order_id' });
+            }
 
             await supabase.from('riya_conversations').insert({
                 telegram_user_id: telegramUserId,
                 source: 'telegram',
                 role: 'user',
                 content: JSON.stringify([{
-                    text: `[SYSTEM EVENT: User just purchased the ${pack.display_name} pack (${pack.message_credits} messages). React warmly but briefly on the next reply — natural, not salesy. Then continue normally.]`
+                    text: `[SYSTEM EVENT: User just purchased the ${pack.display_name} pack (${pack.message_credits} messages). Make him feel exclusive — warm, possessive, and proud. You may call him "king" once. Keep it brief, not salesy. Then continue normally.]`
                 }]),
                 model_used: 'system',
                 metadata: { type: 'system_event', event: 'credit_purchase', pack: packName, platform: 'telegram' }
@@ -244,6 +452,21 @@ serve(async (req) => {
                     metadata: { telegram_user_id: telegramUserId, orderId, paymentId, packName, credits: pack.message_credits, platform: 'telegram', source: 'razorpay-webhook' },
                 });
             } catch (e) { console.warn('⚠️ analytics log failed:', e); }
+
+            // Optional: bring the user back into chat immediately (non-blocking).
+            try {
+                const botToken = Deno.env.get('TELEGRAM_BOT_TOKEN');
+                if (botToken) {
+                    await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            chat_id: telegramUserId,
+                            text: `Done.\n\nAb aa jao… main yahin hoon.`,
+                        }),
+                    });
+                }
+            } catch { /* non-fatal */ }
 
             console.log(`✅ Telegram credit pack activation complete for ${orderId}`);
             return new Response("Success", { status: 200 });

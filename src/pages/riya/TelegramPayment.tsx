@@ -33,7 +33,7 @@ interface RazorpayResponse {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Step = 'plans' | 'success';
-type PackId = 'basic' | 'romantic' | 'soulmate';
+type PackId = 'romantic';
 
 interface PackFeature { icon: string; text: string; }
 
@@ -117,7 +117,7 @@ const PACKS: Pack[] = [
             { icon: '📅', text: 'Valid for 45 days' },
         ],
     },
-];
+].filter((p) => p.id === 'romantic');
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 const logEvent = (tgUserId: string, eventType: string, metadata?: object) => {
@@ -265,7 +265,7 @@ const TelegramPayment = () => {
     const telegramUserId = searchParams.get('id') || '';
 
     const [step, setStep] = useState<Step>('plans');
-    const [selectedPack, setSelectedPack] = useState<Pack>(PACKS[1]); // Romantic pre-selected
+    const [selectedPack, setSelectedPack] = useState<Pack>(PACKS[0]); // Romantic only
     const [paying, setPaying] = useState(false);
     const [successPack, setSuccessPack] = useState<Pack | null>(null);
     const [ageConfirmed, setAgeConfirmed] = useState(true); // Pre-checked
