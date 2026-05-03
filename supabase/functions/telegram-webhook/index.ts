@@ -3041,6 +3041,8 @@ async function handleRequest(
                 text: string;
                 send_image?: boolean;
                 image_context?: string;
+                resolved_image_description?: string;
+                resolved_image_category?: string;
                 send_voice?: boolean;
                 silent_hours?: number;
                 lang?: string;
@@ -3214,6 +3216,8 @@ async function handleRequest(
                 );
                 if (image) {
                     await sendTelegramPhoto(chatId, image.url, botToken);
+                    msg.resolved_image_description = image.description;
+                    msg.resolved_image_category = image.category;
                 } else {
                     log.error(senderId, "❌ No image found for request");
                 }
@@ -3279,7 +3283,16 @@ async function handleRequest(
                     content = `[🎤 voice note] ${msg.text}`;
                 }
                 if (msg.send_image) {
-                    content += ` [sent photo: ${msg.image_context || "selfie"}]`;
+                    const resolvedDescription = msg.resolved_image_description?.trim();
+                    const resolvedCategory = msg.resolved_image_category?.trim();
+                    if (resolvedDescription) {
+                        content += ` [sent photo: ${resolvedDescription}]`;
+                        if (resolvedCategory) {
+                            content += ` [category: ${resolvedCategory}]`;
+                        }
+                    } else {
+                        content += ` [sent photo: ${msg.image_context || "selfie"}]`;
+                    }
                 }
                 return {
                     user_id: null,
