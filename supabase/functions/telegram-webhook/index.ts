@@ -430,6 +430,19 @@ function getCurrentISTHour(): number {
     return new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCHours();
 }
 
+/** Compute UTC timestamp for a given IST hour today (or tomorrow if already past). */
+function computeSkipUntilUTC(idealISTHour: number): string {
+    const istOffsetMs = 5.5 * 60 * 60 * 1000;
+    const nowUTC = Date.now();
+    const nowIST = new Date(nowUTC + istOffsetMs);
+    let targetIST = new Date(nowIST);
+    targetIST.setUTCHours(idealISTHour, 0, 0, 0);
+    if (targetIST.getTime() <= nowIST.getTime()) {
+        targetIST = new Date(targetIST.getTime() + 24 * 60 * 60 * 1000);
+    }
+    return new Date(targetIST.getTime() - istOffsetMs).toISOString();
+}
+
 type TimeGreetingSlot = "morning" | "afternoon" | "evening" | "late_night";
 
 function getTimeGreetingSlot(hour: number): TimeGreetingSlot {
@@ -1726,6 +1739,9 @@ JSON array, 1-4 message objects. Each "text": MAX 8 WORDS. According to the situ
   When send_voice:true: the "text" IS what she says aloud — her real response. NEVER "hold on", "bhej rahi hoon", "ek sec", or meta-filler. She just talks.
 - silent_hours (0.5-2) ONLY on genuine abuse, hate speech, or extreme disrespect — never for playful teasing. Omit entirely otherwise.
 - lang ONLY on first message when user requests a different language. Valid: Hindi, Marathi, Bengali, Tamil, Telugu, Gujarati, Kannada, Malayalam, Punjabi, Odia, Urdu, Assamese, English, Hinglish. Omit entirely otherwise.
+- user_wants_no_proactive: Set true ONLY if user clearly signals they don't want Riya messaging them first ("don't dm me first", "mat pehle message karo", "i'll come when i want"). Acknowledge in 1 casual line in your text. Ambiguous = false. Omit otherwise.
+- schedule_followup_ist_hour: If user sets a future chat time ("9 baje milte", "tonight", "after gym ~8pm", "kal baat karte"), return that IST hour as a number (e.g. 21 for 9pm). Otherwise omit this field entirely.
+- scheduled_context_note: If you set schedule_followup_ist_hour, also set this to a SHORT reason in their language (e.g. "after gym", "exam ke baad", "call khatam"). Max 5 words. Omit if no schedule.
 
 ⚠️ CRITICAL: DO NOT include any field set to false, 0, or null. Only include a field when it is actively needed for that message. Omit everything else.
 
@@ -2533,6 +2549,28 @@ async function handleRequest(
                 p_tg_user_id: senderId,
             });
             user.daily_message_count = 0;
+
+            // Track user's active hour — first message of the day tells us when they're online
+            const activeHour = getCurrentISTHour();
+            supabase.from("telegram_users")
+                .update({ user_active_hour_ist: activeHour })
+                .eq("telegram_user_id", senderId)
+                .then(() => log.info(senderId, `🕐 Active hour updated: ${activeHour}h IST`))
+                .catch(() => { });
+        }
+
+        // Reset proactive flags whenever user sends a message — they re-engaged
+        if ((user as any).user_wants_no_proactive || (user as any).proactive_skip_until ||
+            (user as any).proactive_scheduled_context) {
+            supabase.from("telegram_users")
+                .update({
+                    user_wants_no_proactive: false,
+                    proactive_skip_until: null,
+                    proactive_scheduled_context: null,
+                })
+                .eq("telegram_user_id", senderId)
+                .then(() => log.info(senderId, "🔔 Proactive flags reset — user re-engaged"))
+                .catch(() => { });
         }
 
         // ── Streak ────────────────────────────────────────────────────────────
@@ -3078,6 +3116,9 @@ async function handleRequest(
                 send_voice?: boolean;
                 silent_hours?: number;
                 lang?: string;
+                user_wants_no_proactive?: boolean;
+                schedule_followup_ist_hour?: number;
+                scheduled_context_note?: string;
             }
         > = [];
 
@@ -3180,6 +3221,38 @@ async function handleRequest(
         if (langSwitch) {
             supabase.from("telegram_users").update({ preferred_language: langSwitch })
                 .eq("telegram_user_id", senderId).then(() => { }).catch(() => { });
+        }
+
+        // Proactive opt-out (user asked "don't message first")
+        if (firstMsg?.user_wants_no_proactive === true) {
+            supabase.from("telegram_users")
+                .update({ user_wants_no_proactive: true })
+                .eq("telegram_user_id", senderId)
+                .then(() => log.info(senderId, "🔕 Proactive opted out by user"))
+                .catch(() => { });
+        }
+
+        // Scheduled follow-up (e.g. "9 baje milte")
+        const scheduledHour = firstMsg?.schedule_followup_ist_hour;
+        if (typeof scheduledHour === "number" && scheduledHour >= 0 && scheduledHour <= 23) {
+            const skipUntilUTC = computeSkipUntilUTC(scheduledHour);
+            const contextNote = String(firstMsg?.scheduled_context_note || "").trim() || null;
+            const context = contextNote
+                ? `${contextNote} (around ${scheduledHour}:00 IST)`
+                : `User said they'd be free around ${scheduledHour}:00 IST`;
+            supabase.from("telegram_users")
+                .update({
+                    proactive_skip_until: skipUntilUTC,
+                    proactive_scheduled_context: context,
+                })
+                .eq("telegram_user_id", senderId)
+                .then(() =>
+                    log.info(
+                        senderId,
+                        `⏰ Scheduled proactive at IST ${scheduledHour}:00 (UTC: ${skipUntilUTC})`,
+                    )
+                )
+                .catch(() => { });
         }
 
         // Silent treatment
